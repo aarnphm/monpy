@@ -5,7 +5,8 @@ from std.os import abort
 from std.python import PythonObject
 from std.sys.info import simd_width_of
 
-from layout import Layout, LayoutTensor
+from layout import Coord, Idx, Layout, LayoutTensor, TileTensor, row_major
+from linalg.matmul.cpu.apple_accelerate import apple_matmul, use_apple_accelerate_lib
 
 
 # This module is the Mojo array runtime. Python passes parsed arguments through
@@ -266,14 +267,21 @@ def native_transpose(array_obj: PythonObject, axes_obj: PythonObject) raises -> 
 def native_slice(
     array_obj: PythonObject,
     starts_obj: PythonObject,
+    stops_obj: PythonObject,
     steps_obj: PythonObject,
     drops_obj: PythonObject,
 ) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[NativeArray]()
     var starts = int_list_from_py(starts_obj)
+    var stops = int_list_from_py(stops_obj)
     var steps = int_list_from_py(steps_obj)
     var drops = int_list_from_py(drops_obj)
-    if len(starts) != len(src[].shape) or len(steps) != len(src[].shape) or len(drops) != len(src[].shape):
+    if (
+        len(starts) != len(src[].shape)
+        or len(stops) != len(src[].shape)
+        or len(steps) != len(src[].shape)
+        or len(drops) != len(src[].shape)
+    ):
         raise Error("slice metadata rank mismatch")
     var offset = src[].offset_elems
     var shape = List[Int]()
@@ -281,7 +289,7 @@ def native_slice(
     for axis in range(len(src[].shape)):
         offset += starts[axis] * src[].strides[axis]
         if drops[axis] == 0:
-            shape.append(slice_length(src[].shape[axis], starts[axis], steps[axis]))
+            shape.append(slice_length(src[].shape[axis], starts[axis], stops[axis], steps[axis]))
             strides.append(src[].strides[axis] * steps[axis])
     var result = NativeArray(
         src[].dtype_code,
@@ -394,6 +402,33 @@ def native_binary(
         else:
             raise Error("unknown binary op")
         set_logical_from_f64(result, i, out)
+    return PythonObject(alloc=result^)
+
+
+def native_binary_scalar(
+    array_obj: PythonObject,
+    scalar_obj: PythonObject,
+    scalar_dtype_obj: PythonObject,
+    op_obj: PythonObject,
+    scalar_on_left_obj: PythonObject,
+) raises -> PythonObject:
+    var array = array_obj.downcast_value_ptr[NativeArray]()
+    var scalar_dtype = Int(py=scalar_dtype_obj)
+    var op = Int(py=op_obj)
+    var scalar_on_left = Bool(py=scalar_on_left_obj)
+    var shape = clone_int_list(array[].shape)
+    var dtype_code = result_dtype_for_binary(array[].dtype_code, scalar_dtype, op)
+    var result = make_empty_array(dtype_code, shape^)
+    var scalar_value = scalar_py_as_f64(scalar_obj, scalar_dtype)
+    if maybe_binary_scalar_value_contiguous(array[], scalar_value, result, op, scalar_on_left):
+        return PythonObject(alloc=result^)
+    for i in range(result.size_value):
+        var lhs = get_logical_as_f64(array[], i)
+        var rhs = scalar_value
+        if scalar_on_left:
+            lhs = scalar_value
+            rhs = get_logical_as_f64(array[], i)
+        set_logical_from_f64(result, i, apply_binary_f64(lhs, rhs, op))
     return PythonObject(alloc=result^)
 
 
@@ -553,6 +588,36 @@ def native_layout_smoke() raises -> PythonObject:
     return PythonObject(alloc=out^)
 
 
+def native_slice_1d(
+    array_obj: PythonObject,
+    start_obj: PythonObject,
+    stop_obj: PythonObject,
+    step_obj: PythonObject,
+) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[NativeArray]()
+    if len(src[].shape) != 1:
+        raise Error("slice_1d() requires a rank-1 array")
+    var start = Int(py=start_obj)
+    var stop = Int(py=stop_obj)
+    var step = Int(py=step_obj)
+    var shape = List[Int]()
+    shape.append(slice_length(src[].shape[0], start, stop, step))
+    var strides = List[Int]()
+    strides.append(src[].strides[0] * step)
+    var result = NativeArray(
+        src[].dtype_code,
+        shape^,
+        strides^,
+        shape_size(shape),
+        src[].offset_elems + start * src[].strides[0],
+        src[].data,
+        src[].byte_len,
+        False,
+        src[].used_layout_tensor,
+    )
+    return PythonObject(alloc=result^)
+
+
 def item_size(dtype_code: Int) raises -> Int:
     if dtype_code == DTYPE_BOOL:
         return 1
@@ -625,16 +690,17 @@ def same_shape(lhs: List[Int], rhs: List[Int]) -> Bool:
     return True
 
 
-def slice_length(dim: Int, start: Int, step: Int) raises -> Int:
+def slice_length(dim: Int, start: Int, stop: Int, step: Int) raises -> Int:
     if step == 0:
         raise Error("slice step cannot be zero")
     if step > 0:
-        if start >= dim:
+        if start >= stop:
             return 0
-        return (dim - start + step - 1) // step
-    if start < 0:
+        return (stop - start + step - 1) // step
+    var negative_step = -step
+    if start <= stop:
         return 0
-    return (start + (-step)) // (-step)
+    return (start - stop + negative_step - 1) // negative_step
 
 
 def is_c_contiguous(array: NativeArray) raises -> Bool:
@@ -762,6 +828,16 @@ def set_logical_from_py(mut array: NativeArray, logical: Int, value_obj: PythonO
         array.data.bitcast[Float32]()[physical] = Float32(Float64(py=value_obj))
     else:
         array.data.bitcast[Float64]()[physical] = Float64(py=value_obj)
+
+
+def scalar_py_as_f64(value_obj: PythonObject, dtype_code: Int) raises -> Float64:
+    if dtype_code == DTYPE_BOOL:
+        if Bool(py=value_obj):
+            return 1.0
+        return 0.0
+    if dtype_code == DTYPE_INT64:
+        return Float64(Int(py=value_obj))
+    return Float64(py=value_obj)
 
 
 def fill_all_from_py(mut array: NativeArray, value_obj: PythonObject) raises:
@@ -1052,6 +1128,73 @@ def maybe_binary_scalar_contiguous(
     return True
 
 
+def maybe_binary_scalar_value_contiguous(
+    array: NativeArray,
+    scalar_value: Float64,
+    mut result: NativeArray,
+    op: Int,
+    scalar_on_left: Bool,
+) raises -> Bool:
+    if (
+        not same_shape(array.shape, result.shape)
+        or not is_contiguous_float_array(array)
+        or not is_contiguous_float_array(result)
+    ):
+        return False
+    if array.dtype_code == DTYPE_FLOAT32 and result.dtype_code == DTYPE_FLOAT32:
+        var array_ptr = contiguous_f32_ptr(array)
+        var out_ptr = contiguous_f32_ptr(result)
+        comptime width = simd_width_of[DType.float32]()
+        var scalar_vec = SIMD[DType.float32, width](Float32(scalar_value))
+        var i = 0
+        while i + width <= result.size_value:
+            var array_vec = array_ptr.load[width=width](i)
+            if scalar_on_left:
+                out_ptr.store(i, apply_binary_f32_vec[width](scalar_vec, array_vec, op))
+            else:
+                out_ptr.store(i, apply_binary_f32_vec[width](array_vec, scalar_vec, op))
+            i += width
+        while i < result.size_value:
+            var lhs = Float64(array_ptr[i])
+            var rhs = scalar_value
+            if scalar_on_left:
+                lhs = scalar_value
+                rhs = Float64(array_ptr[i])
+            out_ptr[i] = Float32(apply_binary_f64(lhs, rhs, op))
+            i += 1
+        return True
+    if array.dtype_code == DTYPE_FLOAT64 and result.dtype_code == DTYPE_FLOAT64:
+        var array_ptr = contiguous_f64_ptr(array)
+        var out_ptr = contiguous_f64_ptr(result)
+        comptime width = simd_width_of[DType.float64]()
+        var scalar_vec = SIMD[DType.float64, width](scalar_value)
+        var i = 0
+        while i + width <= result.size_value:
+            var array_vec = array_ptr.load[width=width](i)
+            if scalar_on_left:
+                out_ptr.store(i, apply_binary_f64_vec[width](scalar_vec, array_vec, op))
+            else:
+                out_ptr.store(i, apply_binary_f64_vec[width](array_vec, scalar_vec, op))
+            i += width
+        while i < result.size_value:
+            var lhs = array_ptr[i]
+            var rhs = scalar_value
+            if scalar_on_left:
+                lhs = scalar_value
+                rhs = array_ptr[i]
+            out_ptr[i] = apply_binary_f64(lhs, rhs, op)
+            i += 1
+        return True
+    for i in range(result.size_value):
+        var lhs = contiguous_as_f64(array, i)
+        var rhs = scalar_value
+        if scalar_on_left:
+            lhs = scalar_value
+            rhs = contiguous_as_f64(array, i)
+        set_contiguous_from_f64(result, i, apply_binary_f64(lhs, rhs, op))
+    return True
+
+
 def maybe_binary_row_broadcast_contiguous(
     matrix: NativeArray,
     row: NativeArray,
@@ -1240,12 +1383,59 @@ def maybe_matmul_contiguous(
         or not is_contiguous_float_array(result)
     ):
         return False
+    if lhs.dtype_code == DTYPE_FLOAT32 and rhs.dtype_code == DTYPE_FLOAT32 and result.dtype_code == DTYPE_FLOAT32:
+        if maybe_matmul_f32_small(lhs, rhs, result, m, n, k_lhs):
+            return True
+        comptime if use_apple_accelerate_lib[DType.float32, DType.float32, DType.float32]():
+            # Apple Accelerate owns the serious CPU GEMM story on Darwin. This
+            # path keeps monpy's storage native while handing row-major f32
+            # matrix multiplication to cblas_sgemm via Modular's wrapper.
+            var c = TileTensor(
+                contiguous_f32_ptr(result),
+                row_major(Coord(Idx(m), Idx(n))),
+            )
+            var a = TileTensor(
+                contiguous_f32_ptr(lhs),
+                row_major(Coord(Idx(m), Idx(k_lhs))),
+            )
+            var b = TileTensor(
+                contiguous_f32_ptr(rhs),
+                row_major(Coord(Idx(k_lhs), Idx(n))),
+            )
+            apple_matmul(c, a, b)
+            return True
     for i in range(m):
         for j in range(n):
             var total = 0.0
             for k in range(k_lhs):
                 total += contiguous_as_f64(lhs, i * k_lhs + k) * contiguous_as_f64(rhs, k * n + j)
             set_contiguous_from_f64(result, i * n + j, total)
+    return True
+
+
+def maybe_matmul_f32_small(
+    lhs: NativeArray, rhs: NativeArray, mut result: NativeArray, m: Int, n: Int, k_lhs: Int
+) raises -> Bool:
+    if m > 32 or n > 32 or k_lhs > 32:
+        return False
+    var lhs_ptr = contiguous_f32_ptr(lhs)
+    var rhs_ptr = contiguous_f32_ptr(rhs)
+    var out_ptr = contiguous_f32_ptr(result)
+    comptime width = simd_width_of[DType.float32]()
+    for i in range(m):
+        var j = 0
+        while j + width <= n:
+            var acc = SIMD[DType.float32, width](0)
+            for k in range(k_lhs):
+                acc += SIMD[DType.float32, width](lhs_ptr[i * k_lhs + k]) * rhs_ptr.load[width=width](k * n + j)
+            out_ptr.store(i * n + j, acc)
+            j += width
+        while j < n:
+            var total = Float32(0)
+            for k in range(k_lhs):
+                total += lhs_ptr[i * k_lhs + k] * rhs_ptr[k * n + j]
+            out_ptr[i * n + j] = total
+            j += 1
     return True
 
 

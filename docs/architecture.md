@@ -23,3 +23,5 @@ monpy should be a mojo array library with numpy-shaped python APIs.
 - fast paths should be added only when a dtype/layout/rank predicate makes the cheaper path obvious.
 - allocation reuse, `out=`, expression fusion, and wider SIMD/LayoutTensor coverage are the next major perf levers.
 - matmul is currently correctness-first scalar mojo code. serious parity will need tiled/vectorized kernels or a CPU BLAS backend.
+
+see [apple-backends.md](apple-backends.md) for the apple silicon backend split.

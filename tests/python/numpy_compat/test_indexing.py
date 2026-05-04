@@ -19,6 +19,13 @@ def test_negative_indices_and_reversed_slices() -> None:
   assert arr[:, ::-1].tolist() == [[2, 1, 0], [5, 4, 3]]
 
 
+def test_slice_stop_is_respected() -> None:
+  arr = np.arange(10, dtype=np.int64)
+
+  assert arr[2:7:2].tolist() == [2, 4, 6]
+  assert arr[8:2:-2].tolist() == [8, 6, 4]
+
+
 def test_ellipsis_expands_to_full_slices() -> None:
   arr = np.arange(6, dtype=np.int64).reshape(2, 3)
 

@@ -66,6 +66,7 @@ e = math.e
 
 class ndarray:
   __array_priority__ = 1000
+  __slots__ = ("_base", "_native")
 
   def __init__(_self, native: _native.NativeArray, base: ndarray | None = None) -> None:
     _self._native = native
@@ -164,6 +165,9 @@ class ndarray:
     return f"monpy.asarray({self.tolist()!r}, dtype={self.dtype!r})"
 
   def __getitem__(self, key: object) -> object:
+    if isinstance(key, slice) and self.ndim == 1:
+      start, stop, step = key.indices(int(self._native.shape_at(0)))
+      return ndarray(_native.slice_1d(self._native, start, stop, step), base=self)
     view = self._view_for_key(key)
     if view.ndim == 0:
       return view._scalar()
@@ -192,33 +196,37 @@ class ndarray:
     return float(self._scalar())
 
   def __add__(self, other: object) -> ndarray:
-    return add(self, other)
+    return _binary_from_array(self, other, OP_ADD, scalar_on_left=False)
 
   def __radd__(self, other: object) -> ndarray:
-    return add(other, self)
+    return _binary_from_array(self, other, OP_ADD, scalar_on_left=True)
 
   def __sub__(self, other: object) -> ndarray:
-    return subtract(self, other)
+    return _binary_from_array(self, other, OP_SUB, scalar_on_left=False)
 
   def __rsub__(self, other: object) -> ndarray:
-    return subtract(other, self)
+    return _binary_from_array(self, other, OP_SUB, scalar_on_left=True)
 
   def __mul__(self, other: object) -> ndarray:
-    return multiply(self, other)
+    return _binary_from_array(self, other, OP_MUL, scalar_on_left=False)
 
   def __rmul__(self, other: object) -> ndarray:
-    return multiply(other, self)
+    return _binary_from_array(self, other, OP_MUL, scalar_on_left=True)
 
   def __truediv__(self, other: object) -> ndarray:
-    return divide(self, other)
+    return _binary_from_array(self, other, OP_DIV, scalar_on_left=False)
 
   def __rtruediv__(self, other: object) -> ndarray:
-    return divide(other, self)
+    return _binary_from_array(self, other, OP_DIV, scalar_on_left=True)
 
   def __matmul__(self, other: object) -> ndarray:
+    if isinstance(other, ndarray):
+      return ndarray(_native.matmul(self._native, other._native))
     return matmul(self, other)
 
   def __rmatmul__(self, other: object) -> ndarray:
+    if isinstance(other, ndarray):
+      return ndarray(_native.matmul(other._native, self._native))
     return matmul(other, self)
 
   def __neg__(self) -> ndarray:
@@ -271,21 +279,24 @@ class ndarray:
   def _view_for_key(self, key: object) -> ndarray:
     parts = _expand_key(key, self.ndim)
     starts: list[int] = []
+    stops: list[int] = []
     steps: list[int] = []
     drops: list[int] = []
     for axis, part in enumerate(parts):
       dim = self.shape[axis]
       if isinstance(part, slice):
-        start, _stop, step = part.indices(dim)
+        start, stop, step = part.indices(dim)
         starts.append(start)
+        stops.append(stop)
         steps.append(step)
         drops.append(0)
       else:
         index = _normalize_index(part, dim)
         starts.append(index)
+        stops.append(index + 1)
         steps.append(1)
         drops.append(1)
-    return ndarray(_native.slice(self._native, tuple(starts), tuple(steps), tuple(drops)), base=self)
+    return ndarray(_native.slice(self._native, tuple(starts), tuple(stops), tuple(steps), tuple(drops)), base=self)
 
 
 def dtype(value: object) -> DType:
@@ -442,6 +453,8 @@ def argmax(x: object, axis: object = None) -> object:
 
 
 def matmul(x1: object, x2: object) -> ndarray:
+  if isinstance(x1, ndarray) and isinstance(x2, ndarray):
+    return ndarray(_native.matmul(x1._native, x2._native))
   lhs = asarray(x1)
   rhs = asarray(x2)
   return ndarray(_native.matmul(lhs._native, rhs._native))
@@ -482,12 +495,33 @@ def __array_namespace_info__() -> object:
 
 
 def _binary(x1: object, x2: object, op: int) -> ndarray:
+  if isinstance(x1, ndarray):
+    return _binary_from_array(x1, x2, op, scalar_on_left=False)
+  if isinstance(x2, ndarray):
+    return _binary_from_array(x2, x1, op, scalar_on_left=True)
   lhs = asarray(x1)
   rhs = asarray(x2)
   return ndarray(_native.binary(lhs._native, rhs._native, op))
 
 
+def _binary_from_array(array: ndarray, other: object, op: int, *, scalar_on_left: builtins.bool) -> ndarray:
+  if isinstance(other, ndarray):
+    if scalar_on_left:
+      return ndarray(_native.binary(other._native, array._native, op))
+    return ndarray(_native.binary(array._native, other._native, op))
+  if _is_scalar_value(other):
+    return ndarray(
+      _native.binary_scalar(array._native, other, _infer_scalar_dtype(other).code, op, scalar_on_left)
+    )
+  other_arr = asarray(other)
+  if scalar_on_left:
+    return ndarray(_native.binary(other_arr._native, array._native, op))
+  return ndarray(_native.binary(array._native, other_arr._native, op))
+
+
 def _unary(x: object, op: int) -> ndarray:
+  if isinstance(x, ndarray):
+    return ndarray(_native.unary(x._native, op))
   arr = asarray(x)
   return ndarray(_native.unary(arr._native, op))
 
@@ -495,8 +529,20 @@ def _unary(x: object, op: int) -> ndarray:
 def _reduce(x: object, axis: object, op: int) -> object:
   if axis is not None:
     raise NotImplementedError("axis-specific reductions are not implemented in monpy v1")
-  result = ndarray(_native.reduce(asarray(x)._native, op))
-  return result._scalar()
+  arr = x if isinstance(x, ndarray) else asarray(x)
+  return _native.reduce(arr._native, op).get_scalar(0)
+
+
+def _is_scalar_value(value: object) -> builtins.bool:
+  return isinstance(value, (builtins.bool, builtins.int, builtins.float))
+
+
+def _infer_scalar_dtype(value: object) -> DType:
+  if isinstance(value, builtins.bool):
+    return bool
+  if isinstance(value, builtins.int):
+    return int64
+  return float64
 
 
 def _resolve_dtype(value: object) -> DType:

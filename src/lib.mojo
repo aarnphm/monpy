@@ -16,9 +16,11 @@ from native import (
     native_layout_smoke,
     native_linspace,
     native_matmul,
+    native_binary_scalar,
     native_reduce,
     native_reshape,
     native_slice,
+    native_slice_1d,
     native_transpose,
     native_unary,
     native_where,
@@ -57,12 +59,14 @@ def PyInit__native() -> PythonObject:
         module.def_function[native_astype]("astype")
         module.def_function[native_unary]("unary")
         module.def_function[native_binary]("binary")
+        module.def_function[native_binary_scalar]("binary_scalar")
         module.def_function[native_where]("where")
         module.def_function[native_reduce]("reduce")
         module.def_function[native_matmul]("matmul")
         module.def_function[native_fill]("fill")
         module.def_function[native_copyto]("copyto")
         module.def_function[native_layout_smoke]("layout_smoke")
+        module.def_function[native_slice_1d]("slice_1d")
         return module.finalize()
     except e:
         abort(String("failed to create Python module: ", e))

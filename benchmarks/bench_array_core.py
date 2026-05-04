@@ -53,13 +53,25 @@ def main() -> None:
   n_mp = mnp.asarray(n_np.tolist(), dtype=mnp.float32)
   row_mp = mnp.asarray(row_np.tolist(), dtype=mnp.float32)
 
+  m64_np = (np.arange(64 * 64, dtype=np.float32).reshape(64, 64) / 1000).astype(np.float32)
+  n64_np = (np.arange(64 * 64, dtype=np.float32).reshape(64, 64) / 1000).astype(np.float32)
+  m64_mp = mnp.asarray(m64_np.tolist(), dtype=mnp.float32)
+  n64_mp = mnp.asarray(n64_np.tolist(), dtype=mnp.float32)
+
+  m128_np = (np.arange(128 * 128, dtype=np.float32).reshape(128, 128) / 1000).astype(np.float32)
+  n128_np = (np.arange(128 * 128, dtype=np.float32).reshape(128, 128) / 1000).astype(np.float32)
+  m128_mp = mnp.asarray(m128_np.tolist(), dtype=mnp.float32)
+  n128_mp = mnp.asarray(n128_np.tolist(), dtype=mnp.float32)
+
   benches: list[tuple[str, BenchFn, BenchFn]] = [
     ("unary_sin_f32", lambda: mnp.sin(x_mp), lambda: np.sin(x_np)),
     ("binary_add_f32", lambda: x_mp + y_mp, lambda: x_np + y_np),
     ("broadcast_add_f32", lambda: m_mp + row_mp, lambda: m_np + row_np),
     ("sum_f32", lambda: mnp.sum(x_mp), lambda: np.sum(x_np)),
     ("strided_view_f32", lambda: x_mp[::-2], lambda: x_np[::-2]),
-    ("matmul_f32", lambda: m_mp @ n_mp, lambda: m_np @ n_np),
+    ("matmul_16_f32", lambda: m_mp @ n_mp, lambda: m_np @ n_np),
+    ("matmul_64_f32", lambda: m64_mp @ n64_mp, lambda: m64_np @ n64_np),
+    ("matmul_128_f32", lambda: m128_mp @ n128_mp, lambda: m128_np @ n128_np),
     ("fused_expression_f32", lambda: mnp.sin(x_mp) + y_mp * 3.0, lambda: np.sin(x_np) + y_np * 3.0),
   ]
 
