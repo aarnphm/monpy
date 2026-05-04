@@ -1,0 +1,29 @@
+[build-system]
+requires = ["mohaus>=0.1,<0.2", "mojo==1.0.0.dev0"]
+build-backend = "mohaus.backend"
+
+[project]
+name = "monpy"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = ["numpy>=2", "pytest>=9"]
+
+[tool.mohaus]
+mojo-src = "src"
+python-src = "python"
+module-name = "monpy._native"
+strip = true
+mojo-flags = []
+mojo-include-paths = ["/Users/aarnphm/workspace/modular/Kernels"]
+
+[tool.ruff]
+indent-width = 2
+line-length = 119
+preview = true
+target-version = "py311"
+
+[tool.ruff.lint]
+ignore = ["E111", "E114"]
+select = ["E", "F", "I", "UP", "B", "ANN"]
