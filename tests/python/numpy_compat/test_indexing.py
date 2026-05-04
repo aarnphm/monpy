@@ -3,7 +3,6 @@ from __future__ import annotations
 import monumpy as np
 import numpy
 import pytest
-
 from _helpers import assert_same_values
 
 

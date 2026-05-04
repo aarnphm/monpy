@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import monumpy as np
 import monpy.array_api as xp
+import monumpy as np
 import numpy
 import pytest
-
 from _helpers import assert_same_shape_dtype, assert_same_values
 
 
@@ -150,6 +149,19 @@ def test_fused_sin_add_mul_matches_numpy() -> None:
   oracle_rhs = numpy.asarray([2.0, 3.0, 4.0], dtype=numpy.float32)
 
   out = np.sin_add_mul(lhs, rhs, 3.0)
+
+  assert out._native.used_fused()
+  assert out.dtype == np.float32
+  assert_same_values(out, numpy.sin(oracle_lhs) + oracle_rhs * 3.0)
+
+
+def test_numpy_shaped_expression_lowers_to_fused_kernel() -> None:
+  lhs = np.asarray([0.1, 0.2, 0.3], dtype=np.float32)
+  rhs = np.asarray([2.0, 3.0, 4.0], dtype=np.float32)
+  oracle_lhs = numpy.asarray([0.1, 0.2, 0.3], dtype=numpy.float32)
+  oracle_rhs = numpy.asarray([2.0, 3.0, 4.0], dtype=numpy.float32)
+
+  out = np.sin(lhs) + rhs * 3.0
 
   assert out._native.used_fused()
   assert out.dtype == np.float32

@@ -4,7 +4,10 @@ monpy should be a mojo array library with numpy-shaped python APIs.
 
 ## layers
 
-- `src/native.mojo` is the array runtime. it owns allocation, dtype codes, shape and stride metadata, views, generic dynamic-rank kernels, and specialized contiguous kernels.
+- `src/native.mojo` is the python-callable runtime surface. it owns argument conversion and operation-level dispatch.
+- `src/native_types.mojo` owns the one real array struct, dtype/op constants, allocation, shape/stride metadata, physical offsets, and scalar load/store helpers.
+- `src/native_kernels.mojo` owns numeric loops, contiguous fast paths, reductions, LayoutTensor smoke paths, and matmul dispatch.
+- `src/native_accelerate.mojo` owns Apple Accelerate ffi shims only.
 - `src/lib.mojo` is only the cpython extension boundary. it registers `NativeArray` and exported functions into `monpy._native`.
 - `python/monpy` is the python API facade. it parses python objects, keyword arguments, and numpy-flavored ergonomics, then delegates implemented work into mojo.
 - `python/monpy/array_api.py` is the standards-shaped namespace.
@@ -22,7 +25,8 @@ monpy should be a mojo array library with numpy-shaped python APIs.
 - generic paths preserve dynamic-rank correctness with shape and stride metadata.
 - fast paths should be added only when a dtype/layout/rank predicate makes the cheaper path obvious.
 - allocation reuse, `out=`, expression fusion, and wider SIMD/LayoutTensor coverage are the next major perf levers.
-- `sin_add_mul(x, y, scalar)` is the first explicit fused expression kernel and should become the lowering target for the numpy-shaped `sin(x) + y * scalar` pattern.
+- `sin_add_mul(x, y, scalar)` is the first explicit fused expression kernel.
+- the numpy-shaped `sin(x) + y * scalar` pattern lowers through a private python expression object and materializes through the same mojo fused kernel. benchmarks must force materialization so this does not become a fake python-only win.
 - matmul uses Apple Accelerate for contiguous macos f32/f64 rank-2 arrays, with scalar mojo as the portable fallback.
 - backend markers on native arrays let tests and benchmarks assert that specialized kernels actually ran.
 

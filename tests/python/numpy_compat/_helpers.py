@@ -5,7 +5,6 @@ from typing import Final
 import monumpy as np
 import numpy
 
-
 SUPPORTED_DTYPE_PAIRS: Final = (
   (np.bool, numpy.bool_),
   (np.int64, numpy.int64),

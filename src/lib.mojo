@@ -3,10 +3,13 @@ from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
 
 from native import (
-    NativeArray,
+    native_add,
+    native_add_into,
+    native_add_f32_into,
     native_arange,
     native_astype,
     native_binary,
+    native_binary_into,
     native_broadcast_to,
     native_copyto,
     native_empty,
@@ -19,12 +22,14 @@ from native import (
     native_binary_scalar,
     native_reduce,
     native_reshape,
+    native_sin_add_mul,
     native_slice,
     native_slice_1d,
     native_transpose,
     native_unary,
     native_where,
 )
+from native_types import NativeArray
 
 
 # Keep this file as the CPython extension boundary. The array runtime lives in
@@ -45,6 +50,9 @@ def PyInit__native() -> PythonObject:
             .def_method[NativeArray.data_address_py]("data_address")
             .def_method[NativeArray.is_c_contiguous_py]("is_c_contiguous")
             .def_method[NativeArray.used_layout_tensor_py]("used_layout_tensor")
+            .def_method[NativeArray.used_accelerate_py]("used_accelerate")
+            .def_method[NativeArray.used_fused_py]("used_fused")
+            .def_method[NativeArray.backend_code_py]("backend_code")
             .def_method[NativeArray.get_scalar_py]("get_scalar")
         )
         module.def_function[native_empty]("empty")
@@ -58,8 +66,13 @@ def PyInit__native() -> PythonObject:
         module.def_function[native_broadcast_to]("broadcast_to")
         module.def_function[native_astype]("astype")
         module.def_function[native_unary]("unary")
+        module.def_function[native_add]("add")
+        module.def_function[native_add_into]("add_into")
+        module.def_function[native_add_f32_into]("add_f32_into")
         module.def_function[native_binary]("binary")
+        module.def_function[native_binary_into]("binary_into")
         module.def_function[native_binary_scalar]("binary_scalar")
+        module.def_function[native_sin_add_mul]("sin_add_mul")
         module.def_function[native_where]("where")
         module.def_function[native_reduce]("reduce")
         module.def_function[native_matmul]("matmul")

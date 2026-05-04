@@ -6,9 +6,7 @@ from collections.abc import Callable
 import monumpy as np
 import numpy
 import pytest
-
 from _helpers import MONPY_TO_NUMPY_DTYPE, SUPPORTED_DTYPE_PAIRS, assert_same_values
-
 
 PROMOTION_MATCH_CASES = [
   (lhs_dtype, lhs_numpy_dtype, rhs_dtype, rhs_numpy_dtype)

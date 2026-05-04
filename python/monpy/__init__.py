@@ -66,35 +66,58 @@ e = math.e
 
 class ndarray:
   __array_priority__ = 1000
-  __slots__ = ("_base", "_native")
+  __slots__ = ("_base", "_dtype", "_native", "_shape", "_strides")
 
-  def __init__(_self, native: _native.NativeArray, base: ndarray | None = None) -> None:
+  def __init__(
+    _self,
+    native: _native.NativeArray,
+    base: ndarray | None = None,
+    *,
+    dtype: DType | None = None,
+    shape: tuple[int, ...] | None = None,
+    strides: tuple[int, ...] | None = None,
+  ) -> None:
     _self._native = native
     _self._base = base
+    _self._dtype = dtype
+    _self._shape = shape
+    _self._strides = strides
 
   @property
   def dtype(self) -> DType:
-    return _DTYPES_BY_CODE[int(self._native.dtype_code())]
+    if self._dtype is None:
+      self._dtype = _DTYPES_BY_CODE[int(self._native.dtype_code())]
+    return self._dtype
 
   @property
   def shape(self) -> tuple[int, ...]:
-    return tuple(int(self._native.shape_at(axis)) for axis in range(self.ndim))
+    if self._shape is None:
+      ndim = int(self._native.ndim())
+      self._shape = tuple(int(self._native.shape_at(axis)) for axis in range(ndim))
+    return self._shape
 
   @property
   def ndim(self) -> int:
+    if self._shape is not None:
+      return len(self._shape)
     return int(self._native.ndim())
 
   @property
   def size(self) -> int:
+    if self._shape is not None:
+      return math.prod(self._shape)
     return int(self._native.size())
 
   @property
   def itemsize(self) -> int:
-    return int(self._native.item_size())
+    return self.dtype.itemsize
 
   @property
   def strides(self) -> tuple[int, ...]:
-    return tuple(int(self._native.stride_at(axis)) * self.itemsize for axis in range(self.ndim))
+    if self._strides is None:
+      itemsize = self.itemsize
+      self._strides = tuple(int(self._native.stride_at(axis)) * itemsize for axis in range(self.ndim))
+    return self._strides
 
   @property
   def device(self) -> str:
@@ -113,7 +136,7 @@ class ndarray:
 
   @property
   def __array_interface__(self) -> dict[str, object]:
-    strides = None if self._native.is_c_contiguous() else self.strides
+    strides = None if _is_c_contiguous_bytes(self.shape, self.strides, self.itemsize) else self.strides
     return {
       "version": 3,
       "shape": self.shape,
@@ -166,8 +189,22 @@ class ndarray:
 
   def __getitem__(self, key: object) -> object:
     if isinstance(key, slice) and self.ndim == 1:
-      start, stop, step = key.indices(int(self._native.shape_at(0)))
-      return ndarray(_native.slice_1d(self._native, start, stop, step), base=self)
+      dim = self.shape[0]
+      step = 1 if key.step is None else int(key.step)
+      if step == 0:
+        raise ValueError("slice step cannot be zero")
+      if key.start is None and key.stop is None:
+        start = dim - 1 if step < 0 else 0
+        stop = -1 if step < 0 else dim
+      else:
+        start, stop, step = key.indices(dim)
+      return ndarray(
+        _native.slice_1d(self._native, start, stop, step),
+        base=self,
+        dtype=self.dtype,
+        shape=(len(range(start, stop, step)),),
+        strides=(self.strides[0] * step,),
+      )
     view = self._view_for_key(key)
     if view.ndim == 0:
       return view._scalar()
@@ -195,28 +232,28 @@ class ndarray:
       raise TypeError("only size-1 arrays can be converted to python scalars")
     return float(self._scalar())
 
-  def __add__(self, other: object) -> ndarray:
+  def __add__(self, other: object) -> object:
     return _binary_from_array(self, other, OP_ADD, scalar_on_left=False)
 
-  def __radd__(self, other: object) -> ndarray:
+  def __radd__(self, other: object) -> object:
     return _binary_from_array(self, other, OP_ADD, scalar_on_left=True)
 
-  def __sub__(self, other: object) -> ndarray:
+  def __sub__(self, other: object) -> object:
     return _binary_from_array(self, other, OP_SUB, scalar_on_left=False)
 
-  def __rsub__(self, other: object) -> ndarray:
+  def __rsub__(self, other: object) -> object:
     return _binary_from_array(self, other, OP_SUB, scalar_on_left=True)
 
-  def __mul__(self, other: object) -> ndarray:
+  def __mul__(self, other: object) -> object:
     return _binary_from_array(self, other, OP_MUL, scalar_on_left=False)
 
-  def __rmul__(self, other: object) -> ndarray:
+  def __rmul__(self, other: object) -> object:
     return _binary_from_array(self, other, OP_MUL, scalar_on_left=True)
 
-  def __truediv__(self, other: object) -> ndarray:
+  def __truediv__(self, other: object) -> object:
     return _binary_from_array(self, other, OP_DIV, scalar_on_left=False)
 
-  def __rtruediv__(self, other: object) -> ndarray:
+  def __rtruediv__(self, other: object) -> object:
     return _binary_from_array(self, other, OP_DIV, scalar_on_left=True)
 
   def __matmul__(self, other: object) -> ndarray:
@@ -299,6 +336,213 @@ class ndarray:
     return ndarray(_native.slice(self._native, tuple(starts), tuple(stops), tuple(steps), tuple(drops)), base=self)
 
 
+class _DeferredArray:
+  __array_priority__ = 1001
+  __slots__ = ("_cached",)
+
+  def __init__(self) -> None:
+    self._cached: ndarray | None = None
+
+  @property
+  def _native(self) -> _native.NativeArray:
+    return self._materialize()._native
+
+  @property
+  def dtype(self) -> DType:
+    raise NotImplementedError
+
+  @property
+  def shape(self) -> tuple[int, ...]:
+    raise NotImplementedError
+
+  @property
+  def ndim(self) -> int:
+    return len(self.shape)
+
+  @property
+  def size(self) -> int:
+    return math.prod(self.shape)
+
+  @property
+  def itemsize(self) -> int:
+    return self.dtype.itemsize
+
+  @property
+  def strides(self) -> tuple[int, ...]:
+    return self._materialize().strides
+
+  @property
+  def device(self) -> str:
+    return "cpu"
+
+  @property
+  def T(self) -> ndarray:
+    return self._materialize().T
+
+  @property
+  def mT(self) -> ndarray:
+    return self._materialize().mT
+
+  @property
+  def __array_interface__(self) -> dict[str, object]:
+    return self._materialize().__array_interface__
+
+  def __array__(self, dtype: object = None, copy: builtins.bool | None = None) -> object:
+    return self._materialize().__array__(dtype=dtype, copy=copy)
+
+  def __array_namespace__(self, *, api_version: str | None = None) -> ModuleType:
+    return self._materialize().__array_namespace__(api_version=api_version)
+
+  def __len__(self) -> int:
+    return len(self._materialize())
+
+  def __iter__(self) -> Iterable[object]:
+    return iter(self._materialize())
+
+  def __repr__(self) -> str:
+    return repr(self._materialize())
+
+  def __getitem__(self, key: object) -> object:
+    return self._materialize()[key]
+
+  def __setitem__(self, key: object, value: object) -> None:
+    self._materialize()[key] = value
+
+  def __bool__(self) -> builtins.bool:
+    return builtins.bool(self._materialize())
+
+  def __int__(self) -> int:
+    return int(self._materialize())
+
+  def __float__(self) -> float:
+    return float(self._materialize())
+
+  def __add__(self, other: object) -> object:
+    return _binary(self, other, OP_ADD)
+
+  def __radd__(self, other: object) -> object:
+    return _binary(other, self, OP_ADD)
+
+  def __sub__(self, other: object) -> object:
+    return _binary(self, other, OP_SUB)
+
+  def __rsub__(self, other: object) -> object:
+    return _binary(other, self, OP_SUB)
+
+  def __mul__(self, other: object) -> object:
+    return _binary(self, other, OP_MUL)
+
+  def __rmul__(self, other: object) -> object:
+    return _binary(other, self, OP_MUL)
+
+  def __truediv__(self, other: object) -> object:
+    return _binary(self, other, OP_DIV)
+
+  def __rtruediv__(self, other: object) -> object:
+    return _binary(other, self, OP_DIV)
+
+  def __matmul__(self, other: object) -> ndarray:
+    return matmul(self, other)
+
+  def __rmatmul__(self, other: object) -> ndarray:
+    return matmul(other, self)
+
+  def __neg__(self) -> object:
+    return multiply(self, -1)
+
+  def __pos__(self) -> object:
+    return self
+
+  def reshape(self, *shape: int | Sequence[int]) -> ndarray:
+    return self._materialize().reshape(*shape)
+
+  def transpose(self, axes: Sequence[int] | None = None) -> ndarray:
+    return self._materialize().transpose(axes)
+
+  def astype(self, dtype: object, *, copy: builtins.bool = True, device: object = None) -> ndarray:
+    return self._materialize().astype(dtype, copy=copy, device=device)
+
+  def tolist(self) -> object:
+    return self._materialize().tolist()
+
+  def sum(self, axis: object = None) -> object:
+    return sum(self, axis=axis)
+
+  def mean(self, axis: object = None) -> object:
+    return mean(self, axis=axis)
+
+  def min(self, axis: object = None) -> object:
+    return min(self, axis=axis)
+
+  def max(self, axis: object = None) -> object:
+    return max(self, axis=axis)
+
+  def argmax(self, axis: object = None) -> object:
+    return argmax(self, axis=axis)
+
+  def _materialize(self) -> ndarray:
+    if self._cached is None:
+      self._cached = self._compute()
+    return self._cached
+
+  def _compute(self) -> ndarray:
+    raise NotImplementedError
+
+
+class _UnaryExpression(_DeferredArray):
+  __slots__ = ("_base", "_op")
+
+  def __init__(self, base: ndarray | _DeferredArray, op: int) -> None:
+    super().__init__()
+    self._base = base
+    self._op = op
+
+  @property
+  def dtype(self) -> DType:
+    return _result_dtype_for_unary(self._base.dtype)
+
+  @property
+  def shape(self) -> tuple[int, ...]:
+    return self._base.shape
+
+  def _compute(self) -> ndarray:
+    base = _materialize_array(self._base)
+    return ndarray(_native.unary(base._native, self._op))
+
+
+class _ScalarBinaryExpression(_DeferredArray):
+  __slots__ = ("_array", "_op", "_scalar", "_scalar_dtype", "_scalar_on_left")
+
+  def __init__(
+    self,
+    array: ndarray | _DeferredArray,
+    scalar: object,
+    scalar_dtype: DType,
+    op: int,
+    scalar_on_left: builtins.bool,
+  ) -> None:
+    super().__init__()
+    self._array = array
+    self._scalar = scalar
+    self._scalar_dtype = scalar_dtype
+    self._op = op
+    self._scalar_on_left = scalar_on_left
+
+  @property
+  def dtype(self) -> DType:
+    return _result_dtype_for_binary(self._array.dtype, self._scalar_dtype, self._op)
+
+  @property
+  def shape(self) -> tuple[int, ...]:
+    return self._array.shape
+
+  def _compute(self) -> ndarray:
+    array = _materialize_array(self._array)
+    return ndarray(
+      _native.binary_scalar(array._native, self._scalar, self._scalar_dtype.code, self._op, self._scalar_on_left)
+    )
+
+
 def dtype(value: object) -> DType:
   return _resolve_dtype(value)
 
@@ -309,6 +553,8 @@ def array(obj: object, dtype: object = None, *, copy: builtins.bool | None = Tru
 
 def asarray(obj: object, dtype: object = None, *, copy: builtins.bool | None = None, device: object = None) -> ndarray:
   _check_cpu_device(device)
+  if isinstance(obj, _DeferredArray):
+    return asarray(obj._materialize(), dtype=dtype, copy=copy, device=device)
   if isinstance(obj, ndarray):
     if dtype is None:
       if copy is True:
@@ -320,13 +566,24 @@ def asarray(obj: object, dtype: object = None, *, copy: builtins.bool | None = N
     return obj.astype(target, copy=True)
   shape, flat = _flatten(obj)
   target = _resolve_dtype(dtype) if dtype is not None else _infer_dtype(flat)
-  return ndarray(_native.from_flat(flat, shape, target.code))
+  return ndarray(
+    _native.from_flat(flat, shape, target.code),
+    dtype=target,
+    shape=shape,
+    strides=_c_strides_bytes(shape, target.itemsize),
+  )
 
 
 def empty(shape: int | Sequence[int], dtype: object = None, *, device: object = None) -> ndarray:
   _check_cpu_device(device)
   target = _resolve_dtype(dtype) if dtype is not None else float64
-  return ndarray(_native.empty(_normalize_shape(shape), target.code))
+  normalized = _normalize_shape(shape)
+  return ndarray(
+    _native.empty(normalized, target.code),
+    dtype=target,
+    shape=normalized,
+    strides=_c_strides_bytes(normalized, target.itemsize),
+  )
 
 
 def zeros(shape: int | Sequence[int], dtype: object = None, *, device: object = None) -> ndarray:
@@ -342,7 +599,13 @@ def ones(shape: int | Sequence[int], dtype: object = None, *, device: object = N
 def full(shape: int | Sequence[int], fill_value: object, *, dtype: object = None, device: object = None) -> ndarray:
   _check_cpu_device(device)
   target = _resolve_dtype(dtype) if dtype is not None else _infer_dtype([fill_value])
-  return ndarray(_native.full(_normalize_shape(shape), fill_value, target.code))
+  normalized = _normalize_shape(shape)
+  return ndarray(
+    _native.full(normalized, fill_value, target.code),
+    dtype=target,
+    shape=normalized,
+    strides=_c_strides_bytes(normalized, target.itemsize),
+  )
 
 
 def arange(
@@ -360,7 +623,7 @@ def arange(
     target = float64 if any(isinstance(v, builtins.float) for v in (actual_start, actual_stop, step)) else int64
   else:
     target = _resolve_dtype(dtype)
-  return ndarray(_native.arange(actual_start, actual_stop, step, target.code))
+  return ndarray(_native.arange(actual_start, actual_stop, step, target.code), dtype=target)
 
 
 def linspace(
@@ -373,7 +636,12 @@ def linspace(
 ) -> ndarray:
   _check_cpu_device(device)
   target = _resolve_dtype(dtype) if dtype is not None else float64
-  return ndarray(_native.linspace(start, stop, num, target.code))
+  return ndarray(
+    _native.linspace(start, stop, num, target.code),
+    dtype=target,
+    shape=(num,),
+    strides=(target.itemsize,),
+  )
 
 
 def reshape(x: object, shape: int | Sequence[int]) -> ndarray:
@@ -393,36 +661,47 @@ def broadcast_to(x: object, shape: int | Sequence[int]) -> ndarray:
   return ndarray(_native.broadcast_to(arr._native, _normalize_shape(shape)), base=arr)
 
 
-def add(x1: object, x2: object) -> ndarray:
-  return _binary(x1, x2, OP_ADD)
+def add(x1: object, x2: object, *, out: ndarray | None = None) -> object:
+  return _binary(x1, x2, OP_ADD, out=out)
 
 
-def subtract(x1: object, x2: object) -> ndarray:
-  return _binary(x1, x2, OP_SUB)
+def subtract(x1: object, x2: object, *, out: ndarray | None = None) -> object:
+  return _binary(x1, x2, OP_SUB, out=out)
 
 
-def multiply(x1: object, x2: object) -> ndarray:
-  return _binary(x1, x2, OP_MUL)
+def multiply(x1: object, x2: object, *, out: ndarray | None = None) -> object:
+  return _binary(x1, x2, OP_MUL, out=out)
 
 
-def divide(x1: object, x2: object) -> ndarray:
-  return _binary(x1, x2, OP_DIV)
+def divide(x1: object, x2: object, *, out: ndarray | None = None) -> object:
+  return _binary(x1, x2, OP_DIV, out=out)
 
 
-def sin(x: object) -> ndarray:
+def sin(x: object) -> object:
   return _unary(x, UNARY_SIN)
 
 
-def cos(x: object) -> ndarray:
+def cos(x: object) -> object:
   return _unary(x, UNARY_COS)
 
 
-def exp(x: object) -> ndarray:
+def exp(x: object) -> object:
   return _unary(x, UNARY_EXP)
 
 
-def log(x: object) -> ndarray:
+def log(x: object) -> object:
   return _unary(x, UNARY_LOG)
+
+
+def sin_add_mul(x: object, y: object, scalar: object) -> ndarray:
+  if not _is_scalar_value(scalar):
+    raise NotImplementedError("sin_add_mul currently requires a Python scalar multiplier")
+  lhs = _as_array_value(x)
+  rhs = _as_array_value(y)
+  scalar_dtype = _infer_scalar_dtype_for_array(rhs, scalar)
+  lhs_array = _materialize_array(lhs)
+  rhs_array = _materialize_array(rhs)
+  return ndarray(_native.sin_add_mul(lhs_array._native, rhs_array._native, scalar, scalar_dtype.code))
 
 
 def where(condition: object, x1: object, x2: object) -> ndarray:
@@ -453,10 +732,8 @@ def argmax(x: object, axis: object = None) -> object:
 
 
 def matmul(x1: object, x2: object) -> ndarray:
-  if isinstance(x1, ndarray) and isinstance(x2, ndarray):
-    return ndarray(_native.matmul(x1._native, x2._native))
-  lhs = asarray(x1)
-  rhs = asarray(x2)
+  lhs = _materialize_array(_as_array_value(x1))
+  rhs = _materialize_array(_as_array_value(x2))
   return ndarray(_native.matmul(lhs._native, rhs._native))
 
 
@@ -494,43 +771,157 @@ def __array_namespace_info__() -> object:
   return Info()
 
 
-def _binary(x1: object, x2: object, op: int) -> ndarray:
-  if isinstance(x1, ndarray):
+def _binary(x1: object, x2: object, op: int, *, out: ndarray | None = None) -> object:
+  if out is not None:
+    if isinstance(x1, ndarray) and isinstance(x2, ndarray):
+      if op == OP_ADD:
+        _native.add_into(out._native, x1._native, x2._native)
+        return out
+      _native.binary_into(out._native, x1._native, x2._native, op)
+      return out
+    lhs = _materialize_array(_as_array_value(x1))
+    rhs = _materialize_array(_as_array_value(x2))
+    if op == OP_ADD:
+      _native.add_into(out._native, lhs._native, rhs._native)
+      return out
+    _native.binary_into(out._native, lhs._native, rhs._native, op)
+    return out
+  fused = _maybe_fuse_binary(x1, x2, op)
+  if fused is not None:
+    return fused
+  if _is_array_value(x1):
     return _binary_from_array(x1, x2, op, scalar_on_left=False)
-  if isinstance(x2, ndarray):
+  if _is_array_value(x2):
     return _binary_from_array(x2, x1, op, scalar_on_left=True)
   lhs = asarray(x1)
   rhs = asarray(x2)
   return ndarray(_native.binary(lhs._native, rhs._native, op))
 
 
-def _binary_from_array(array: ndarray, other: object, op: int, *, scalar_on_left: builtins.bool) -> ndarray:
-  if isinstance(other, ndarray):
-    if scalar_on_left:
-      return ndarray(_native.binary(other._native, array._native, op))
-    return ndarray(_native.binary(array._native, other._native, op))
+def _binary_from_array(
+  array: ndarray | _DeferredArray,
+  other: object,
+  op: int,
+  *,
+  scalar_on_left: builtins.bool,
+) -> object:
+  if isinstance(array, ndarray) and isinstance(other, ndarray):
+    lhs = other if scalar_on_left else array
+    rhs = array if scalar_on_left else other
+    if op == OP_ADD:
+      return ndarray(_native.add(lhs._native, rhs._native))
+    return ndarray(_native.binary(lhs._native, rhs._native, op))
+  if _is_array_value(other):
+    lhs = _materialize_array(other) if scalar_on_left else _materialize_array(array)
+    rhs = _materialize_array(array) if scalar_on_left else _materialize_array(other)  # type: ignore[arg-type]
+    return ndarray(_native.binary(lhs._native, rhs._native, op))
   if _is_scalar_value(other):
-    return ndarray(
-      _native.binary_scalar(array._native, other, _infer_scalar_dtype(other).code, op, scalar_on_left)
-    )
+    scalar_dtype = _infer_scalar_dtype_for_array(array, other)
+    if op == OP_MUL and _can_defer_scalar_binary(array, scalar_dtype):
+      return _ScalarBinaryExpression(array, other, scalar_dtype, op, scalar_on_left)
+    native_array = _materialize_array(array)
+    return ndarray(_native.binary_scalar(native_array._native, other, scalar_dtype.code, op, scalar_on_left))
   other_arr = asarray(other)
   if scalar_on_left:
-    return ndarray(_native.binary(other_arr._native, array._native, op))
-  return ndarray(_native.binary(array._native, other_arr._native, op))
+    return ndarray(_native.binary(other_arr._native, _materialize_array(array)._native, op))
+  return ndarray(_native.binary(_materialize_array(array)._native, other_arr._native, op))
 
 
-def _unary(x: object, op: int) -> ndarray:
-  if isinstance(x, ndarray):
-    return ndarray(_native.unary(x._native, op))
-  arr = asarray(x)
-  return ndarray(_native.unary(arr._native, op))
+def _unary(x: object, op: int) -> object:
+  arr = _as_array_value(x)
+  if _can_defer_unary(arr, op):
+    return _UnaryExpression(arr, op)
+  native_array = _materialize_array(arr)
+  return ndarray(_native.unary(native_array._native, op))
 
 
 def _reduce(x: object, axis: object, op: int) -> object:
   if axis is not None:
     raise NotImplementedError("axis-specific reductions are not implemented in monpy v1")
-  arr = x if isinstance(x, ndarray) else asarray(x)
+  arr = _materialize_array(_as_array_value(x))
   return _native.reduce(arr._native, op).get_scalar(0)
+
+
+def _is_array_value(value: object) -> builtins.bool:
+  return isinstance(value, (ndarray, _DeferredArray))
+
+
+def _as_array_value(value: object) -> ndarray | _DeferredArray:
+  if isinstance(value, (ndarray, _DeferredArray)):
+    return value
+  return asarray(value)
+
+
+def _materialize_array(value: ndarray | _DeferredArray) -> ndarray:
+  if isinstance(value, _DeferredArray):
+    return value._materialize()
+  return value
+
+
+def _can_defer_unary(value: ndarray | _DeferredArray, op: int) -> builtins.bool:
+  return op == UNARY_SIN and value.dtype in (float32, float64)
+
+
+def _can_defer_scalar_binary(value: ndarray | _DeferredArray, scalar_dtype: DType) -> builtins.bool:
+  return value.dtype in (float32, float64) and scalar_dtype in (float32, float64)
+
+
+def _maybe_fuse_binary(x1: object, x2: object, op: int) -> ndarray | None:
+  if op != OP_ADD:
+    return None
+  fused = _match_sin_add_mul(x1, x2)
+  if fused is not None:
+    return fused
+  return _match_sin_add_mul(x2, x1)
+
+
+def _match_sin_add_mul(x1: object, x2: object) -> ndarray | None:
+  if not isinstance(x1, _UnaryExpression) or x1._op != UNARY_SIN:
+    return None
+  if not isinstance(x2, _ScalarBinaryExpression) or x2._op != OP_MUL:
+    return None
+  lhs = _materialize_array(x1._base)
+  rhs = _materialize_array(x2._array)
+  return ndarray(_native.sin_add_mul(lhs._native, rhs._native, x2._scalar, x2._scalar_dtype.code))
+
+
+def _result_dtype_for_unary(dtype_value: DType) -> DType:
+  if dtype_value == float32:
+    return float32
+  return float64
+
+
+def _result_dtype_for_binary(lhs_dtype: DType, rhs_dtype: DType, op: int) -> DType:
+  if op == OP_DIV:
+    if lhs_dtype == float32 and rhs_dtype == float32:
+      return float32
+    return float64
+  if lhs_dtype == float64 or rhs_dtype == float64:
+    return float64
+  if lhs_dtype == float32 or rhs_dtype == float32:
+    return float32
+  if lhs_dtype == int64 or rhs_dtype == int64:
+    return int64
+  return bool
+
+
+def _broadcast_shapes(lhs: tuple[int, ...], rhs: tuple[int, ...]) -> tuple[int, ...]:
+  out_len = builtins.max(len(lhs), len(rhs))
+  out = [1] * out_len
+  for out_axis in range(out_len - 1, -1, -1):
+    lhs_axis = out_axis - (out_len - len(lhs))
+    rhs_axis = out_axis - (out_len - len(rhs))
+    lhs_dim = lhs[lhs_axis] if lhs_axis >= 0 else 1
+    rhs_dim = rhs[rhs_axis] if rhs_axis >= 0 else 1
+    if lhs_dim == rhs_dim:
+      out[out_axis] = lhs_dim
+    elif lhs_dim == 1:
+      out[out_axis] = rhs_dim
+    elif rhs_dim == 1:
+      out[out_axis] = lhs_dim
+    else:
+      raise ValueError("operands could not be broadcast together")
+  return tuple(out)
 
 
 def _is_scalar_value(value: object) -> builtins.bool:
@@ -543,6 +934,15 @@ def _infer_scalar_dtype(value: object) -> DType:
   if isinstance(value, builtins.int):
     return int64
   return float64
+
+
+def _infer_scalar_dtype_for_array(array: ndarray | _DeferredArray, value: object) -> DType:
+  array_dtype = array.dtype
+  if array_dtype in (float32, float64) and isinstance(value, (builtins.int, builtins.float)):
+    return array_dtype
+  if array_dtype == int64 and isinstance(value, (builtins.bool, builtins.int)):
+    return int64
+  return _infer_scalar_dtype(value)
 
 
 def _resolve_dtype(value: object) -> DType:
@@ -597,6 +997,26 @@ def _normalize_shape(shape: int | Sequence[int]) -> tuple[int, ...]:
   if any(dim < 0 for dim in out):
     raise ValueError("negative dimensions are not allowed")
   return out
+
+
+def _c_strides_bytes(shape: tuple[int, ...], itemsize: int) -> tuple[int, ...]:
+  strides = [0] * len(shape)
+  stride = itemsize
+  for axis in range(len(shape) - 1, -1, -1):
+    strides[axis] = stride
+    stride *= shape[axis]
+  return tuple(strides)
+
+
+def _is_c_contiguous_bytes(shape: tuple[int, ...], strides: tuple[int, ...], itemsize: int) -> builtins.bool:
+  expected = itemsize
+  for axis in range(len(shape) - 1, -1, -1):
+    if shape[axis] == 0:
+      return True
+    if shape[axis] != 1 and strides[axis] != expected:
+      return False
+    expected *= shape[axis]
+  return True
 
 
 def _shape_from_args(shape: Sequence[int | Sequence[int]]) -> tuple[int, ...]:
@@ -713,6 +1133,7 @@ __all__ = [
   "pi",
   "reshape",
   "sin",
+  "sin_add_mul",
   "subtract",
   "sum",
   "transpose",

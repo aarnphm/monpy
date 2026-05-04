@@ -3,7 +3,6 @@ from __future__ import annotations
 import monumpy as np
 import numpy
 import pytest
-
 from _helpers import SUPPORTED_DTYPE_PAIRS, assert_same_shape_dtype, assert_same_values
 
 
