@@ -128,7 +128,7 @@ class ndarray:
 
   def __init__(
     _self,
-    native: _native.NativeArray,
+    native: _native.Array,
     base: ndarray | None = None,
     *,
     dtype: DType | None = None,
@@ -416,7 +416,7 @@ class _DeferredArray:
     self._cached: ndarray | None = None
 
   @property
-  def _native(self) -> _native.NativeArray:
+  def _native(self) -> _native.Array:
     return self._materialize()._native
 
   @property
@@ -832,9 +832,9 @@ def matmul(x1: object, x2: object) -> ndarray:
 
 def diagonal(a: object, offset: int = 0, axis1: int = 0, axis2: int = 1) -> ndarray:
   arr = asarray(a)
-  native_diagonal = getattr(_native, "diagonal", None)
-  if native_diagonal is not None:
-    return ndarray(native_diagonal(arr._native, int(offset), int(axis1), int(axis2)))
+  diagonal = getattr(_native, "diagonal", None)
+  if diagonal is not None:
+    return ndarray(diagonal(arr._native, int(offset), int(axis1), int(axis2)))
   return _diagonal_fallback(arr, int(offset), int(axis1), int(axis2))
 
 
@@ -847,10 +847,10 @@ def trace(
   out: ndarray | None = None,
 ) -> object:
   arr = asarray(a)
-  native_trace = getattr(_native, "trace", None)
-  if native_trace is not None:
+  trace = getattr(_native, "trace", None)
+  if trace is not None:
     dtype_code = -1 if dtype is None else _resolve_dtype(dtype).code
-    result = ndarray(native_trace(arr._native, int(offset), int(axis1), int(axis2), dtype_code))
+    result = ndarray(trace(arr._native, int(offset), int(axis1), int(axis2), dtype_code))
     value: object = result._scalar() if result.ndim == 0 else result
   else:
     value = _trace_fallback(arr, int(offset), int(axis1), int(axis2), dtype)
@@ -899,9 +899,6 @@ def _binary(x1: object, x2: object, op: int, *, out: ndarray | None = None) -> o
     lhs = _materialize_array(_as_array_value(x1))
     rhs = _materialize_array(_as_array_value(x2))
     lhs, rhs = _coerce_binary_operands(lhs, rhs, op)
-    if op == OP_ADD:
-      _native.add_into(out._native, lhs._native, rhs._native)
-      return out
     _native.binary_into(out._native, lhs._native, rhs._native, op)
     return out
   fused = _maybe_fuse_binary(x1, x2, op)
@@ -928,8 +925,6 @@ def _binary_from_array(
     lhs = other if scalar_on_left else array
     rhs = array if scalar_on_left else other
     lhs, rhs = _coerce_binary_operands(lhs, rhs, op)
-    if op == OP_ADD:
-      return ndarray(_native.add(lhs._native, rhs._native))
     return ndarray(_native.binary(lhs._native, rhs._native, op))
   if _is_array_value(other):
     lhs = _materialize_array(other) if scalar_on_left else _materialize_array(array)
@@ -940,8 +935,8 @@ def _binary_from_array(
     scalar_dtype = _infer_scalar_dtype_for_array(array, other)
     if op == OP_MUL and _can_defer_scalar_binary(array, scalar_dtype):
       return _ScalarBinaryExpression(array, other, scalar_dtype, op, scalar_on_left)
-    native_array = _materialize_array(array)
-    return ndarray(_native.binary_scalar(native_array._native, other, scalar_dtype.code, op, scalar_on_left))
+    array_value = _materialize_array(array)
+    return ndarray(_native.binary_scalar(array_value._native, other, scalar_dtype.code, op, scalar_on_left))
   other_arr = asarray(other)
   if scalar_on_left:
     lhs, rhs = _coerce_binary_operands(other_arr, _materialize_array(array), op)
@@ -954,8 +949,8 @@ def _unary(x: object, op: int) -> object:
   arr = _as_array_value(x)
   if _can_defer_unary(arr, op):
     return _UnaryExpression(arr, op)
-  native_array = _materialize_array(arr)
-  return ndarray(_native.unary(native_array._native, op))
+  array_value = _materialize_array(arr)
+  return ndarray(_native.unary(array_value._native, op))
 
 
 def _reduce(x: object, axis: object, op: int) -> object:
@@ -1207,17 +1202,17 @@ def _array_interface_asarray(
   if target is not None and target != source_dtype:
     if copy is False:
       raise ValueError(_COPY_FALSE_ERROR)
-    return _native_copy_from_numpy_array(array.astype(_numpy_dtype_for(target), copy=True))
+    return _copy_from_numpy_array(array.astype(_numpy_dtype_for(target), copy=True))
   if copy is True:
-    return _native_copy_from_numpy_array(array)
+    return _copy_from_numpy_array(array)
   if not builtins.bool(array.flags.writeable):
     if copy is False:
       raise ValueError("readonly array requires copy=True")
-    return _native_copy_from_numpy_array(array)
-  return _native_external_from_numpy_array(array, source_dtype)
+    return _copy_from_numpy_array(array)
+  return _external_from_numpy_array(array, source_dtype)
 
 
-def _native_external_from_numpy_array(array: object, dtype_value: DType) -> ndarray:
+def _external_from_numpy_array(array: object, dtype_value: DType) -> ndarray:
   shape = tuple(int(dim) for dim in array.shape)
   byte_strides = tuple(int(stride) for stride in array.strides)
   for stride in byte_strides:
@@ -1229,7 +1224,7 @@ def _native_external_from_numpy_array(array: object, dtype_value: DType) -> ndar
   return ndarray(native, dtype=dtype_value, shape=shape, strides=byte_strides, owner=array)
 
 
-def _native_copy_from_numpy_array(array: object) -> ndarray:
+def _copy_from_numpy_array(array: object) -> ndarray:
   dtype_value = _dtype_from_numpy_dtype(array.dtype)
   shape = tuple(int(dim) for dim in array.shape)
   flat = array.ravel(order="C").tolist()

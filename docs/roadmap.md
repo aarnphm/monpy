@@ -27,7 +27,7 @@ covered v1 behavior:
 
 ## design decisions
 
-- `NativeArray` now points at a `NativeStorage` record. storage records carry
+- `Array` now points at a `Storage` record. storage records carry
   the data pointer, byte length, refcount, and managed/external ownership bit.
   views retain the same storage; only the final managed reference frees bytes.
 - external cpu storage is non-owning in mojo. python `ndarray._owner` pins the

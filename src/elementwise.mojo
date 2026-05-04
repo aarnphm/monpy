@@ -2,7 +2,7 @@ from std.math import cos, exp, isinf, isnan, log, sin
 from std.memory.unsafe_pointer import alloc
 from std.sys import CompilationTarget, simd_width_of
 
-from native_accelerate import (
+from accelerate import (
     call_vv_f32,
     cblas_dgemm_row_major_ld,
     cblas_sgemm_row_major_ld,
@@ -11,13 +11,11 @@ from native_accelerate import (
     lapack_sgesv,
     lapack_sgetrf,
 )
-from native_types import (
+from domain import (
     BACKEND_ACCELERATE,
     BACKEND_FUSED,
-    BACKEND_GENERIC,
     DTYPE_FLOAT32,
     DTYPE_FLOAT64,
-    NativeArray,
     OP_ADD,
     OP_DIV,
     OP_MUL,
@@ -30,6 +28,9 @@ from native_types import (
     UNARY_EXP,
     UNARY_LOG,
     UNARY_SIN,
+)
+from array import (
+    Array,
     contiguous_as_f64,
     contiguous_f32_ptr,
     contiguous_f64_ptr,
@@ -42,44 +43,6 @@ from native_types import (
     set_logical_from_f64,
     set_logical_from_i64,
 )
-
-
-# Numeric kernels are intentionally plain functions. Add a new predicate plus
-# a direct loop here when a benchmark proves the shape/dtype case is worth it.
-def write_add_f32_1d_into(
-    mut dst: NativeArray,
-    lhs: NativeArray,
-    rhs: NativeArray,
-) raises -> Bool:
-    if (
-        lhs.dtype_code != DTYPE_FLOAT32
-        or rhs.dtype_code != DTYPE_FLOAT32
-        or dst.dtype_code != DTYPE_FLOAT32
-        or len(lhs.shape) != 1
-        or len(rhs.shape) != 1
-        or len(dst.shape) != 1
-        or lhs.size_value != rhs.size_value
-        or lhs.size_value != dst.size_value
-        or (lhs.shape[0] > 1 and lhs.strides[0] != 1)
-        or (rhs.shape[0] > 1 and rhs.strides[0] != 1)
-        or (dst.shape[0] > 1 and dst.strides[0] != 1)
-    ):
-        return False
-    var lhs_ptr = contiguous_f32_ptr(lhs)
-    var rhs_ptr = contiguous_f32_ptr(rhs)
-    var out_ptr = contiguous_f32_ptr(dst)
-    comptime width = simd_width_of[DType.float32]()
-    var i = 0
-    while i + width <= dst.size_value:
-        out_ptr.store(
-            i, lhs_ptr.load[width=width](i) + rhs_ptr.load[width=width](i)
-        )
-        i += width
-    while i < dst.size_value:
-        out_ptr[i] = lhs_ptr[i] + rhs_ptr[i]
-        i += 1
-    dst.backend_code = BACKEND_GENERIC
-    return True
 
 
 def apply_binary_f64(lhs: Float64, rhs: Float64, op: Int) raises -> Float64:
@@ -176,7 +139,7 @@ def is_float_dtype(dtype_code: Int) -> Bool:
     return dtype_code == DTYPE_FLOAT32 or dtype_code == DTYPE_FLOAT64
 
 
-def is_contiguous_float_array(array: NativeArray) raises -> Bool:
+def is_contiguous_float_array(array: Array) raises -> Bool:
     return is_float_dtype(array.dtype_code) and is_c_contiguous(array)
 
 
@@ -193,7 +156,7 @@ def max_int(lhs: Int, rhs: Int) -> Int:
     return rhs
 
 
-def rank2_blas_layout(array: NativeArray) raises -> Rank2BlasLayout:
+def rank2_blas_layout(array: Array) raises -> Rank2BlasLayout:
     if len(array.shape) != 2:
         return Rank2BlasLayout(False, False, 0)
     var rows = array.shape[0]
@@ -218,7 +181,7 @@ def rank2_blas_layout(array: NativeArray) raises -> Rank2BlasLayout:
 
 
 def maybe_unary_contiguous(
-    src: NativeArray, mut result: NativeArray, op: Int
+    src: Array, mut result: Array, op: Int
 ) raises -> Bool:
     if not is_contiguous_float_array(src) or not is_contiguous_float_array(
         result
@@ -261,7 +224,7 @@ def maybe_unary_contiguous(
 
 
 def maybe_unary_accelerate_f32(
-    src: NativeArray, mut result: NativeArray, op: Int
+    src: Array, mut result: Array, op: Int
 ) raises -> Bool:
     var src_ptr = contiguous_f32_ptr(src)
     var out_ptr = contiguous_f32_ptr(result)
@@ -280,7 +243,7 @@ def maybe_unary_accelerate_f32(
 
 
 def maybe_binary_same_shape_contiguous(
-    lhs: NativeArray, rhs: NativeArray, mut result: NativeArray, op: Int
+    lhs: Array, rhs: Array, mut result: Array, op: Int
 ) raises -> Bool:
     if (
         not same_shape(lhs.shape, rhs.shape)
@@ -352,9 +315,9 @@ def maybe_binary_same_shape_contiguous(
 
 
 def maybe_binary_scalar_contiguous(
-    array: NativeArray,
-    scalar: NativeArray,
-    mut result: NativeArray,
+    array: Array,
+    scalar: Array,
+    mut result: Array,
     op: Int,
     scalar_on_left: Bool,
 ) raises -> Bool:
@@ -430,9 +393,9 @@ def maybe_binary_scalar_contiguous(
 
 
 def maybe_binary_scalar_value_contiguous(
-    array: NativeArray,
+    array: Array,
     scalar_value: Float64,
-    mut result: NativeArray,
+    mut result: Array,
     op: Int,
     scalar_on_left: Bool,
 ) raises -> Bool:
@@ -505,9 +468,9 @@ def maybe_binary_scalar_value_contiguous(
 
 
 def maybe_binary_row_broadcast_contiguous(
-    matrix: NativeArray,
-    row: NativeArray,
-    mut result: NativeArray,
+    matrix: Array,
+    row: Array,
+    mut result: Array,
     op: Int,
     row_on_left: Bool,
 ) raises -> Bool:
@@ -610,7 +573,7 @@ def maybe_binary_row_broadcast_contiguous(
 
 
 def maybe_binary_contiguous(
-    lhs: NativeArray, rhs: NativeArray, mut result: NativeArray, op: Int
+    lhs: Array, rhs: Array, mut result: Array, op: Int
 ) raises -> Bool:
     # Fast-path dispatch is intentionally shape-specific instead of clever. The
     # fallback below still handles dynamic-rank broadcasting, so every branch
@@ -629,10 +592,10 @@ def maybe_binary_contiguous(
 
 
 def maybe_sin_add_mul_contiguous(
-    lhs: NativeArray,
-    rhs: NativeArray,
+    lhs: Array,
+    rhs: Array,
     scalar_value: Float64,
-    mut result: NativeArray,
+    mut result: Array,
 ) raises -> Bool:
     if (
         not same_shape(lhs.shape, rhs.shape)
@@ -709,7 +672,7 @@ def maybe_sin_add_mul_contiguous(
 
 
 def maybe_reduce_contiguous(
-    src: NativeArray, mut result: NativeArray, op: Int
+    src: Array, mut result: Array, op: Int
 ) raises -> Bool:
     if not is_contiguous_float_array(src):
         return False
@@ -770,7 +733,7 @@ def maybe_reduce_contiguous(
 
 
 def maybe_argmax_contiguous(
-    src: NativeArray, mut result: NativeArray
+    src: Array, mut result: Array
 ) raises -> Bool:
     if not is_contiguous_float_array(src):
         return False
@@ -786,9 +749,9 @@ def maybe_argmax_contiguous(
 
 
 def maybe_matmul_contiguous(
-    lhs: NativeArray,
-    rhs: NativeArray,
-    mut result: NativeArray,
+    lhs: Array,
+    rhs: Array,
+    mut result: Array,
     m: Int,
     n: Int,
     k_lhs: Int,
@@ -865,9 +828,9 @@ def maybe_matmul_contiguous(
 
 
 def maybe_matmul_f32_small(
-    lhs: NativeArray,
-    rhs: NativeArray,
-    mut result: NativeArray,
+    lhs: Array,
+    rhs: Array,
+    mut result: Array,
     m: Int,
     n: Int,
     k_lhs: Int,
@@ -904,7 +867,7 @@ def abs_f64(value: Float64) -> Float64:
 
 
 def maybe_lapack_solve_f32(
-    a: NativeArray, b: NativeArray, mut result: NativeArray
+    a: Array, b: Array, mut result: Array
 ) raises -> Bool:
     if (
         a.dtype_code != DTYPE_FLOAT32
@@ -934,7 +897,7 @@ def maybe_lapack_solve_f32(
             if not vector_result:
                 logical = row * rhs_columns + col
             b_ptr[row + col * n] = Float32(get_logical_as_f64(b, logical))
-    var info = 0
+    var info: Int
     try:
         info = lapack_sgesv(n, rhs_columns, a_ptr, pivots, b_ptr)
     except:
@@ -963,7 +926,7 @@ def maybe_lapack_solve_f32(
 
 
 def maybe_lapack_solve_f64(
-    a: NativeArray, b: NativeArray, mut result: NativeArray
+    a: Array, b: Array, mut result: Array
 ) raises -> Bool:
     if (
         a.dtype_code != DTYPE_FLOAT64
@@ -991,7 +954,7 @@ def maybe_lapack_solve_f64(
             if not vector_result:
                 logical = row * rhs_columns + col
             b_ptr[row + col * n] = get_logical_as_f64(b, logical)
-    var info = 0
+    var info: Int
     try:
         info = lapack_dgesv(n, rhs_columns, a_ptr, pivots, b_ptr)
     except:
@@ -1019,7 +982,7 @@ def maybe_lapack_solve_f64(
     return True
 
 
-def maybe_lapack_inverse_f32(a: NativeArray, mut result: NativeArray) raises -> Bool:
+def maybe_lapack_inverse_f32(a: Array, mut result: Array) raises -> Bool:
     if (
         a.dtype_code != DTYPE_FLOAT32
         or result.dtype_code != DTYPE_FLOAT32
@@ -1040,7 +1003,7 @@ def maybe_lapack_inverse_f32(a: NativeArray, mut result: NativeArray) raises -> 
                 b_ptr[row + col * n] = 1.0
             else:
                 b_ptr[row + col * n] = 0.0
-    var info = 0
+    var info: Int
     try:
         info = lapack_sgesv(n, n, a_ptr, pivots, b_ptr)
     except:
@@ -1067,7 +1030,7 @@ def maybe_lapack_inverse_f32(a: NativeArray, mut result: NativeArray) raises -> 
     return True
 
 
-def maybe_lapack_inverse_f64(a: NativeArray, mut result: NativeArray) raises -> Bool:
+def maybe_lapack_inverse_f64(a: Array, mut result: Array) raises -> Bool:
     if (
         a.dtype_code != DTYPE_FLOAT64
         or result.dtype_code != DTYPE_FLOAT64
@@ -1086,7 +1049,7 @@ def maybe_lapack_inverse_f64(a: NativeArray, mut result: NativeArray) raises -> 
                 b_ptr[row + col * n] = 1.0
             else:
                 b_ptr[row + col * n] = 0.0
-    var info = 0
+    var info: Int
     try:
         info = lapack_dgesv(n, n, a_ptr, pivots, b_ptr)
     except:
@@ -1119,7 +1082,7 @@ def lapack_pivot_sign(pivots: UnsafePointer[Int32, MutExternalOrigin], n: Int) -
     return sign
 
 
-def maybe_lapack_det_f32(a: NativeArray, mut result: NativeArray) raises -> Bool:
+def maybe_lapack_det_f32(a: Array, mut result: Array) raises -> Bool:
     if (
         a.dtype_code != DTYPE_FLOAT32
         or result.dtype_code != DTYPE_FLOAT32
@@ -1135,31 +1098,30 @@ def maybe_lapack_det_f32(a: NativeArray, mut result: NativeArray) raises -> Bool
             a_ptr[row + col * n] = Float32(
                 get_logical_as_f64(a, row * n + col)
             )
-    var info = 0
     try:
-        info = lapack_sgetrf(n, a_ptr, pivots)
+        var info = lapack_sgetrf(n, a_ptr, pivots)
+        if info < 0:
+            a_ptr.free()
+            pivots.free()
+            return False
+        var det = lapack_pivot_sign(pivots, n)
+        if info > 0:
+            det = 0.0
+        else:
+            for i in range(n):
+                det *= Float64(a_ptr[i + i * n])
+        set_logical_from_f64(result, 0, det)
     except:
         a_ptr.free()
         pivots.free()
         return False
-    if info < 0:
-        a_ptr.free()
-        pivots.free()
-        return False
-    var det = lapack_pivot_sign(pivots, n)
-    if info > 0:
-        det = 0.0
-    else:
-        for i in range(n):
-            det *= Float64(a_ptr[i + i * n])
-    set_logical_from_f64(result, 0, det)
     a_ptr.free()
     pivots.free()
     result.backend_code = BACKEND_ACCELERATE
     return True
 
 
-def maybe_lapack_det_f64(a: NativeArray, mut result: NativeArray) raises -> Bool:
+def maybe_lapack_det_f64(a: Array, mut result: Array) raises -> Bool:
     if (
         a.dtype_code != DTYPE_FLOAT64
         or result.dtype_code != DTYPE_FLOAT64
@@ -1173,31 +1135,30 @@ def maybe_lapack_det_f64(a: NativeArray, mut result: NativeArray) raises -> Bool
     for row in range(n):
         for col in range(n):
             a_ptr[row + col * n] = get_logical_as_f64(a, row * n + col)
-    var info = 0
     try:
-        info = lapack_dgetrf(n, a_ptr, pivots)
+        var info = lapack_dgetrf(n, a_ptr, pivots)
+        if info < 0:
+            a_ptr.free()
+            pivots.free()
+            return False
+        var det = lapack_pivot_sign(pivots, n)
+        if info > 0:
+            det = 0.0
+        else:
+            for i in range(n):
+                det *= a_ptr[i + i * n]
+        set_logical_from_f64(result, 0, det)
     except:
         a_ptr.free()
         pivots.free()
         return False
-    if info < 0:
-        a_ptr.free()
-        pivots.free()
-        return False
-    var det = lapack_pivot_sign(pivots, n)
-    if info > 0:
-        det = 0.0
-    else:
-        for i in range(n):
-            det *= a_ptr[i + i * n]
-    set_logical_from_f64(result, 0, det)
     a_ptr.free()
     pivots.free()
     result.backend_code = BACKEND_ACCELERATE
     return True
 
 
-def load_square_matrix_f64(src: NativeArray) raises -> List[Float64]:
+def load_square_matrix_f64(src: Array) raises -> List[Float64]:
     if len(src.shape) != 2 or src.shape[0] != src.shape[1]:
         raise Error("linalg operation requires a square rank-2 matrix")
     var n = src.shape[0]
@@ -1270,7 +1231,7 @@ def solve_lu_factor_into(
     n: Int,
     mut rhs: List[Float64],
     rhs_columns: Int,
-    mut result: NativeArray,
+    mut result: Array,
     vector_result: Bool,
 ) raises:
     for row in range(n):
@@ -1298,7 +1259,7 @@ def solve_lu_factor_into(
 
 
 def lu_solve_into(
-    a: NativeArray, b: NativeArray, mut result: NativeArray
+    a: Array, b: Array, mut result: Array
 ) raises:
     if len(a.shape) != 2 or a.shape[0] != a.shape[1]:
         raise Error(
@@ -1338,7 +1299,7 @@ def lu_solve_into(
     )
 
 
-def lu_inverse_into(a: NativeArray, mut result: NativeArray) raises:
+def lu_inverse_into(a: Array, mut result: Array) raises:
     if len(a.shape) != 2 or a.shape[0] != a.shape[1]:
         raise Error("linalg.inv() requires a square rank-2 matrix")
     comptime if CompilationTarget.is_macos():
@@ -1361,7 +1322,7 @@ def lu_inverse_into(a: NativeArray, mut result: NativeArray) raises:
     solve_lu_factor_into(lu, pivots, n, rhs_values, n, result, False)
 
 
-def lu_det(a: NativeArray) raises -> Float64:
+def lu_det(a: Array) raises -> Float64:
     if len(a.shape) != 2 or a.shape[0] != a.shape[1]:
         raise Error("linalg.det() requires a square rank-2 matrix")
     var n = a.shape[0]
@@ -1376,7 +1337,7 @@ def lu_det(a: NativeArray) raises -> Float64:
     return det
 
 
-def lu_det_into(a: NativeArray, mut result: NativeArray) raises:
+def lu_det_into(a: Array, mut result: Array) raises:
     comptime if CompilationTarget.is_macos():
         if maybe_lapack_det_f32(a, result):
             return

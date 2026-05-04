@@ -68,7 +68,7 @@ def test_unsupported_promotion_dtype_families_are_explicit_blockers(dtype: objec
 
 @pytest.mark.parametrize(("lhs_dtype", "lhs_numpy_dtype", "rhs_dtype", "rhs_numpy_dtype"), PROMOTION_MATCH_CASES)
 @pytest.mark.parametrize("op", [monpy.OP_ADD, monpy.OP_SUB, monpy.OP_MUL, monpy.OP_DIV])
-def test_python_and_native_promotion_tables_agree(
+def test_python_and_extension_promotion_tables_agree(
   lhs_dtype: np.DType,
   lhs_numpy_dtype: type[numpy.generic],
   rhs_dtype: np.DType,
@@ -78,9 +78,9 @@ def test_python_and_native_promotion_tables_agree(
   del lhs_numpy_dtype, rhs_numpy_dtype
 
   expected = monpy._result_dtype_for_binary(lhs_dtype, rhs_dtype, op)
-  native_code = monpy._native._result_dtype_for_binary(lhs_dtype.code, rhs_dtype.code, op)
+  extension_code = monpy._native._result_dtype_for_binary(lhs_dtype.code, rhs_dtype.code, op)
 
-  assert native_code == expected.code
+  assert extension_code == expected.code
 
 
 @pytest.mark.parametrize("value", [2**70, -(2**70)])

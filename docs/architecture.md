@@ -4,11 +4,29 @@ monpy should be a mojo array library with numpy-shaped python APIs.
 
 ## layers
 
-- `src/native.mojo` is the python-callable runtime surface. it owns argument conversion and operation-level dispatch.
-- `src/native_types.mojo` owns the native array and storage structs, dtype/op constants, allocation, shape/stride metadata, physical offsets, layout predicates, and scalar load/store helpers.
-- `src/native_kernels.mojo` owns numeric loops, contiguous fast paths, reductions, and matmul dispatch.
-- `src/native_accelerate.mojo` owns Apple Accelerate ffi shims only.
-- `src/lib.mojo` is only the cpython extension boundary. it registers `NativeArray` and exported functions into `monpy._native`.
+- `src/lib.mojo` is only the cpython extension boundary. it owns
+  `PyInit__native`, builds `PythonModuleBuilder("_native")`, registers `Array`,
+  and binds python-facing function names into `monpy._native`.
+- `src/domain.mojo` owns compact dtype, op, reduction, unary-op, and backend
+  codes.
+- `src/storage.mojo` owns the storage record, refcounting, managed allocation,
+  and external non-owning allocation records.
+- `src/layout.mojo` owns the narrow static layout vocabulary: `Shape[rank]`,
+  `Layout[rank]`, `Layout.__call__`, tile helpers, vector-width helpers, and the
+  array-to-layout tensor lift used by future static kernels.
+- `src/array.mojo` owns the `Array` record, scalar access, metadata methods,
+  shape/stride helpers, dtype promotion, and dynamic-rank fallback addressing.
+- `src/create.mojo` owns creation entrypoints and the remaining python-callable
+  operation glue that has not yet moved into narrower modules.
+- `src/views.mojo`, `src/reductions.mojo`, and `src/matmul.mojo` are the flat
+  operation surfaces that `lib.mojo` imports for those python bindings.
+- `src/linalg.mojo` contains the linear algebra surface. `lib.mojo` still binds
+  the linalg functions through `create.mojo` because top-level `linalg` collides
+  with Mojo's standard-library package name in the current mohaus entrypoint.
+- `src/elementwise.mojo` owns numeric loops, contiguous fast paths, fused
+  elementwise kernels, reductions, matmul dispatch helpers, and LU/LAPACK
+  helpers.
+- `src/accelerate.mojo` owns Apple Accelerate ffi shims only.
 - `python/monpy` is the python API facade. it parses python objects, numpy cpu arrays, dlpack cpu producers, keyword arguments, and numpy-flavored ergonomics, then delegates implemented work into mojo.
 - `python/monpy/linalg.py` is the numpy-shaped linear algebra namespace.
 - `python/monpy/array_api.py` is the standards-shaped namespace and re-exports

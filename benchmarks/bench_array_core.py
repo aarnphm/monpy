@@ -155,8 +155,8 @@ def build_cases(*, vector_size: int, matrix_sizes: Sequence[int], linalg_sizes: 
   add_out_np = np.empty_like(x_np)
   add_out_mp = mnp.empty(x_mp.shape, dtype=mnp.float32)
 
-  def native_add_out_f32() -> object:
-    _monpy._native.add_into(add_out_mp._native, x_mp._native, y_mp._native)
+  def extension_binary_out_f32() -> object:
+    _monpy._native.binary_into(add_out_mp._native, x_mp._native, y_mp._native, _monpy.OP_ADD)
     return add_out_mp
 
   small_x = mnp.asarray([1, 2, 3, 4, 5, 6, 7, 8], dtype=mnp.float32)
@@ -217,7 +217,12 @@ def build_cases(*, vector_size: int, matrix_sizes: Sequence[int], linalg_sizes: 
       lambda: mnp.add(x_mp, y_mp, out=add_out_mp),
       lambda: np.add(x_np, y_np, out=add_out_np),
     ),
-    BenchCase("elementwise", "binary_add_native_out_f32", native_add_out_f32, lambda: np.add(x_np, y_np, out=add_out_np)),
+    BenchCase(
+      "elementwise",
+      "binary_add_extension_out_f32",
+      extension_binary_out_f32,
+      lambda: np.add(x_np, y_np, out=add_out_np),
+    ),
     BenchCase("broadcast", "broadcast_add_f32", lambda: m_mp + row_mp, lambda: m_np + row_np),
     BenchCase("views", "strided_view_f32", lambda: x_mp[::-2], lambda: x_np[::-2]),
     BenchCase("views", "reversed_add_f32", lambda: x_mp[::-1] + y_mp[::-1], lambda: x_np[::-1] + y_np[::-1]),

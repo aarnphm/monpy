@@ -1,53 +1,36 @@
 from std.collections import List
-from std.memory.unsafe_pointer import alloc
 from std.os import abort
 from std.python import PythonObject
 
-
-# Constants are integers on purpose: Python bindings pass op and dtype codes
-# directly, and the hot dispatch predicates should stay cheap to read.
-comptime DTYPE_BOOL = 0
-comptime DTYPE_INT64 = 1
-comptime DTYPE_FLOAT32 = 2
-comptime DTYPE_FLOAT64 = 3
-
-comptime OP_ADD = 0
-comptime OP_SUB = 1
-comptime OP_MUL = 2
-comptime OP_DIV = 3
-
-comptime UNARY_SIN = 0
-comptime UNARY_COS = 1
-comptime UNARY_EXP = 2
-comptime UNARY_LOG = 3
-
-comptime REDUCE_SUM = 0
-comptime REDUCE_MEAN = 1
-comptime REDUCE_MIN = 2
-comptime REDUCE_MAX = 3
-comptime REDUCE_ARGMAX = 4
-
-comptime BACKEND_GENERIC = 0
-comptime BACKEND_ACCELERATE = 1
-comptime BACKEND_FUSED = 2
+from domain import (
+    BACKEND_ACCELERATE,
+    BACKEND_FUSED,
+    BACKEND_GENERIC,
+    DTYPE_BOOL,
+    DTYPE_FLOAT32,
+    DTYPE_FLOAT64,
+    DTYPE_INT64,
+    OP_DIV,
+    REDUCE_MEAN,
+    REDUCE_SUM,
+)
+from storage import (
+    Storage,
+    make_external_storage,
+    make_managed_storage,
+    release_storage,
+    retain_storage,
+)
 
 
 @fieldwise_init
-struct NativeStorage(Movable, Writable):
-    var data: UnsafePointer[UInt8, MutExternalOrigin]
-    var byte_len: Int
-    var ref_count: Int
-    var owns_data: Bool
-
-
-@fieldwise_init
-struct NativeArray(Movable, Writable):
+struct Array(Movable, Writable):
     var dtype_code: Int
     var shape: List[Int]
     var strides: List[Int]
     var size_value: Int
     var offset_elems: Int
-    var storage: UnsafePointer[NativeStorage, MutExternalOrigin]
+    var storage: UnsafePointer[Storage, MutExternalOrigin]
     var data: UnsafePointer[UInt8, MutExternalOrigin]
     var byte_len: Int
     var backend_code: Int
@@ -59,7 +42,7 @@ struct NativeArray(Movable, Writable):
         try:
             return py_self.downcast_value_ptr[Self]()
         except e:
-            abort(String("NativeArray method receiver had the wrong type: ", e))
+            abort(String("Array method receiver had the wrong type: ", e))
 
     def __del__(deinit self):
         release_storage(self.storage)
@@ -173,7 +156,7 @@ struct NativeArray(Movable, Writable):
         )
 
     def write_to(self, mut writer: Some[Writer]):
-        writer.write("NativeArray(dtype_code=")
+        writer.write("Array(dtype_code=")
         writer.write(self.dtype_code)
         writer.write(", shape=")
         writer.write(self.shape)
@@ -217,57 +200,16 @@ def make_c_strides(shape: List[Int]) raises -> List[Int]:
     return strides^
 
 
-def make_managed_storage(
-    byte_len: Int,
-) raises -> UnsafePointer[NativeStorage, MutExternalOrigin]:
-    var actual_byte_len = byte_len
-    if actual_byte_len < 1:
-        actual_byte_len = 1
-    var data = alloc[UInt8](actual_byte_len)
-    var storage = alloc[NativeStorage](1)
-    var value = NativeStorage(data, actual_byte_len, 1, True)
-    storage.init_pointee_move(value^)
-    return storage
-
-
-def make_external_storage(
-    data: UnsafePointer[UInt8, MutExternalOrigin], byte_len: Int
-) raises -> UnsafePointer[NativeStorage, MutExternalOrigin]:
-    var actual_byte_len = byte_len
-    if actual_byte_len < 1:
-        actual_byte_len = 1
-    var storage = alloc[NativeStorage](1)
-    var value = NativeStorage(data, actual_byte_len, 1, False)
-    storage.init_pointee_move(value^)
-    return storage
-
-
-def retain_storage(
-    storage: UnsafePointer[NativeStorage, MutExternalOrigin]
-) -> UnsafePointer[NativeStorage, MutExternalOrigin]:
-    storage[].ref_count += 1
-    return storage
-
-
-def release_storage(storage: UnsafePointer[NativeStorage, MutExternalOrigin]):
-    storage[].ref_count -= 1
-    if storage[].ref_count == 0:
-        if storage[].owns_data:
-            storage[].data.free()
-        storage.destroy_pointee()
-        storage.free()
-
-
 def make_empty_array(
     dtype_code: Int, var shape: List[Int]
-) raises -> NativeArray:
+) raises -> Array:
     var size = shape_size(shape)
     var strides = make_c_strides(shape)
     var byte_len = size * item_size(dtype_code)
     var storage = make_managed_storage(byte_len)
     # Do not zero-fill here. Creation APIs that promise initialized values write
     # explicitly, and math kernels overwrite every output element before return.
-    return NativeArray(
+    return Array(
         dtype_code,
         shape^,
         strides^,
@@ -287,12 +229,12 @@ def make_external_array(
     offset_elems: Int,
     data: UnsafePointer[UInt8, MutExternalOrigin],
     byte_len: Int,
-) raises -> NativeArray:
+) raises -> Array:
     if len(shape) != len(strides):
         raise Error("shape and stride rank mismatch")
     var size = shape_size(shape)
     var storage = make_external_storage(data, byte_len)
-    return NativeArray(
+    return Array(
         dtype_code,
         shape^,
         strides^,
@@ -306,17 +248,17 @@ def make_external_array(
 
 
 def make_view_array(
-    source: NativeArray,
+    source: Array,
     var shape: List[Int],
     var strides: List[Int],
     size_value: Int,
     offset_elems: Int,
-) raises -> NativeArray:
+) raises -> Array:
     if len(shape) != len(strides):
         raise Error("shape and stride rank mismatch")
     validate_shape(shape)
     var storage = retain_storage(source.storage)
-    return NativeArray(
+    return Array(
         source.dtype_code,
         shape^,
         strides^,
@@ -365,7 +307,7 @@ def slice_length(dim: Int, start: Int, stop: Int, step: Int) raises -> Int:
     return (start - stop + negative_step - 1) // negative_step
 
 
-def is_c_contiguous(array: NativeArray) raises -> Bool:
+def is_c_contiguous(array: Array) raises -> Bool:
     var expected = 1
     for axis in range(len(array.shape) - 1, -1, -1):
         if array.shape[axis] == 0:
@@ -376,7 +318,7 @@ def is_c_contiguous(array: NativeArray) raises -> Bool:
     return True
 
 
-def is_f_contiguous(array: NativeArray) raises -> Bool:
+def is_f_contiguous(array: Array) raises -> Bool:
     var expected = 1
     for axis in range(len(array.shape)):
         if array.shape[axis] == 0:
@@ -387,21 +329,21 @@ def is_f_contiguous(array: NativeArray) raises -> Bool:
     return True
 
 
-def has_negative_strides(array: NativeArray) -> Bool:
+def has_negative_strides(array: Array) -> Bool:
     for axis in range(len(array.strides)):
         if array.strides[axis] < 0:
             return True
     return False
 
 
-def has_zero_strides(array: NativeArray) -> Bool:
+def has_zero_strides(array: Array) -> Bool:
     for axis in range(len(array.strides)):
         if array.strides[axis] == 0:
             return True
     return False
 
 
-def physical_offset(array: NativeArray, logical: Int) raises -> Int:
+def physical_offset(array: Array, logical: Int) raises -> Int:
     if logical < 0 or logical >= array.size_value:
         raise Error("array index out of bounds")
     var physical = array.offset_elems
@@ -416,7 +358,7 @@ def physical_offset(array: NativeArray, logical: Int) raises -> Int:
 
 
 def broadcast_physical_offset(
-    array: NativeArray, logical: Int, out_shape: List[Int]
+    array: Array, logical: Int, out_shape: List[Int]
 ) raises -> Int:
     var out_ndim = len(out_shape)
     var array_ndim = len(array.shape)
@@ -436,23 +378,23 @@ def broadcast_physical_offset(
     return physical
 
 
-def get_physical_bool(array: NativeArray, physical: Int) raises -> Bool:
+def get_physical_bool(array: Array, physical: Int) raises -> Bool:
     return array.data[physical] != UInt8(0)
 
 
-def get_physical_i64(array: NativeArray, physical: Int) raises -> Int64:
+def get_physical_i64(array: Array, physical: Int) raises -> Int64:
     return array.data.bitcast[Int64]()[physical]
 
 
-def get_physical_f32(array: NativeArray, physical: Int) raises -> Float32:
+def get_physical_f32(array: Array, physical: Int) raises -> Float32:
     return array.data.bitcast[Float32]()[physical]
 
 
-def get_physical_f64(array: NativeArray, physical: Int) raises -> Float64:
+def get_physical_f64(array: Array, physical: Int) raises -> Float64:
     return array.data.bitcast[Float64]()[physical]
 
 
-def get_physical_as_f64(array: NativeArray, physical: Int) raises -> Float64:
+def get_physical_as_f64(array: Array, physical: Int) raises -> Float64:
     if array.dtype_code == DTYPE_BOOL:
         if get_physical_bool(array, physical):
             return 1.0
@@ -464,12 +406,12 @@ def get_physical_as_f64(array: NativeArray, physical: Int) raises -> Float64:
     return get_physical_f64(array, physical)
 
 
-def get_logical_as_f64(array: NativeArray, logical: Int) raises -> Float64:
+def get_logical_as_f64(array: Array, logical: Int) raises -> Float64:
     return get_physical_as_f64(array, physical_offset(array, logical))
 
 
 def get_broadcast_as_f64(
-    array: NativeArray, logical: Int, out_shape: List[Int]
+    array: Array, logical: Int, out_shape: List[Int]
 ) raises -> Float64:
     return get_physical_as_f64(
         array, broadcast_physical_offset(array, logical, out_shape)
@@ -477,7 +419,7 @@ def get_broadcast_as_f64(
 
 
 def get_broadcast_as_bool(
-    array: NativeArray, logical: Int, out_shape: List[Int]
+    array: Array, logical: Int, out_shape: List[Int]
 ) raises -> Bool:
     var physical = broadcast_physical_offset(array, logical, out_shape)
     if array.dtype_code == DTYPE_BOOL:
@@ -486,7 +428,7 @@ def get_broadcast_as_bool(
 
 
 def set_physical_from_f64(
-    mut array: NativeArray, physical: Int, value: Float64
+    mut array: Array, physical: Int, value: Float64
 ) raises:
     if array.dtype_code == DTYPE_BOOL:
         if value != 0.0:
@@ -502,13 +444,13 @@ def set_physical_from_f64(
 
 
 def set_logical_from_f64(
-    mut array: NativeArray, logical: Int, value: Float64
+    mut array: Array, logical: Int, value: Float64
 ) raises:
     set_physical_from_f64(array, physical_offset(array, logical), value)
 
 
 def set_logical_from_i64(
-    mut array: NativeArray, logical: Int, value: Int64
+    mut array: Array, logical: Int, value: Int64
 ) raises:
     if array.dtype_code == DTYPE_INT64:
         array.data.bitcast[Int64]()[physical_offset(array, logical)] = value
@@ -517,7 +459,7 @@ def set_logical_from_i64(
 
 
 def set_logical_from_py(
-    mut array: NativeArray, logical: Int, value_obj: PythonObject
+    mut array: Array, logical: Int, value_obj: PythonObject
 ) raises:
     var physical = physical_offset(array, logical)
     if array.dtype_code == DTYPE_BOOL:
@@ -545,24 +487,24 @@ def scalar_py_as_f64(
     return Float64(py=value_obj)
 
 
-def fill_all_from_py(mut array: NativeArray, value_obj: PythonObject) raises:
+def fill_all_from_py(mut array: Array, value_obj: PythonObject) raises:
     for i in range(array.size_value):
         set_logical_from_py(array, i, value_obj)
 
 
 def contiguous_f32_ptr(
-    array: NativeArray,
+    array: Array,
 ) -> UnsafePointer[Float32, MutExternalOrigin]:
     return array.data.bitcast[Float32]() + array.offset_elems
 
 
 def contiguous_f64_ptr(
-    array: NativeArray,
+    array: Array,
 ) -> UnsafePointer[Float64, MutExternalOrigin]:
     return array.data.bitcast[Float64]() + array.offset_elems
 
 
-def contiguous_as_f64(array: NativeArray, index: Int) raises -> Float64:
+def contiguous_as_f64(array: Array, index: Int) raises -> Float64:
     if array.dtype_code == DTYPE_FLOAT32:
         return Float64(contiguous_f32_ptr(array)[index])
     if array.dtype_code == DTYPE_FLOAT64:
@@ -571,7 +513,7 @@ def contiguous_as_f64(array: NativeArray, index: Int) raises -> Float64:
 
 
 def set_contiguous_from_f64(
-    mut array: NativeArray, index: Int, value: Float64
+    mut array: Array, index: Int, value: Float64
 ) raises:
     if array.dtype_code == DTYPE_FLOAT32:
         contiguous_f32_ptr(array)[index] = Float32(value)
@@ -581,7 +523,7 @@ def set_contiguous_from_f64(
         set_physical_from_f64(array, array.offset_elems + index, value)
 
 
-def materialize_c_contiguous(src: NativeArray) raises -> NativeArray:
+def copy_c_contiguous(src: Array) raises -> Array:
     var shape = clone_int_list(src.shape)
     var result = make_empty_array(src.dtype_code, shape^)
     for i in range(src.size_value):
@@ -656,7 +598,7 @@ def result_dtype_for_linalg_binary(lhs_dtype: Int, rhs_dtype: Int) -> Int:
     return DTYPE_FLOAT64
 
 
-def broadcast_shape(lhs: NativeArray, rhs: NativeArray) raises -> List[Int]:
+def broadcast_shape(lhs: Array, rhs: Array) raises -> List[Int]:
     var lhs_ndim = len(lhs.shape)
     var rhs_ndim = len(rhs.shape)
     var out_ndim = lhs_ndim

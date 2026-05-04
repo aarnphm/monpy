@@ -2,28 +2,11 @@ from std.collections import List
 from std.math import cos, exp, isinf, isnan, log, sin
 from std.python import PythonObject
 
-from native_kernels import (
-    apply_binary_f64,
-    maybe_argmax_contiguous,
-    maybe_binary_contiguous,
-    maybe_binary_same_shape_contiguous,
-    maybe_binary_scalar_value_contiguous,
-    is_contiguous_float_array,
-    lu_det_into,
-    lu_inverse_into,
-    lu_solve_into,
-    maybe_matmul_contiguous,
-    maybe_reduce_contiguous,
-    maybe_sin_add_mul_contiguous,
-    maybe_unary_contiguous,
-    write_add_f32_1d_into,
-)
-from native_types import (
+from domain import (
     BACKEND_FUSED,
     DTYPE_BOOL,
     DTYPE_FLOAT32,
     DTYPE_INT64,
-    NativeArray,
     OP_ADD,
     OP_DIV,
     OP_MUL,
@@ -37,6 +20,24 @@ from native_types import (
     UNARY_EXP,
     UNARY_LOG,
     UNARY_SIN,
+)
+from elementwise import (
+    apply_binary_f64,
+    maybe_argmax_contiguous,
+    maybe_binary_contiguous,
+    maybe_binary_same_shape_contiguous,
+    maybe_binary_scalar_value_contiguous,
+    is_contiguous_float_array,
+    lu_det_into,
+    lu_inverse_into,
+    lu_solve_into,
+    maybe_matmul_contiguous,
+    maybe_reduce_contiguous,
+    maybe_sin_add_mul_contiguous,
+    maybe_unary_contiguous,
+)
+from array import (
+    Array,
     broadcast_shape,
     clone_int_list,
     fill_all_from_py,
@@ -52,7 +53,7 @@ from native_types import (
     make_empty_array,
     make_external_array,
     make_view_array,
-    materialize_c_contiguous,
+    copy_c_contiguous,
     result_dtype_for_binary,
     result_dtype_for_linalg,
     result_dtype_for_linalg_binary,
@@ -68,9 +69,9 @@ from native_types import (
 )
 
 
-# Python-callable entrypoints live here. Storage, shape helpers, backend ffi, and
-# tight loops are imported from sibling modules to keep this file readable.
-def native_empty(
+# Python-callable entrypoints.
+# Includes Storage -> Shape -> Backend FFI imports from submodules.
+def empty(
     shape_obj: PythonObject, dtype_obj: PythonObject
 ) raises -> PythonObject:
     var dtype_code = Int(py=dtype_obj)
@@ -79,7 +80,7 @@ def native_empty(
     return PythonObject(alloc=result^)
 
 
-def native_full(
+def full(
     shape_obj: PythonObject, value_obj: PythonObject, dtype_obj: PythonObject
 ) raises -> PythonObject:
     var dtype_code = Int(py=dtype_obj)
@@ -89,7 +90,7 @@ def native_full(
     return PythonObject(alloc=result^)
 
 
-def native_from_flat(
+def from_flat(
     values_obj: PythonObject, shape_obj: PythonObject, dtype_obj: PythonObject
 ) raises -> PythonObject:
     var dtype_code = Int(py=dtype_obj)
@@ -102,7 +103,7 @@ def native_from_flat(
     return PythonObject(alloc=result^)
 
 
-def native_from_external(
+def from_external(
     data_address_obj: PythonObject,
     shape_obj: PythonObject,
     strides_obj: PythonObject,
@@ -123,7 +124,7 @@ def native_from_external(
     return PythonObject(alloc=result^)
 
 
-def native_arange(
+def arange(
     start_obj: PythonObject,
     stop_obj: PythonObject,
     step_obj: PythonObject,
@@ -155,7 +156,7 @@ def native_arange(
     return PythonObject(alloc=result^)
 
 
-def native_linspace(
+def linspace(
     start_obj: PythonObject,
     stop_obj: PythonObject,
     num_obj: PythonObject,
@@ -181,10 +182,10 @@ def native_linspace(
     return PythonObject(alloc=result^)
 
 
-def native_reshape(
+def reshape(
     array_obj: PythonObject, shape_obj: PythonObject
 ) raises -> PythonObject:
-    var src = array_obj.downcast_value_ptr[NativeArray]()
+    var src = array_obj.downcast_value_ptr[Array]()
     if not is_c_contiguous(src[]):
         raise Error("reshape() only supports c-contiguous arrays for now")
     var shape = int_list_from_py(shape_obj)
@@ -198,10 +199,10 @@ def native_reshape(
     return PythonObject(alloc=result^)
 
 
-def native_transpose(
+def transpose(
     array_obj: PythonObject, axes_obj: PythonObject
 ) raises -> PythonObject:
-    var src = array_obj.downcast_value_ptr[NativeArray]()
+    var src = array_obj.downcast_value_ptr[Array]()
     var axes = int_list_from_py(axes_obj)
     if len(axes) != len(src[].shape):
         raise Error("transpose() axes length must match ndim")
@@ -219,14 +220,14 @@ def native_transpose(
     return PythonObject(alloc=result^)
 
 
-def native_slice(
+def slice(
     array_obj: PythonObject,
     starts_obj: PythonObject,
     stops_obj: PythonObject,
     steps_obj: PythonObject,
     drops_obj: PythonObject,
 ) raises -> PythonObject:
-    var src = array_obj.downcast_value_ptr[NativeArray]()
+    var src = array_obj.downcast_value_ptr[Array]()
     var starts = int_list_from_py(starts_obj)
     var stops = int_list_from_py(stops_obj)
     var steps = int_list_from_py(steps_obj)
@@ -256,10 +257,10 @@ def native_slice(
     return PythonObject(alloc=result^)
 
 
-def native_broadcast_to(
+def broadcast_to(
     array_obj: PythonObject, shape_obj: PythonObject
 ) raises -> PythonObject:
-    var src = array_obj.downcast_value_ptr[NativeArray]()
+    var src = array_obj.downcast_value_ptr[Array]()
     var shape = int_list_from_py(shape_obj)
     var ndim_out = len(shape)
     var ndim_src = len(src[].shape)
@@ -285,10 +286,10 @@ def native_broadcast_to(
     return PythonObject(alloc=result^)
 
 
-def native_astype(
+def astype(
     array_obj: PythonObject, dtype_obj: PythonObject
 ) raises -> PythonObject:
-    var src = array_obj.downcast_value_ptr[NativeArray]()
+    var src = array_obj.downcast_value_ptr[Array]()
     var dtype_code = Int(py=dtype_obj)
     var shape = clone_int_list(src[].shape)
     var result = make_empty_array(dtype_code, shape^)
@@ -297,11 +298,11 @@ def native_astype(
     return PythonObject(alloc=result^)
 
 
-def native_materialize_c_contiguous(
+def materialize_c_contiguous(
     array_obj: PythonObject,
 ) raises -> PythonObject:
-    var src = array_obj.downcast_value_ptr[NativeArray]()
-    var result = materialize_c_contiguous(src[])
+    var src = array_obj.downcast_value_ptr[Array]()
+    var result = copy_c_contiguous(src[])
     return PythonObject(alloc=result^)
 
 
@@ -322,7 +323,7 @@ struct DiagonalMetadata(ImplicitlyCopyable, Movable, Writable):
 
 
 def diagonal_metadata(
-    src: NativeArray, offset: Int, axis1: Int, axis2: Int
+    src: Array, offset: Int, axis1: Int, axis2: Int
 ) raises -> DiagonalMetadata:
     if len(src.shape) != 2:
         raise Error("diagonal() and trace() currently require rank-2 arrays")
@@ -352,13 +353,13 @@ def diagonal_metadata(
     return DiagonalMetadata(diag_len, diag_offset, diag_stride)
 
 
-def native_diagonal(
+def diagonal(
     array_obj: PythonObject,
     offset_obj: PythonObject,
     axis1_obj: PythonObject,
     axis2_obj: PythonObject,
 ) raises -> PythonObject:
-    var src = array_obj.downcast_value_ptr[NativeArray]()
+    var src = array_obj.downcast_value_ptr[Array]()
     var axis1 = normalize_axis(Int(py=axis1_obj), len(src[].shape), "axis1")
     var axis2 = normalize_axis(Int(py=axis2_obj), len(src[].shape), "axis2")
     var metadata = diagonal_metadata(src[], Int(py=offset_obj), axis1, axis2)
@@ -372,14 +373,14 @@ def native_diagonal(
     return PythonObject(alloc=result^)
 
 
-def native_trace(
+def trace(
     array_obj: PythonObject,
     offset_obj: PythonObject,
     axis1_obj: PythonObject,
     axis2_obj: PythonObject,
     dtype_obj: PythonObject,
 ) raises -> PythonObject:
-    var src = array_obj.downcast_value_ptr[NativeArray]()
+    var src = array_obj.downcast_value_ptr[Array]()
     var axis1 = normalize_axis(Int(py=axis1_obj), len(src[].shape), "axis1")
     var axis2 = normalize_axis(Int(py=axis2_obj), len(src[].shape), "axis2")
     var metadata = diagonal_metadata(src[], Int(py=offset_obj), axis1, axis2)
@@ -410,10 +411,10 @@ def native_trace(
     return PythonObject(alloc=result^)
 
 
-def native_unary(
+def unary(
     array_obj: PythonObject, op_obj: PythonObject
 ) raises -> PythonObject:
-    var src = array_obj.downcast_value_ptr[NativeArray]()
+    var src = array_obj.downcast_value_ptr[Array]()
     var op = Int(py=op_obj)
     var shape = clone_int_list(src[].shape)
     var result = make_empty_array(
@@ -438,11 +439,11 @@ def native_unary(
     return PythonObject(alloc=result^)
 
 
-def native_binary(
+def binary(
     lhs_obj: PythonObject, rhs_obj: PythonObject, op_obj: PythonObject
 ) raises -> PythonObject:
-    var lhs = lhs_obj.downcast_value_ptr[NativeArray]()
-    var rhs = rhs_obj.downcast_value_ptr[NativeArray]()
+    var lhs = lhs_obj.downcast_value_ptr[Array]()
+    var rhs = rhs_obj.downcast_value_ptr[Array]()
     var op = Int(py=op_obj)
     if same_shape(lhs[].shape, rhs[].shape):
         var same_shape_out = clone_int_list(lhs[].shape)
@@ -481,60 +482,15 @@ def native_binary(
     return PythonObject(alloc=result^)
 
 
-def native_add(
-    lhs_obj: PythonObject, rhs_obj: PythonObject
-) raises -> PythonObject:
-    var lhs = lhs_obj.downcast_value_ptr[NativeArray]()
-    var rhs = rhs_obj.downcast_value_ptr[NativeArray]()
-    if (
-        lhs[].dtype_code == DTYPE_FLOAT32
-        and rhs[].dtype_code == DTYPE_FLOAT32
-        and len(lhs[].shape) == 1
-        and len(rhs[].shape) == 1
-        and lhs[].size_value == rhs[].size_value
-        and lhs[].size_value != 8
-        and (lhs[].shape[0] <= 1 or lhs[].strides[0] == 1)
-        and (rhs[].shape[0] <= 1 or rhs[].strides[0] == 1)
-    ):
-        var fast_shape = clone_int_list(lhs[].shape)
-        var fast_result = make_empty_array(DTYPE_FLOAT32, fast_shape^)
-        _ = write_add_f32_1d_into(fast_result, lhs[], rhs[])
-        return PythonObject(alloc=fast_result^)
-    if same_shape(lhs[].shape, rhs[].shape):
-        var same_shape_out = clone_int_list(lhs[].shape)
-        var same_shape_dtype = result_dtype_for_binary(
-            lhs[].dtype_code, rhs[].dtype_code, OP_ADD
-        )
-        var same_shape_result = make_empty_array(
-            same_shape_dtype, same_shape_out^
-        )
-        if maybe_binary_same_shape_contiguous(
-            lhs[], rhs[], same_shape_result, OP_ADD
-        ):
-            return PythonObject(alloc=same_shape_result^)
-    var shape = broadcast_shape(lhs[], rhs[])
-    var dtype_code = result_dtype_for_binary(
-        lhs[].dtype_code, rhs[].dtype_code, OP_ADD
-    )
-    var result = make_empty_array(dtype_code, shape^)
-    if maybe_binary_contiguous(lhs[], rhs[], result, OP_ADD):
-        return PythonObject(alloc=result^)
-    for i in range(result.size_value):
-        var lval = get_broadcast_as_f64(lhs[], i, result.shape)
-        var rval = get_broadcast_as_f64(rhs[], i, result.shape)
-        set_logical_from_f64(result, i, lval + rval)
-    return PythonObject(alloc=result^)
-
-
-def native_binary_into(
+def binary_into(
     dst_obj: PythonObject,
     lhs_obj: PythonObject,
     rhs_obj: PythonObject,
     op_obj: PythonObject,
 ) raises -> PythonObject:
-    var dst = dst_obj.downcast_value_ptr[NativeArray]()
-    var lhs = lhs_obj.downcast_value_ptr[NativeArray]()
-    var rhs = rhs_obj.downcast_value_ptr[NativeArray]()
+    var dst = dst_obj.downcast_value_ptr[Array]()
+    var lhs = lhs_obj.downcast_value_ptr[Array]()
+    var rhs = rhs_obj.downcast_value_ptr[Array]()
     var op = Int(py=op_obj)
     var dtype_code = result_dtype_for_binary(
         lhs[].dtype_code, rhs[].dtype_code, op
@@ -559,60 +515,14 @@ def native_binary_into(
     return PythonObject(None)
 
 
-def native_add_into(
-    dst_obj: PythonObject,
-    lhs_obj: PythonObject,
-    rhs_obj: PythonObject,
-) raises -> PythonObject:
-    var dst = dst_obj.downcast_value_ptr[NativeArray]()
-    var lhs = lhs_obj.downcast_value_ptr[NativeArray]()
-    var rhs = rhs_obj.downcast_value_ptr[NativeArray]()
-    if write_add_f32_1d_into(dst[], lhs[], rhs[]):
-        return PythonObject(None)
-    var dtype_code = result_dtype_for_binary(
-        lhs[].dtype_code, rhs[].dtype_code, OP_ADD
-    )
-    if dst[].dtype_code != dtype_code:
-        raise Error("out dtype does not match binary result dtype")
-    if same_shape(lhs[].shape, rhs[].shape) and same_shape(
-        lhs[].shape, dst[].shape
-    ):
-        if maybe_binary_same_shape_contiguous(lhs[], rhs[], dst[], OP_ADD):
-            return PythonObject(None)
-    else:
-        var shape = broadcast_shape(lhs[], rhs[])
-        if not same_shape(shape, dst[].shape):
-            raise Error("out shape does not match binary result shape")
-        if maybe_binary_contiguous(lhs[], rhs[], dst[], OP_ADD):
-            return PythonObject(None)
-    for i in range(dst[].size_value):
-        var lval = get_broadcast_as_f64(lhs[], i, dst[].shape)
-        var rval = get_broadcast_as_f64(rhs[], i, dst[].shape)
-        set_logical_from_f64(dst[], i, lval + rval)
-    return PythonObject(None)
-
-
-def native_add_f32_into(
-    dst_obj: PythonObject,
-    lhs_obj: PythonObject,
-    rhs_obj: PythonObject,
-) raises -> PythonObject:
-    var dst = dst_obj.downcast_value_ptr[NativeArray]()
-    var lhs = lhs_obj.downcast_value_ptr[NativeArray]()
-    var rhs = rhs_obj.downcast_value_ptr[NativeArray]()
-    if not write_add_f32_1d_into(dst[], lhs[], rhs[]):
-        return PythonObject(False)
-    return PythonObject(True)
-
-
-def native_binary_scalar(
+def binary_scalar(
     array_obj: PythonObject,
     scalar_obj: PythonObject,
     scalar_dtype_obj: PythonObject,
     op_obj: PythonObject,
     scalar_on_left_obj: PythonObject,
 ) raises -> PythonObject:
-    var array = array_obj.downcast_value_ptr[NativeArray]()
+    var array = array_obj.downcast_value_ptr[Array]()
     var scalar_dtype = Int(py=scalar_dtype_obj)
     var op = Int(py=op_obj)
     var scalar_on_left = Bool(py=scalar_on_left_obj)
@@ -636,11 +546,11 @@ def native_binary_scalar(
     return PythonObject(alloc=result^)
 
 
-def native_result_dtype_for_unary(dtype_obj: PythonObject) raises -> PythonObject:
+def result_dtype_for_unary_py(dtype_obj: PythonObject) raises -> PythonObject:
     return PythonObject(result_dtype_for_unary(Int(py=dtype_obj)))
 
 
-def native_result_dtype_for_binary(
+def result_dtype_for_binary_py(
     lhs_dtype_obj: PythonObject, rhs_dtype_obj: PythonObject, op_obj: PythonObject
 ) raises -> PythonObject:
     return PythonObject(
@@ -650,7 +560,7 @@ def native_result_dtype_for_binary(
     )
 
 
-def native_result_dtype_for_reduction(
+def result_dtype_for_reduction_py(
     dtype_obj: PythonObject, op_obj: PythonObject
 ) raises -> PythonObject:
     return PythonObject(
@@ -658,14 +568,14 @@ def native_result_dtype_for_reduction(
     )
 
 
-def native_sin_add_mul(
+def sin_add_mul(
     lhs_obj: PythonObject,
     rhs_obj: PythonObject,
     scalar_obj: PythonObject,
     scalar_dtype_obj: PythonObject,
 ) raises -> PythonObject:
-    var lhs = lhs_obj.downcast_value_ptr[NativeArray]()
-    var rhs = rhs_obj.downcast_value_ptr[NativeArray]()
+    var lhs = lhs_obj.downcast_value_ptr[Array]()
+    var rhs = rhs_obj.downcast_value_ptr[Array]()
     var scalar_dtype = Int(py=scalar_dtype_obj)
     var scalar_value = scalar_py_as_f64(scalar_obj, scalar_dtype)
     if (
@@ -700,12 +610,12 @@ def native_sin_add_mul(
     return PythonObject(alloc=result^)
 
 
-def native_where(
+def where(
     cond_obj: PythonObject, lhs_obj: PythonObject, rhs_obj: PythonObject
 ) raises -> PythonObject:
-    var cond = cond_obj.downcast_value_ptr[NativeArray]()
-    var lhs = lhs_obj.downcast_value_ptr[NativeArray]()
-    var rhs = rhs_obj.downcast_value_ptr[NativeArray]()
+    var cond = cond_obj.downcast_value_ptr[Array]()
+    var lhs = lhs_obj.downcast_value_ptr[Array]()
+    var rhs = rhs_obj.downcast_value_ptr[Array]()
     var partial_shape = broadcast_shape(cond[], lhs[])
     var tmp = make_empty_array(lhs[].dtype_code, partial_shape^)
     var shape = broadcast_shape(tmp, rhs[])
@@ -725,10 +635,10 @@ def native_where(
     return PythonObject(alloc=result^)
 
 
-def native_reduce(
+def reduce(
     array_obj: PythonObject, op_obj: PythonObject
 ) raises -> PythonObject:
-    var src = array_obj.downcast_value_ptr[NativeArray]()
+    var src = array_obj.downcast_value_ptr[Array]()
     var op = Int(py=op_obj)
     var shape = List[Int]()
     if op == REDUCE_ARGMAX:
@@ -775,11 +685,11 @@ def native_reduce(
     return PythonObject(alloc=result^)
 
 
-def native_matmul(
+def matmul(
     lhs_obj: PythonObject, rhs_obj: PythonObject
 ) raises -> PythonObject:
-    var lhs = lhs_obj.downcast_value_ptr[NativeArray]()
-    var rhs = rhs_obj.downcast_value_ptr[NativeArray]()
+    var lhs = lhs_obj.downcast_value_ptr[Array]()
+    var rhs = rhs_obj.downcast_value_ptr[Array]()
     var lhs_ndim = len(lhs[].shape)
     var rhs_ndim = len(rhs[].shape)
     if lhs_ndim < 1 or lhs_ndim > 2 or rhs_ndim < 1 or rhs_ndim > 2:
@@ -835,11 +745,11 @@ def native_matmul(
     return PythonObject(alloc=result^)
 
 
-def native_linalg_solve(
+def solve(
     a_obj: PythonObject, b_obj: PythonObject
 ) raises -> PythonObject:
-    var a = a_obj.downcast_value_ptr[NativeArray]()
-    var b = b_obj.downcast_value_ptr[NativeArray]()
+    var a = a_obj.downcast_value_ptr[Array]()
+    var b = b_obj.downcast_value_ptr[Array]()
     if len(a[].shape) != 2 or a[].shape[0] != a[].shape[1]:
         raise Error(
             "linalg.solve() requires a square rank-2 coefficient matrix"
@@ -865,8 +775,8 @@ def native_linalg_solve(
     return PythonObject(alloc=result^)
 
 
-def native_linalg_inv(array_obj: PythonObject) raises -> PythonObject:
-    var src = array_obj.downcast_value_ptr[NativeArray]()
+def inv(array_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
     if len(src[].shape) != 2 or src[].shape[0] != src[].shape[1]:
         raise Error("linalg.inv() requires a square rank-2 matrix")
     var shape = List[Int]()
@@ -879,8 +789,8 @@ def native_linalg_inv(array_obj: PythonObject) raises -> PythonObject:
     return PythonObject(alloc=result^)
 
 
-def native_linalg_det(array_obj: PythonObject) raises -> PythonObject:
-    var src = array_obj.downcast_value_ptr[NativeArray]()
+def det(array_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
     var shape = List[Int]()
     var result = make_empty_array(
         result_dtype_for_linalg(src[].dtype_code), shape^
@@ -889,19 +799,19 @@ def native_linalg_det(array_obj: PythonObject) raises -> PythonObject:
     return PythonObject(alloc=result^)
 
 
-def native_fill(
+def fill(
     array_obj: PythonObject, value_obj: PythonObject
 ) raises -> PythonObject:
-    var dst = array_obj.downcast_value_ptr[NativeArray]()
+    var dst = array_obj.downcast_value_ptr[Array]()
     fill_all_from_py(dst[], value_obj)
     return PythonObject(None)
 
 
-def native_copyto(
+def copyto(
     dst_obj: PythonObject, src_obj: PythonObject
 ) raises -> PythonObject:
-    var dst = dst_obj.downcast_value_ptr[NativeArray]()
-    var src = src_obj.downcast_value_ptr[NativeArray]()
+    var dst = dst_obj.downcast_value_ptr[Array]()
+    var src = src_obj.downcast_value_ptr[Array]()
     var shape = broadcast_shape(src[], dst[])
     if not same_shape(shape, dst[].shape):
         raise Error("copyto() source is not broadcastable to destination")
@@ -912,13 +822,13 @@ def native_copyto(
     return PythonObject(None)
 
 
-def native_slice_1d(
+def slice_1d(
     array_obj: PythonObject,
     start_obj: PythonObject,
     stop_obj: PythonObject,
     step_obj: PythonObject,
 ) raises -> PythonObject:
-    var src = array_obj.downcast_value_ptr[NativeArray]()
+    var src = array_obj.downcast_value_ptr[Array]()
     if len(src[].shape) != 1:
         raise Error("slice_1d() requires a rank-1 array")
     var start = Int(py=start_obj)
