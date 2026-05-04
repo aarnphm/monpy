@@ -13,9 +13,9 @@ current monpy policy:
 
 - route contiguous rank-2 `float32 @ float32 -> float32` through modular's
   `apple_matmul` wrapper when compiling on macos.
+- route contiguous rank-2 `float64 @ float64 -> float64` through a local
+  `cblas_dgemm` mirror of modular's f32 call shape.
 - keep scalar mojo matmul as the portable correctness fallback.
-- add `float64` accelerate support only after we either upstream or mirror a
-  `cblas_dgemm` wrapper.
 - use thresholds once benchmarks show small matrices losing to blas call
   overhead.
 

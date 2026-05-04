@@ -22,6 +22,8 @@ monpy should be a mojo array library with numpy-shaped python APIs.
 - generic paths preserve dynamic-rank correctness with shape and stride metadata.
 - fast paths should be added only when a dtype/layout/rank predicate makes the cheaper path obvious.
 - allocation reuse, `out=`, expression fusion, and wider SIMD/LayoutTensor coverage are the next major perf levers.
-- matmul is currently correctness-first scalar mojo code. serious parity will need tiled/vectorized kernels or a CPU BLAS backend.
+- `sin_add_mul(x, y, scalar)` is the first explicit fused expression kernel and should become the lowering target for the numpy-shaped `sin(x) + y * scalar` pattern.
+- matmul uses Apple Accelerate for contiguous macos f32/f64 rank-2 arrays, with scalar mojo as the portable fallback.
+- backend markers on native arrays let tests and benchmarks assert that specialized kernels actually ran.
 
 see [apple-backends.md](apple-backends.md) for the apple silicon backend split.

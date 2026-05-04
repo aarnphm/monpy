@@ -1,12 +1,40 @@
 from __future__ import annotations
 
 import monumpy as np
+import monpy.array_api as xp
 import numpy
 import pytest
 
+from _helpers import assert_same_shape_dtype, assert_same_values
 
-def assert_same_values(monpy_value: object, numpy_value: object) -> None:
-  numpy.testing.assert_allclose(numpy.asarray(monpy_value), numpy.asarray(numpy_value), rtol=1e-6, atol=1e-6)
+
+def test_creation_functions_match_numpy_shape_dtype_and_values() -> None:
+  zeros = np.zeros((2, 3), dtype=np.int64)
+  ones = np.ones((2, 3), dtype=np.float32)
+  full = np.full((2, 2), 7, dtype=np.int64)
+  empty = np.empty((3, 0), dtype=np.float64)
+
+  assert_same_shape_dtype(zeros, numpy.zeros((2, 3), dtype=numpy.int64))
+  assert zeros.tolist() == [[0, 0, 0], [0, 0, 0]]
+  assert_same_shape_dtype(ones, numpy.ones((2, 3), dtype=numpy.float32))
+  assert ones.tolist() == [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]
+  assert_same_values(full, numpy.full((2, 2), 7, dtype=numpy.int64))
+  assert_same_shape_dtype(empty, numpy.empty((3, 0), dtype=numpy.float64))
+
+
+def test_arange_and_linspace_match_numpy() -> None:
+  assert_same_shape_dtype(np.arange(5), numpy.arange(5, dtype=numpy.int64))
+  assert_same_values(np.arange(1.0, 2.0, 0.25), numpy.arange(1.0, 2.0, 0.25))
+  assert_same_values(np.linspace(0.0, 1.0, 5, dtype=np.float32), numpy.linspace(0.0, 1.0, 5, dtype=numpy.float32))
+
+
+def test_invalid_creation_arguments_are_explicit_blockers() -> None:
+  with pytest.raises(ValueError, match="negative dimensions"):
+    np.zeros((-1,), dtype=np.float64)
+  with pytest.raises(Exception, match="step"):
+    np.arange(0, 4, 0)
+  with pytest.raises(NotImplementedError, match="cpu"):
+    np.asarray([1], device="gpu")
 
 
 def test_broadcasted_binary_ops_match_numpy() -> None:
@@ -16,8 +44,37 @@ def test_broadcasted_binary_ops_match_numpy() -> None:
   oracle_rhs = numpy.asarray([10.0, 20.0, 30.0])
 
   assert_same_values(lhs + rhs, oracle_lhs + oracle_rhs)
+  assert_same_values(lhs - rhs, oracle_lhs - oracle_rhs)
   assert_same_values(lhs * rhs, oracle_lhs * oracle_rhs)
   assert_same_values(lhs / rhs, oracle_lhs / oracle_rhs)
+
+
+def test_scalar_binary_ops_match_numpy() -> None:
+  arr = np.asarray([[1, 2, 3], [4, 5, 6]], dtype=np.int64)
+  oracle = numpy.asarray([[1, 2, 3], [4, 5, 6]], dtype=numpy.int64)
+
+  assert_same_values(arr + 2, oracle + 2)
+  assert_same_values(2 + arr, 2 + oracle)
+  assert_same_values(arr * 3, oracle * 3)
+  assert_same_values(12 - arr, 12 - oracle)
+
+
+def test_python_scalars_are_weak_for_float32_arrays() -> None:
+  arr = np.asarray([1.0, 2.0, 3.0], dtype=np.float32)
+
+  assert (arr * 3.0).dtype == np.float32
+  assert (3.0 * arr).dtype == np.float32
+
+
+def test_binary_out_writes_existing_destination() -> None:
+  lhs = np.asarray([1.0, 2.0, 3.0], dtype=np.float32)
+  rhs = np.asarray([10.0, 20.0, 30.0], dtype=np.float32)
+  out = np.empty((3,), dtype=np.float32)
+
+  result = np.add(lhs, rhs, out=out)
+
+  assert result is out
+  assert out.tolist() == [11.0, 22.0, 33.0]
 
 
 def test_shape_manipulation_matches_numpy() -> None:
@@ -26,7 +83,19 @@ def test_shape_manipulation_matches_numpy() -> None:
 
   assert arr.reshape(2, 3).tolist() == oracle.reshape(2, 3).tolist()
   assert arr.reshape(2, 3).T.tolist() == oracle.reshape(2, 3).T.tolist()
+  assert xp.matrix_transpose(arr.reshape(2, 3)).tolist() == oracle.reshape(2, 3).T.tolist()
   assert np.broadcast_to(np.asarray([1, 2, 3]), (2, 3)).tolist() == [[1, 2, 3], [1, 2, 3]]
+
+
+def test_array_namespace_info_reports_v1_surface() -> None:
+  info = xp.__array_namespace_info__()
+
+  assert info.default_device() == "cpu"
+  assert info.devices() == ["cpu"]
+  assert info.default_dtypes() == {"integral": np.int64, "real floating": np.float64, "bool": np.bool}
+  assert info.capabilities() == {"boolean indexing": False, "data-dependent shapes": False}
+  with pytest.raises(NotImplementedError, match="cpu"):
+    info.dtypes(device="gpu")
 
 
 def test_reductions_match_numpy_for_axis_none() -> None:
@@ -45,6 +114,12 @@ def test_axis_reductions_are_explicit_v1_gap() -> None:
 
   with pytest.raises(NotImplementedError, match="axis"):
     arr.sum(axis=0)
+  with pytest.raises(NotImplementedError, match="axis"):
+    np.sum(arr, axis=0)
+  with pytest.raises(TypeError, match="unexpected keyword"):
+    np.sum(arr, keepdims=True)
+  with pytest.raises(TypeError, match="unexpected keyword"):
+    np.sum(arr, out=arr)
 
 
 def test_matmul_matches_numpy_for_1d_and_2d() -> None:
@@ -60,9 +135,40 @@ def test_matmul_matches_numpy_for_1d_and_2d() -> None:
   assert (vec @ vec) == pytest.approx(float(oracle_vec @ oracle_vec))
 
 
+def test_higher_rank_matmul_is_an_explicit_v1_gap() -> None:
+  lhs = np.ones((1, 2, 2), dtype=np.float64)
+  rhs = np.ones((1, 2, 2), dtype=np.float64)
+
+  with pytest.raises(Exception, match="1d and 2d"):
+    np.matmul(lhs, rhs)
+
+
+def test_fused_sin_add_mul_matches_numpy() -> None:
+  lhs = np.asarray([0.1, 0.2, 0.3], dtype=np.float32)
+  rhs = np.asarray([2.0, 3.0, 4.0], dtype=np.float32)
+  oracle_lhs = numpy.asarray([0.1, 0.2, 0.3], dtype=numpy.float32)
+  oracle_rhs = numpy.asarray([2.0, 3.0, 4.0], dtype=numpy.float32)
+
+  out = np.sin_add_mul(lhs, rhs, 3.0)
+
+  assert out._native.used_fused()
+  assert out.dtype == np.float32
+  assert_same_values(out, numpy.sin(oracle_lhs) + oracle_rhs * 3.0)
+
+
 def test_where_matches_numpy() -> None:
   cond = np.asarray([True, False, True])
   lhs = np.asarray([1, 2, 3])
   rhs = np.asarray([10, 20, 30])
 
   assert np.where(cond, lhs, rhs).tolist() == numpy.where([True, False, True], [1, 2, 3], [10, 20, 30]).tolist()
+
+
+def test_where_broadcasts_scalars_and_arrays() -> None:
+  cond = np.asarray([[True, False, True], [False, True, False]])
+  rhs = np.asarray([10, 20, 30])
+
+  assert_same_values(
+    np.where(cond, 1, rhs),
+    numpy.where([[True, False, True], [False, True, False]], 1, [10, 20, 30]),
+  )
