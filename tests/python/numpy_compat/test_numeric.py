@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import monpy.array_api as xp
 import monumpy as np
 import numpy
@@ -86,6 +88,27 @@ def test_shape_manipulation_matches_numpy() -> None:
   assert np.broadcast_to(np.asarray([1, 2, 3]), (2, 3)).tolist() == [[1, 2, 3], [1, 2, 3]]
 
 
+def test_views_remain_safe_across_core_read_paths() -> None:
+  base = np.arange(12, dtype=np.float64).reshape(3, 4)
+  oracle = numpy.arange(12, dtype=numpy.float64).reshape(3, 4)
+  cases = [
+    (base, oracle),
+    (base[:, 1:3], oracle[:, 1:3]),
+    (base[::-1, ::-1], oracle[::-1, ::-1]),
+    (base.T, oracle.T),
+    (base[1:, 1:], oracle[1:, 1:]),
+    (
+      np.broadcast_to(np.asarray([1.0, 2.0, 3.0], dtype=np.float64), (2, 3)),
+      numpy.broadcast_to(numpy.asarray([1.0, 2.0, 3.0], dtype=numpy.float64), (2, 3)),
+    ),
+  ]
+
+  for arr, expected in cases:
+    assert_same_values(arr + 2.0, expected + 2.0)
+    assert_same_values(np.sin(arr), numpy.sin(expected))
+    assert np.sum(arr) == pytest.approx(float(numpy.sum(expected)))
+
+
 def test_array_namespace_info_reports_v1_surface() -> None:
   info = xp.__array_namespace_info__()
 
@@ -132,6 +155,75 @@ def test_matmul_matches_numpy_for_1d_and_2d() -> None:
   assert_same_values(mat @ rhs, oracle_mat @ oracle_rhs)
   assert_same_values(mat @ vec, oracle_mat @ oracle_vec)
   assert (vec @ vec) == pytest.approx(float(oracle_vec @ oracle_vec))
+
+
+def test_matmul_dense_transpose_rhs_matches_numpy_and_uses_fast_path_on_macos() -> None:
+  lhs = (np.arange(18 * 12, dtype=np.float64) / 10.0).reshape(18, 12)
+  rhs = (np.arange(20 * 12, dtype=np.float64) / 7.0).reshape(20, 12)
+  oracle_lhs = (numpy.arange(18 * 12, dtype=numpy.float64) / 10.0).reshape(18, 12)
+  oracle_rhs = (numpy.arange(20 * 12, dtype=numpy.float64) / 7.0).reshape(20, 12)
+
+  out = lhs @ rhs.T
+
+  assert rhs.T.strides == (8, 96)
+  assert_same_shape_dtype(out, oracle_lhs @ oracle_rhs.T)
+  assert_same_values(out, oracle_lhs @ oracle_rhs.T, rtol=1e-12, atol=1e-12)
+  if sys.platform == "darwin":
+    assert out._native.used_accelerate()
+
+
+@pytest.mark.parametrize(
+  ("monpy_dtype", "numpy_dtype"),
+  [(np.int64, numpy.int64), (np.float32, numpy.float32), (np.float64, numpy.float64)],
+)
+@pytest.mark.parametrize(("m", "k", "n"), [(1, 1, 1), (2, 3, 4), (5, 4, 3), (16, 8, 5)])
+@pytest.mark.parametrize("layout", ["c", "lhs_f", "rhs_transposed", "offset", "negative"])
+def test_matmul_matrix_layout_sweep_matches_numpy(
+  monpy_dtype: np.DType,
+  numpy_dtype: type[numpy.generic],
+  m: int,
+  k: int,
+  n: int,
+  layout: str,
+) -> None:
+  lhs_oracle = (numpy.arange(m * k, dtype=numpy_dtype).reshape(m, k) + 1).astype(
+    numpy_dtype,
+    copy=False,
+  )
+  rhs_oracle = (numpy.arange(k * n, dtype=numpy_dtype).reshape(k, n) - 2).astype(
+    numpy_dtype,
+    copy=False,
+  )
+  if layout == "lhs_f":
+    lhs_oracle = numpy.asfortranarray(lhs_oracle)
+  elif layout == "rhs_transposed":
+    rhs_oracle = (
+      (numpy.arange(n * k, dtype=numpy_dtype).reshape(n, k) - 2)
+      .astype(numpy_dtype, copy=False)
+      .T
+    )
+  elif layout == "offset":
+    lhs_source = (numpy.arange((m + 1) * k, dtype=numpy_dtype).reshape(m + 1, k) + 1).astype(
+      numpy_dtype,
+      copy=False,
+    )
+    rhs_source = (numpy.arange(k * (n + 1), dtype=numpy_dtype).reshape(k, n + 1) - 2).astype(
+      numpy_dtype,
+      copy=False,
+    )
+    lhs_oracle = lhs_source[1:, :]
+    rhs_oracle = rhs_source[:, 1:]
+  elif layout == "negative":
+    lhs_oracle = lhs_oracle[::-1, :]
+    rhs_oracle = rhs_oracle[:, ::-1]
+
+  lhs = np.asarray(lhs_oracle, dtype=monpy_dtype, copy=False)
+  rhs = np.asarray(rhs_oracle, dtype=monpy_dtype, copy=False)
+  out = lhs @ rhs
+  expected = lhs_oracle @ rhs_oracle
+
+  assert_same_shape_dtype(out, expected)
+  assert_same_values(out, expected, rtol=1e-4, atol=1e-4)
 
 
 def test_higher_rank_matmul_is_an_explicit_v1_gap() -> None:

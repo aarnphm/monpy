@@ -54,6 +54,25 @@ def test_explicit_supported_dtype_casts_match_numpy(monpy_dtype: np.DType, numpy
   assert_same_values(arr, oracle)
 
 
+@pytest.mark.parametrize(
+  ("dtype", "expected_dtype"),
+  [
+    (numpy.bool_, np.bool),
+    (numpy.int64, np.int64),
+    (numpy.float32, np.float32),
+    (numpy.float64, np.float64),
+    (numpy.dtype("bool"), np.bool),
+    (numpy.dtype("int64"), np.int64),
+    (numpy.dtype("float32"), np.float32),
+    (numpy.dtype("float64"), np.float64),
+  ],
+)
+def test_numpy_dtype_aliases_resolve_to_supported_monpy_dtypes(dtype: object, expected_dtype: np.DType) -> None:
+  arr = np.asarray([0, 1, 1], dtype=dtype)
+
+  assert arr.dtype is expected_dtype
+
+
 def test_scalar_array_is_zero_dimensional() -> None:
   arr = np.asarray(3.5, dtype=np.float32)
 
@@ -90,6 +109,93 @@ def test_astype_copy_false_keeps_identity_for_same_dtype() -> None:
   assert arr.astype(np.float32, copy=False) is not arr
 
 
+@pytest.mark.parametrize("monpy_dtype, numpy_dtype", SUPPORTED_DTYPE_PAIRS)
+def test_numpy_array_inputs_import_shape_dtype_and_values(
+  monpy_dtype: np.DType,
+  numpy_dtype: type[numpy.generic],
+) -> None:
+  source = numpy.asarray([[0, 1, 1], [2, 3, 5]], dtype=numpy_dtype)
+  arr = np.asarray(source, dtype=monpy_dtype)
+
+  assert_same_shape_dtype(arr, source)
+  assert_same_values(arr, source)
+
+
+def test_numpy_array_copy_false_shares_storage() -> None:
+  source = numpy.arange(6, dtype=numpy.int64).reshape(2, 3)
+  arr = np.asarray(source, copy=False)
+
+  source[0, 1] = 99
+  arr[1, 2] = -5
+
+  assert arr[0, 1] == 99
+  assert source[1, 2] == -5
+
+
+def test_numpy_array_copy_true_detaches_storage() -> None:
+  source = numpy.arange(4, dtype=numpy.int64)
+  arr = np.asarray(source, copy=True)
+
+  source[0] = 99
+  arr[1] = 77
+
+  assert arr.tolist() == [0, 77, 2, 3]
+  assert source.tolist() == [99, 1, 2, 3]
+
+
+def test_numpy_array_function_defaults_to_detached_copy() -> None:
+  source = numpy.arange(4, dtype=numpy.int64)
+  arr = np.array(source)
+
+  source[0] = 99
+  arr[1] = 77
+
+  assert arr.tolist() == [0, 77, 2, 3]
+  assert source.tolist() == [99, 1, 2, 3]
+
+
+def test_numpy_array_copy_none_allows_supported_cast() -> None:
+  source = numpy.asarray([1, 2, 3], dtype=numpy.int64)
+  arr = np.asarray(source, dtype=np.float32, copy=None)
+
+  assert arr.dtype == np.float32
+  assert arr.tolist() == [1.0, 2.0, 3.0]
+
+
+def test_numpy_array_copy_false_rejects_required_cast() -> None:
+  source = numpy.asarray([1, 2, 3], dtype=numpy.int64)
+
+  with pytest.raises(ValueError, match="copy"):
+    np.asarray(source, dtype=np.float32, copy=False)
+
+
+def test_numpy_array_readonly_copy_false_raises_and_copy_none_detaches() -> None:
+  source = numpy.arange(4, dtype=numpy.int64)
+  source.flags.writeable = False
+
+  with pytest.raises(ValueError, match="readonly"):
+    np.asarray(source, copy=False)
+
+  arr = np.asarray(source, copy=None)
+  arr[0] = 99
+
+  assert arr.tolist() == [99, 1, 2, 3]
+  assert source.tolist() == [0, 1, 2, 3]
+
+
+def test_numpy_array_strided_view_copy_false_preserves_view_storage() -> None:
+  source = numpy.arange(12, dtype=numpy.int64).reshape(3, 4)
+  view = source[::2, ::-1]
+  arr = np.asarray(view, copy=False)
+
+  source[0, 3] = 99
+  arr[1, 1] = -7
+
+  assert arr.strides == view.strides
+  assert arr.tolist() == [[99, 2, 1, 0], [11, -7, 9, 8]]
+  assert source[2, 2] == -7
+
+
 @pytest.mark.parametrize(
   "dtype",
   [
@@ -98,8 +204,6 @@ def test_astype_copy_false_keeps_identity_for_same_dtype() -> None:
     "complex128",
     "object",
     "str",
-    numpy.float32,
-    numpy.dtype("int64"),
     [("field", numpy.int64)],
   ],
 )
@@ -112,8 +216,3 @@ def test_unsupported_dtype_requests_are_explicit_blockers(dtype: object) -> None
 def test_unsupported_array_value_types_are_explicit_blockers(obj: object) -> None:
   with pytest.raises(NotImplementedError, match="unsupported array input type"):
     np.asarray(obj)
-
-
-def test_numpy_array_input_is_an_explicit_import_gap() -> None:
-  with pytest.raises(NotImplementedError, match="unsupported array input type"):
-    np.asarray(numpy.asarray([1, 2, 3]))

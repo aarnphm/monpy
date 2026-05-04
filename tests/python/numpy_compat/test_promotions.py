@@ -3,6 +3,7 @@ from __future__ import annotations
 import operator
 from collections.abc import Callable
 
+import monpy
 import monumpy as np
 import numpy
 import pytest
@@ -12,7 +13,6 @@ PROMOTION_MATCH_CASES = [
   (lhs_dtype, lhs_numpy_dtype, rhs_dtype, rhs_numpy_dtype)
   for lhs_dtype, lhs_numpy_dtype in SUPPORTED_DTYPE_PAIRS
   for rhs_dtype, rhs_numpy_dtype in SUPPORTED_DTYPE_PAIRS
-  if {lhs_dtype, rhs_dtype} != {np.int64, np.float32}
 ]
 
 
@@ -42,18 +42,6 @@ def test_supported_array_promotions_match_numpy(
   assert_same_values(out, expected)
 
 
-@pytest.mark.xfail(
-  strict=True,
-  reason="monpy currently promotes int64/float32 arrays to float32 instead of NumPy float64",
-)
-@pytest.mark.parametrize(("lhs_dtype", "rhs_dtype"), [(np.int64, np.float32), (np.float32, np.int64)])
-def test_int64_float32_array_promotion_tracks_numpy_gap(lhs_dtype: np.DType, rhs_dtype: np.DType) -> None:
-  lhs = np.asarray(values_for_dtype(lhs_dtype), dtype=lhs_dtype)
-  rhs = np.asarray(values_for_dtype(rhs_dtype), dtype=rhs_dtype)
-
-  assert (lhs + rhs).dtype == np.float64
-
-
 @pytest.mark.parametrize("scalar", [1, 1.5, True])
 @pytest.mark.parametrize("op", [operator.add, operator.sub, operator.mul])
 def test_python_scalars_are_weak_for_float32_arrays(
@@ -76,6 +64,23 @@ def test_python_scalars_are_weak_for_float32_arrays(
 def test_unsupported_promotion_dtype_families_are_explicit_blockers(dtype: object) -> None:
   with pytest.raises(NotImplementedError, match="unsupported dtype"):
     np.asarray([1], dtype=dtype)
+
+
+@pytest.mark.parametrize(("lhs_dtype", "lhs_numpy_dtype", "rhs_dtype", "rhs_numpy_dtype"), PROMOTION_MATCH_CASES)
+@pytest.mark.parametrize("op", [monpy.OP_ADD, monpy.OP_SUB, monpy.OP_MUL, monpy.OP_DIV])
+def test_python_and_native_promotion_tables_agree(
+  lhs_dtype: np.DType,
+  lhs_numpy_dtype: type[numpy.generic],
+  rhs_dtype: np.DType,
+  rhs_numpy_dtype: type[numpy.generic],
+  op: int,
+) -> None:
+  del lhs_numpy_dtype, rhs_numpy_dtype
+
+  expected = monpy._result_dtype_for_binary(lhs_dtype, rhs_dtype, op)
+  native_code = monpy._native._result_dtype_for_binary(lhs_dtype.code, rhs_dtype.code, op)
+
+  assert native_code == expected.code
 
 
 @pytest.mark.parametrize("value", [2**70, -(2**70)])

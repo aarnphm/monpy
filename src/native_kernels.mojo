@@ -1,17 +1,20 @@
 from std.math import cos, exp, isinf, isnan, log, sin
+from std.memory.unsafe_pointer import alloc
 from std.sys import CompilationTarget, simd_width_of
 
-from layout import Layout, LayoutTensor
 from native_accelerate import (
     call_vv_f32,
-    cblas_dgemm_row_major,
-    cblas_sgemm_row_major,
+    cblas_dgemm_row_major_ld,
+    cblas_sgemm_row_major_ld,
+    lapack_dgesv,
+    lapack_dgetrf,
+    lapack_sgesv,
+    lapack_sgetrf,
 )
 from native_types import (
     BACKEND_ACCELERATE,
     BACKEND_FUSED,
     BACKEND_GENERIC,
-    BACKEND_LAYOUT_TENSOR,
     DTYPE_FLOAT32,
     DTYPE_FLOAT64,
     NativeArray,
@@ -30,6 +33,9 @@ from native_types import (
     contiguous_as_f64,
     contiguous_f32_ptr,
     contiguous_f64_ptr,
+    get_logical_as_f64,
+    has_negative_strides,
+    has_zero_strides,
     is_c_contiguous,
     same_shape,
     set_contiguous_from_f64,
@@ -72,7 +78,6 @@ def write_add_f32_1d_into(
     while i < dst.size_value:
         out_ptr[i] = lhs_ptr[i] + rhs_ptr[i]
         i += 1
-    dst.used_layout_tensor = False
     dst.backend_code = BACKEND_GENERIC
     return True
 
@@ -173,6 +178,43 @@ def is_float_dtype(dtype_code: Int) -> Bool:
 
 def is_contiguous_float_array(array: NativeArray) raises -> Bool:
     return is_float_dtype(array.dtype_code) and is_c_contiguous(array)
+
+
+@fieldwise_init
+struct Rank2BlasLayout(ImplicitlyCopyable, Movable, Writable):
+    var can_use: Bool
+    var transpose: Bool
+    var leading_dim: Int
+
+
+def max_int(lhs: Int, rhs: Int) -> Int:
+    if lhs > rhs:
+        return lhs
+    return rhs
+
+
+def rank2_blas_layout(array: NativeArray) raises -> Rank2BlasLayout:
+    if len(array.shape) != 2:
+        return Rank2BlasLayout(False, False, 0)
+    var rows = array.shape[0]
+    var cols = array.shape[1]
+    if rows == 0 or cols == 0:
+        return Rank2BlasLayout(False, False, 0)
+    if has_negative_strides(array) or has_zero_strides(array):
+        return Rank2BlasLayout(False, False, 0)
+    if cols == 1 or array.strides[1] == 1:
+        var lda = array.strides[0]
+        if rows == 1:
+            lda = max_int(1, cols)
+        if lda >= max_int(1, cols):
+            return Rank2BlasLayout(True, False, lda)
+    if rows == 1 or array.strides[0] == 1:
+        var lda = array.strides[1]
+        if cols == 1:
+            lda = max_int(1, rows)
+        if lda >= max_int(1, rows):
+            return Rank2BlasLayout(True, True, lda)
+    return Rank2BlasLayout(False, False, 0)
 
 
 def maybe_unary_contiguous(
@@ -754,52 +796,63 @@ def maybe_matmul_contiguous(
     if (
         len(lhs.shape) != 2
         or len(rhs.shape) != 2
-        or not is_contiguous_float_array(lhs)
-        or not is_contiguous_float_array(rhs)
         or not is_contiguous_float_array(result)
     ):
         return False
+    var lhs_layout = rank2_blas_layout(lhs)
+    var rhs_layout = rank2_blas_layout(rhs)
     if (
         lhs.dtype_code == DTYPE_FLOAT32
         and rhs.dtype_code == DTYPE_FLOAT32
         and result.dtype_code == DTYPE_FLOAT32
     ):
-        if maybe_matmul_f32_small(lhs, rhs, result, m, n, k_lhs):
+        if (
+            is_c_contiguous(lhs)
+            and is_c_contiguous(rhs)
+            and maybe_matmul_f32_small(lhs, rhs, result, m, n, k_lhs)
+        ):
             return True
         comptime if CompilationTarget.is_macos():
-            # Keep the Accelerate fast path local to monpy's row-major storage.
-            # The Modular wrapper ultimately reaches this cblas_sgemm shape,
-            # but the direct call avoids constructing TileTensor metadata for
-            # every tiny Python-facing matmul.
-            cblas_sgemm_row_major(
-                m,
-                n,
-                k_lhs,
-                contiguous_f32_ptr(result),
-                contiguous_f32_ptr(lhs),
-                contiguous_f32_ptr(rhs),
-            )
-            result.backend_code = BACKEND_ACCELERATE
-            return True
+            if lhs_layout.can_use and rhs_layout.can_use:
+                cblas_sgemm_row_major_ld(
+                    m,
+                    n,
+                    k_lhs,
+                    contiguous_f32_ptr(result),
+                    contiguous_f32_ptr(lhs),
+                    contiguous_f32_ptr(rhs),
+                    lhs_layout.transpose,
+                    rhs_layout.transpose,
+                    lhs_layout.leading_dim,
+                    rhs_layout.leading_dim,
+                    result.strides[0],
+                )
+                result.backend_code = BACKEND_ACCELERATE
+                return True
     if (
         lhs.dtype_code == DTYPE_FLOAT64
         and rhs.dtype_code == DTYPE_FLOAT64
         and result.dtype_code == DTYPE_FLOAT64
     ):
         comptime if CompilationTarget.is_macos():
-            # Modular's public wrapper currently covers f32. Mirror the same
-            # row-major cblas call shape for f64 so `float64 @ float64` gets the
-            # CPU BLAS backend instead of falling back to the scalar triple-loop.
-            cblas_dgemm_row_major(
-                m,
-                n,
-                k_lhs,
-                contiguous_f64_ptr(result),
-                contiguous_f64_ptr(lhs),
-                contiguous_f64_ptr(rhs),
-            )
-            result.backend_code = BACKEND_ACCELERATE
-            return True
+            if lhs_layout.can_use and rhs_layout.can_use:
+                cblas_dgemm_row_major_ld(
+                    m,
+                    n,
+                    k_lhs,
+                    contiguous_f64_ptr(result),
+                    contiguous_f64_ptr(lhs),
+                    contiguous_f64_ptr(rhs),
+                    lhs_layout.transpose,
+                    rhs_layout.transpose,
+                    lhs_layout.leading_dim,
+                    rhs_layout.leading_dim,
+                    result.strides[0],
+                )
+                result.backend_code = BACKEND_ACCELERATE
+                return True
+    if not is_contiguous_float_array(lhs) or not is_contiguous_float_array(rhs):
+        return False
     for i in range(m):
         for j in range(n):
             var total = 0.0
@@ -844,47 +897,489 @@ def maybe_matmul_f32_small(
     return True
 
 
-@always_inline
-def layout_add_f32_8(
-    lhs_ptr: UnsafePointer[Float32, MutExternalOrigin],
-    rhs_ptr: UnsafePointer[Float32, MutExternalOrigin],
-    out_ptr: UnsafePointer[Float32, MutExternalOrigin],
-) -> Bool:
-    # The fixed-size LayoutTensor path is a smoke-test specialization, not the
-    # final vectorization story. Keep it tiny until dynamic shape lowering is
-    # solid enough to avoid a zoo of hand-written sizes.
-    var lhs = LayoutTensor[DType.float32, Layout.row_major(8)](lhs_ptr)
-    var rhs = LayoutTensor[DType.float32, Layout.row_major(8)](rhs_ptr)
-    var out = LayoutTensor[DType.float32, Layout.row_major(8)](out_ptr)
-    comptime for i in range(8):
-        out[i] = lhs[i] + rhs[i]
+def abs_f64(value: Float64) -> Float64:
+    if value < 0.0:
+        return -value
+    return value
+
+
+def maybe_lapack_solve_f32(
+    a: NativeArray, b: NativeArray, mut result: NativeArray
+) raises -> Bool:
+    if (
+        a.dtype_code != DTYPE_FLOAT32
+        or b.dtype_code != DTYPE_FLOAT32
+        or result.dtype_code != DTYPE_FLOAT32
+        or len(a.shape) != 2
+        or a.shape[0] != a.shape[1]
+    ):
+        return False
+    var n = a.shape[0]
+    var rhs_columns = 1
+    var vector_result = True
+    if len(b.shape) == 2:
+        rhs_columns = b.shape[1]
+        vector_result = False
+    var a_ptr = alloc[Float32](n * n)
+    var b_ptr = alloc[Float32](n * rhs_columns)
+    var pivots = alloc[Int32](n)
+    for row in range(n):
+        for col in range(n):
+            a_ptr[row + col * n] = Float32(
+                get_logical_as_f64(a, row * n + col)
+            )
+    for row in range(n):
+        for col in range(rhs_columns):
+            var logical = row
+            if not vector_result:
+                logical = row * rhs_columns + col
+            b_ptr[row + col * n] = Float32(get_logical_as_f64(b, logical))
+    var info = 0
+    try:
+        info = lapack_sgesv(n, rhs_columns, a_ptr, pivots, b_ptr)
+    except:
+        a_ptr.free()
+        b_ptr.free()
+        pivots.free()
+        return False
+    if info != 0:
+        a_ptr.free()
+        b_ptr.free()
+        pivots.free()
+        if info > 0:
+            raise Error("linalg.solve() singular matrix")
+        return False
+    for row in range(n):
+        for col in range(rhs_columns):
+            var out_index = row
+            if not vector_result:
+                out_index = row * rhs_columns + col
+            set_logical_from_f64(result, out_index, Float64(b_ptr[row + col * n]))
+    a_ptr.free()
+    b_ptr.free()
+    pivots.free()
+    result.backend_code = BACKEND_ACCELERATE
     return True
 
 
-def maybe_layout_add_f32_8(
-    lhs: NativeArray, rhs: NativeArray, mut result: NativeArray, op: Int
+def maybe_lapack_solve_f64(
+    a: NativeArray, b: NativeArray, mut result: NativeArray
 ) raises -> Bool:
     if (
-        op == OP_ADD
-        and lhs.dtype_code == DTYPE_FLOAT32
-        and rhs.dtype_code == DTYPE_FLOAT32
-        and result.dtype_code == DTYPE_FLOAT32
-        and lhs.size_value == 8
-        and rhs.size_value == 8
-        and result.size_value == 8
-        and is_c_contiguous(lhs)
-        and is_c_contiguous(rhs)
-        and is_c_contiguous(result)
-        and lhs.offset_elems == 0
-        and rhs.offset_elems == 0
-        and result.offset_elems == 0
+        a.dtype_code != DTYPE_FLOAT64
+        or b.dtype_code != DTYPE_FLOAT64
+        or result.dtype_code != DTYPE_FLOAT64
+        or len(a.shape) != 2
+        or a.shape[0] != a.shape[1]
     ):
-        _ = layout_add_f32_8(
-            lhs.data.bitcast[Float32](),
-            rhs.data.bitcast[Float32](),
-            result.data.bitcast[Float32](),
+        return False
+    var n = a.shape[0]
+    var rhs_columns = 1
+    var vector_result = True
+    if len(b.shape) == 2:
+        rhs_columns = b.shape[1]
+        vector_result = False
+    var a_ptr = alloc[Float64](n * n)
+    var b_ptr = alloc[Float64](n * rhs_columns)
+    var pivots = alloc[Int32](n)
+    for row in range(n):
+        for col in range(n):
+            a_ptr[row + col * n] = get_logical_as_f64(a, row * n + col)
+    for row in range(n):
+        for col in range(rhs_columns):
+            var logical = row
+            if not vector_result:
+                logical = row * rhs_columns + col
+            b_ptr[row + col * n] = get_logical_as_f64(b, logical)
+    var info = 0
+    try:
+        info = lapack_dgesv(n, rhs_columns, a_ptr, pivots, b_ptr)
+    except:
+        a_ptr.free()
+        b_ptr.free()
+        pivots.free()
+        return False
+    if info != 0:
+        a_ptr.free()
+        b_ptr.free()
+        pivots.free()
+        if info > 0:
+            raise Error("linalg.solve() singular matrix")
+        return False
+    for row in range(n):
+        for col in range(rhs_columns):
+            var out_index = row
+            if not vector_result:
+                out_index = row * rhs_columns + col
+            set_logical_from_f64(result, out_index, b_ptr[row + col * n])
+    a_ptr.free()
+    b_ptr.free()
+    pivots.free()
+    result.backend_code = BACKEND_ACCELERATE
+    return True
+
+
+def maybe_lapack_inverse_f32(a: NativeArray, mut result: NativeArray) raises -> Bool:
+    if (
+        a.dtype_code != DTYPE_FLOAT32
+        or result.dtype_code != DTYPE_FLOAT32
+        or len(a.shape) != 2
+        or a.shape[0] != a.shape[1]
+    ):
+        return False
+    var n = a.shape[0]
+    var a_ptr = alloc[Float32](n * n)
+    var b_ptr = alloc[Float32](n * n)
+    var pivots = alloc[Int32](n)
+    for row in range(n):
+        for col in range(n):
+            a_ptr[row + col * n] = Float32(
+                get_logical_as_f64(a, row * n + col)
+            )
+            if row == col:
+                b_ptr[row + col * n] = 1.0
+            else:
+                b_ptr[row + col * n] = 0.0
+    var info = 0
+    try:
+        info = lapack_sgesv(n, n, a_ptr, pivots, b_ptr)
+    except:
+        a_ptr.free()
+        b_ptr.free()
+        pivots.free()
+        return False
+    if info != 0:
+        a_ptr.free()
+        b_ptr.free()
+        pivots.free()
+        if info > 0:
+            raise Error("linalg.inv() singular matrix")
+        return False
+    for row in range(n):
+        for col in range(n):
+            set_logical_from_f64(
+                result, row * n + col, Float64(b_ptr[row + col * n])
+            )
+    a_ptr.free()
+    b_ptr.free()
+    pivots.free()
+    result.backend_code = BACKEND_ACCELERATE
+    return True
+
+
+def maybe_lapack_inverse_f64(a: NativeArray, mut result: NativeArray) raises -> Bool:
+    if (
+        a.dtype_code != DTYPE_FLOAT64
+        or result.dtype_code != DTYPE_FLOAT64
+        or len(a.shape) != 2
+        or a.shape[0] != a.shape[1]
+    ):
+        return False
+    var n = a.shape[0]
+    var a_ptr = alloc[Float64](n * n)
+    var b_ptr = alloc[Float64](n * n)
+    var pivots = alloc[Int32](n)
+    for row in range(n):
+        for col in range(n):
+            a_ptr[row + col * n] = get_logical_as_f64(a, row * n + col)
+            if row == col:
+                b_ptr[row + col * n] = 1.0
+            else:
+                b_ptr[row + col * n] = 0.0
+    var info = 0
+    try:
+        info = lapack_dgesv(n, n, a_ptr, pivots, b_ptr)
+    except:
+        a_ptr.free()
+        b_ptr.free()
+        pivots.free()
+        return False
+    if info != 0:
+        a_ptr.free()
+        b_ptr.free()
+        pivots.free()
+        if info > 0:
+            raise Error("linalg.inv() singular matrix")
+        return False
+    for row in range(n):
+        for col in range(n):
+            set_logical_from_f64(result, row * n + col, b_ptr[row + col * n])
+    a_ptr.free()
+    b_ptr.free()
+    pivots.free()
+    result.backend_code = BACKEND_ACCELERATE
+    return True
+
+
+def lapack_pivot_sign(pivots: UnsafePointer[Int32, MutExternalOrigin], n: Int) -> Float64:
+    var sign = 1.0
+    for i in range(n):
+        if Int(pivots[i]) != i + 1:
+            sign = -sign
+    return sign
+
+
+def maybe_lapack_det_f32(a: NativeArray, mut result: NativeArray) raises -> Bool:
+    if (
+        a.dtype_code != DTYPE_FLOAT32
+        or result.dtype_code != DTYPE_FLOAT32
+        or len(a.shape) != 2
+        or a.shape[0] != a.shape[1]
+    ):
+        return False
+    var n = a.shape[0]
+    var a_ptr = alloc[Float32](n * n)
+    var pivots = alloc[Int32](n)
+    for row in range(n):
+        for col in range(n):
+            a_ptr[row + col * n] = Float32(
+                get_logical_as_f64(a, row * n + col)
+            )
+    var info = 0
+    try:
+        info = lapack_sgetrf(n, a_ptr, pivots)
+    except:
+        a_ptr.free()
+        pivots.free()
+        return False
+    if info < 0:
+        a_ptr.free()
+        pivots.free()
+        return False
+    var det = lapack_pivot_sign(pivots, n)
+    if info > 0:
+        det = 0.0
+    else:
+        for i in range(n):
+            det *= Float64(a_ptr[i + i * n])
+    set_logical_from_f64(result, 0, det)
+    a_ptr.free()
+    pivots.free()
+    result.backend_code = BACKEND_ACCELERATE
+    return True
+
+
+def maybe_lapack_det_f64(a: NativeArray, mut result: NativeArray) raises -> Bool:
+    if (
+        a.dtype_code != DTYPE_FLOAT64
+        or result.dtype_code != DTYPE_FLOAT64
+        or len(a.shape) != 2
+        or a.shape[0] != a.shape[1]
+    ):
+        return False
+    var n = a.shape[0]
+    var a_ptr = alloc[Float64](n * n)
+    var pivots = alloc[Int32](n)
+    for row in range(n):
+        for col in range(n):
+            a_ptr[row + col * n] = get_logical_as_f64(a, row * n + col)
+    var info = 0
+    try:
+        info = lapack_dgetrf(n, a_ptr, pivots)
+    except:
+        a_ptr.free()
+        pivots.free()
+        return False
+    if info < 0:
+        a_ptr.free()
+        pivots.free()
+        return False
+    var det = lapack_pivot_sign(pivots, n)
+    if info > 0:
+        det = 0.0
+    else:
+        for i in range(n):
+            det *= a_ptr[i + i * n]
+    set_logical_from_f64(result, 0, det)
+    a_ptr.free()
+    pivots.free()
+    result.backend_code = BACKEND_ACCELERATE
+    return True
+
+
+def load_square_matrix_f64(src: NativeArray) raises -> List[Float64]:
+    if len(src.shape) != 2 or src.shape[0] != src.shape[1]:
+        raise Error("linalg operation requires a square rank-2 matrix")
+    var n = src.shape[0]
+    var out = List[Float64]()
+    for i in range(n * n):
+        out.append(get_logical_as_f64(src, i))
+    return out^
+
+
+def make_lu_pivots(n: Int) -> List[Int]:
+    var pivots = List[Int]()
+    for i in range(n):
+        pivots.append(i)
+    return pivots^
+
+
+def swap_lu_rows(mut lu: List[Float64], n: Int, lhs: Int, rhs: Int):
+    if lhs == rhs:
+        return
+    for col in range(n):
+        var lhs_index = lhs * n + col
+        var rhs_index = rhs * n + col
+        var tmp = lu[lhs_index]
+        lu[lhs_index] = lu[rhs_index]
+        lu[rhs_index] = tmp
+
+
+def swap_rhs_rows(mut rhs: List[Float64], columns: Int, lhs: Int, rhs_row: Int):
+    if lhs == rhs_row:
+        return
+    for col in range(columns):
+        var lhs_index = lhs * columns + col
+        var rhs_index = rhs_row * columns + col
+        var tmp = rhs[lhs_index]
+        rhs[lhs_index] = rhs[rhs_index]
+        rhs[rhs_index] = tmp
+
+
+def lu_decompose_partial_pivot(
+    mut lu: List[Float64], mut pivots: List[Int], n: Int
+) raises -> Int:
+    var sign = 1
+    for k in range(n):
+        var pivot = k
+        var max_abs = abs_f64(lu[k * n + k])
+        for row in range(k + 1, n):
+            var value_abs = abs_f64(lu[row * n + k])
+            if value_abs > max_abs:
+                max_abs = value_abs
+                pivot = row
+        if max_abs == 0.0:
+            return 0
+        pivots[k] = pivot
+        if pivot != k:
+            swap_lu_rows(lu, n, k, pivot)
+            sign = -sign
+        var pivot_value = lu[k * n + k]
+        for row in range(k + 1, n):
+            var row_base = row * n
+            lu[row_base + k] = lu[row_base + k] / pivot_value
+            var factor = lu[row_base + k]
+            for col in range(k + 1, n):
+                lu[row_base + col] -= factor * lu[k * n + col]
+    return sign
+
+
+def solve_lu_factor_into(
+    lu: List[Float64],
+    pivots: List[Int],
+    n: Int,
+    mut rhs: List[Float64],
+    rhs_columns: Int,
+    mut result: NativeArray,
+    vector_result: Bool,
+) raises:
+    for row in range(n):
+        swap_rhs_rows(rhs, rhs_columns, row, pivots[row])
+    for row in range(n):
+        for col in range(rhs_columns):
+            var value = rhs[row * rhs_columns + col]
+            for k in range(row):
+                value -= lu[row * n + k] * rhs[k * rhs_columns + col]
+            rhs[row * rhs_columns + col] = value
+    for row in range(n - 1, -1, -1):
+        for col in range(rhs_columns):
+            var value = rhs[row * rhs_columns + col]
+            for k in range(row + 1, n):
+                value -= lu[row * n + k] * rhs[k * rhs_columns + col]
+            rhs[row * rhs_columns + col] = value / lu[row * n + row]
+    for row in range(n):
+        for col in range(rhs_columns):
+            var out_index = row * rhs_columns + col
+            if vector_result:
+                out_index = row
+            set_logical_from_f64(
+                result, out_index, rhs[row * rhs_columns + col]
+            )
+
+
+def lu_solve_into(
+    a: NativeArray, b: NativeArray, mut result: NativeArray
+) raises:
+    if len(a.shape) != 2 or a.shape[0] != a.shape[1]:
+        raise Error(
+            "linalg.solve() requires a square rank-2 coefficient matrix"
         )
-        result.used_layout_tensor = True
-        result.backend_code = BACKEND_LAYOUT_TENSOR
-        return True
-    return False
+    var n = a.shape[0]
+    var rhs_columns = 1
+    var vector_result = True
+    if len(b.shape) == 1:
+        if b.shape[0] != n:
+            raise Error("linalg.solve() right-hand side shape mismatch")
+    elif len(b.shape) == 2:
+        if b.shape[0] != n:
+            raise Error("linalg.solve() right-hand side shape mismatch")
+        rhs_columns = b.shape[1]
+        vector_result = False
+    else:
+        raise Error("linalg.solve() right-hand side must be rank 1 or rank 2")
+    comptime if CompilationTarget.is_macos():
+        if maybe_lapack_solve_f32(a, b, result):
+            return
+        if maybe_lapack_solve_f64(a, b, result):
+            return
+    var lu = load_square_matrix_f64(a)
+    var pivots = make_lu_pivots(n)
+    if lu_decompose_partial_pivot(lu, pivots, n) == 0:
+        raise Error("linalg.solve() singular matrix")
+    var rhs_values = List[Float64]()
+    for row in range(n):
+        for col in range(rhs_columns):
+            var logical = row
+            if len(b.shape) == 2:
+                logical = row * rhs_columns + col
+            rhs_values.append(get_logical_as_f64(b, logical))
+    solve_lu_factor_into(
+        lu, pivots, n, rhs_values, rhs_columns, result, vector_result
+    )
+
+
+def lu_inverse_into(a: NativeArray, mut result: NativeArray) raises:
+    if len(a.shape) != 2 or a.shape[0] != a.shape[1]:
+        raise Error("linalg.inv() requires a square rank-2 matrix")
+    comptime if CompilationTarget.is_macos():
+        if maybe_lapack_inverse_f32(a, result):
+            return
+        if maybe_lapack_inverse_f64(a, result):
+            return
+    var n = a.shape[0]
+    var lu = load_square_matrix_f64(a)
+    var pivots = make_lu_pivots(n)
+    if lu_decompose_partial_pivot(lu, pivots, n) == 0:
+        raise Error("linalg.inv() singular matrix")
+    var rhs_values = List[Float64]()
+    for row in range(n):
+        for col in range(n):
+            if row == col:
+                rhs_values.append(1.0)
+            else:
+                rhs_values.append(0.0)
+    solve_lu_factor_into(lu, pivots, n, rhs_values, n, result, False)
+
+
+def lu_det(a: NativeArray) raises -> Float64:
+    if len(a.shape) != 2 or a.shape[0] != a.shape[1]:
+        raise Error("linalg.det() requires a square rank-2 matrix")
+    var n = a.shape[0]
+    var lu = load_square_matrix_f64(a)
+    var pivots = make_lu_pivots(n)
+    var sign = lu_decompose_partial_pivot(lu, pivots, n)
+    if sign == 0:
+        return 0.0
+    var det = Float64(sign)
+    for i in range(n):
+        det *= lu[i * n + i]
+    return det
+
+
+def lu_det_into(a: NativeArray, mut result: NativeArray) raises:
+    comptime if CompilationTarget.is_macos():
+        if maybe_lapack_det_f32(a, result):
+            return
+        if maybe_lapack_det_f64(a, result):
+            return
+    set_logical_from_f64(result, 0, lu_det(a))

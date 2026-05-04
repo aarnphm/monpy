@@ -16,10 +16,6 @@ python-src = "python"
 module-name = "monpy._native"
 strip = true
 mojo-flags = []
-mojo-include-paths = [
-  "/Users/aarnphm/workspace/modular/Kernels",
-  "/Users/aarnphm/workspace/modular/max/kernels/src",
-]
 
 [tool.ruff]
 indent-width = 2

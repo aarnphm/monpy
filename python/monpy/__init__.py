@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import builtins
+import importlib
+import itertools
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -56,6 +58,62 @@ _DTYPES_BY_CODE = {
   DTYPE_FLOAT64: float64,
 }
 _DTYPES_BY_NAME = {dt.name: dt for dt in _DTYPES_BY_CODE.values()}
+_DTYPES_BY_NUMPY_KIND = {
+  ("b", 1): bool,
+  ("i", 8): int64,
+  ("f", 4): float32,
+  ("f", 8): float64,
+}
+
+_NUMERIC_PROMOTION_TABLE = {
+  (bool, bool): bool,
+  (bool, int64): int64,
+  (bool, float32): float32,
+  (bool, float64): float64,
+  (int64, bool): int64,
+  (int64, int64): int64,
+  (int64, float32): float64,
+  (int64, float64): float64,
+  (float32, bool): float32,
+  (float32, int64): float64,
+  (float32, float32): float32,
+  (float32, float64): float64,
+  (float64, bool): float64,
+  (float64, int64): float64,
+  (float64, float32): float64,
+  (float64, float64): float64,
+}
+_DIVISION_PROMOTION_TABLE = {
+  (bool, bool): float64,
+  (bool, int64): float64,
+  (bool, float32): float32,
+  (bool, float64): float64,
+  (int64, bool): float64,
+  (int64, int64): float64,
+  (int64, float32): float64,
+  (int64, float64): float64,
+  (float32, bool): float32,
+  (float32, int64): float64,
+  (float32, float32): float32,
+  (float32, float64): float64,
+  (float64, bool): float64,
+  (float64, int64): float64,
+  (float64, float32): float64,
+  (float64, float64): float64,
+}
+_BINARY_RESULT_DTYPES = {
+  OP_ADD: _NUMERIC_PROMOTION_TABLE,
+  OP_SUB: _NUMERIC_PROMOTION_TABLE,
+  OP_MUL: _NUMERIC_PROMOTION_TABLE,
+  OP_DIV: _DIVISION_PROMOTION_TABLE,
+}
+_UNARY_RESULT_DTYPES = {
+  bool: float64,
+  int64: float64,
+  float32: float32,
+  float64: float64,
+}
+_COPY_FALSE_ERROR = "unable to avoid copy while creating a monpy array as requested"
 
 newaxis = None
 nan = math.nan
@@ -66,7 +124,7 @@ e = math.e
 
 class ndarray:
   __array_priority__ = 1000
-  __slots__ = ("_base", "_dtype", "_native", "_shape", "_strides")
+  __slots__ = ("_base", "_dtype", "_native", "_owner", "_shape", "_strides")
 
   def __init__(
     _self,
@@ -76,10 +134,12 @@ class ndarray:
     dtype: DType | None = None,
     shape: tuple[int, ...] | None = None,
     strides: tuple[int, ...] | None = None,
+    owner: object | None = None,
   ) -> None:
     _self._native = native
     _self._base = base
     _self._dtype = dtype
+    _self._owner = owner
     _self._shape = shape
     _self._strides = strides
 
@@ -167,10 +227,20 @@ class ndarray:
 
     return array_api
 
-  def __dlpack__(self, *, stream: object = None, max_version: tuple[int, int] | None = None) -> object:
-    raise BufferError(
-      "monpy dlpack export is not implemented yet; cpu array memory is exposed via __array_interface__"
-    )
+  def __dlpack__(
+    self,
+    *,
+    stream: object = None,
+    max_version: tuple[int, int] | None = None,
+    dl_device: tuple[int, int] | None = None,
+    copy: builtins.bool | None = None,
+  ) -> object:
+    if stream is not None:
+      raise BufferError("cpu dlpack export requires stream=None")
+    if dl_device not in (None, (1, 0)):
+      raise BufferError("monpy only exports cpu dlpack tensors")
+    array = self.__array__(copy=False)
+    return array.__dlpack__(stream=None, max_version=max_version, dl_device=dl_device, copy=copy)
 
   def __dlpack_device__(self) -> tuple[int, int]:
     return (1, 0)
@@ -258,12 +328,14 @@ class ndarray:
 
   def __matmul__(self, other: object) -> ndarray:
     if isinstance(other, ndarray):
-      return ndarray(_native.matmul(self._native, other._native))
+      lhs, rhs = _coerce_binary_operands(self, other, OP_MUL)
+      return ndarray(_native.matmul(lhs._native, rhs._native))
     return matmul(self, other)
 
   def __rmatmul__(self, other: object) -> ndarray:
     if isinstance(other, ndarray):
-      return ndarray(_native.matmul(other._native, self._native))
+      lhs, rhs = _coerce_binary_operands(other, self, OP_MUL)
+      return ndarray(_native.matmul(lhs._native, rhs._native))
     return matmul(other, self)
 
   def __neg__(self) -> ndarray:
@@ -392,6 +464,19 @@ class _DeferredArray:
 
   def __array_namespace__(self, *, api_version: str | None = None) -> ModuleType:
     return self._materialize().__array_namespace__(api_version=api_version)
+
+  def __dlpack__(
+    self,
+    *,
+    stream: object = None,
+    max_version: tuple[int, int] | None = None,
+    dl_device: tuple[int, int] | None = None,
+    copy: builtins.bool | None = None,
+  ) -> object:
+    return self._materialize().__dlpack__(stream=stream, max_version=max_version, dl_device=dl_device, copy=copy)
+
+  def __dlpack_device__(self) -> tuple[int, int]:
+    return self._materialize().__dlpack_device__()
 
   def __len__(self) -> int:
     return len(self._materialize())
@@ -563,7 +648,13 @@ def asarray(obj: object, dtype: object = None, *, copy: builtins.bool | None = N
     target = _resolve_dtype(dtype)
     if target == obj.dtype and copy is not True:
       return obj
+    if copy is False:
+      raise ValueError(_COPY_FALSE_ERROR)
     return obj.astype(target, copy=True)
+  if _has_array_interface(obj):
+    return _array_interface_asarray(obj, dtype=dtype, copy=copy)
+  if copy is False:
+    raise ValueError(_COPY_FALSE_ERROR)
   shape, flat = _flatten(obj)
   target = _resolve_dtype(dtype) if dtype is not None else _infer_dtype(flat)
   return ndarray(
@@ -708,6 +799,7 @@ def where(condition: object, x1: object, x2: object) -> ndarray:
   cond = asarray(condition, dtype=bool)
   lhs = asarray(x1)
   rhs = asarray(x2)
+  lhs, rhs = _coerce_binary_operands(lhs, rhs, OP_ADD)
   return ndarray(_native.where(cond._native, lhs._native, rhs._native))
 
 
@@ -734,7 +826,39 @@ def argmax(x: object, axis: object = None) -> object:
 def matmul(x1: object, x2: object) -> ndarray:
   lhs = _materialize_array(_as_array_value(x1))
   rhs = _materialize_array(_as_array_value(x2))
+  lhs, rhs = _coerce_binary_operands(lhs, rhs, OP_MUL)
   return ndarray(_native.matmul(lhs._native, rhs._native))
+
+
+def diagonal(a: object, offset: int = 0, axis1: int = 0, axis2: int = 1) -> ndarray:
+  arr = asarray(a)
+  native_diagonal = getattr(_native, "diagonal", None)
+  if native_diagonal is not None:
+    return ndarray(native_diagonal(arr._native, int(offset), int(axis1), int(axis2)))
+  return _diagonal_fallback(arr, int(offset), int(axis1), int(axis2))
+
+
+def trace(
+  a: object,
+  offset: int = 0,
+  axis1: int = 0,
+  axis2: int = 1,
+  dtype: object = None,
+  out: ndarray | None = None,
+) -> object:
+  arr = asarray(a)
+  native_trace = getattr(_native, "trace", None)
+  if native_trace is not None:
+    dtype_code = -1 if dtype is None else _resolve_dtype(dtype).code
+    result = ndarray(native_trace(arr._native, int(offset), int(axis1), int(axis2), dtype_code))
+    value: object = result._scalar() if result.ndim == 0 else result
+  else:
+    value = _trace_fallback(arr, int(offset), int(axis1), int(axis2), dtype)
+  if out is not None:
+    out_arr = asarray(out)
+    out_arr[...] = value
+    return out
+  return value
 
 
 def astype(x: object, dtype: object, /, *, copy: builtins.bool = True, device: object = None) -> ndarray:
@@ -742,11 +866,10 @@ def astype(x: object, dtype: object, /, *, copy: builtins.bool = True, device: o
 
 
 def from_dlpack(x: object, /, *, device: object = None, copy: builtins.bool | None = None) -> ndarray:
-  raise BufferError("monpy cannot consume dlpack capsules yet")
-
-
-def layout_smoke() -> ndarray:
-  return ndarray(_native.layout_smoke())
+  _check_cpu_device(device)
+  numpy_oracle = _numpy_module()
+  array = numpy_oracle.from_dlpack(x, device=device, copy=copy)
+  return asarray(array, copy=True if copy is True else False)
 
 
 def __array_namespace_info__() -> object:
@@ -773,14 +896,9 @@ def __array_namespace_info__() -> object:
 
 def _binary(x1: object, x2: object, op: int, *, out: ndarray | None = None) -> object:
   if out is not None:
-    if isinstance(x1, ndarray) and isinstance(x2, ndarray):
-      if op == OP_ADD:
-        _native.add_into(out._native, x1._native, x2._native)
-        return out
-      _native.binary_into(out._native, x1._native, x2._native, op)
-      return out
     lhs = _materialize_array(_as_array_value(x1))
     rhs = _materialize_array(_as_array_value(x2))
+    lhs, rhs = _coerce_binary_operands(lhs, rhs, op)
     if op == OP_ADD:
       _native.add_into(out._native, lhs._native, rhs._native)
       return out
@@ -795,6 +913,7 @@ def _binary(x1: object, x2: object, op: int, *, out: ndarray | None = None) -> o
     return _binary_from_array(x2, x1, op, scalar_on_left=True)
   lhs = asarray(x1)
   rhs = asarray(x2)
+  lhs, rhs = _coerce_binary_operands(lhs, rhs, op)
   return ndarray(_native.binary(lhs._native, rhs._native, op))
 
 
@@ -808,12 +927,14 @@ def _binary_from_array(
   if isinstance(array, ndarray) and isinstance(other, ndarray):
     lhs = other if scalar_on_left else array
     rhs = array if scalar_on_left else other
+    lhs, rhs = _coerce_binary_operands(lhs, rhs, op)
     if op == OP_ADD:
       return ndarray(_native.add(lhs._native, rhs._native))
     return ndarray(_native.binary(lhs._native, rhs._native, op))
   if _is_array_value(other):
     lhs = _materialize_array(other) if scalar_on_left else _materialize_array(array)
     rhs = _materialize_array(array) if scalar_on_left else _materialize_array(other)  # type: ignore[arg-type]
+    lhs, rhs = _coerce_binary_operands(lhs, rhs, op)
     return ndarray(_native.binary(lhs._native, rhs._native, op))
   if _is_scalar_value(other):
     scalar_dtype = _infer_scalar_dtype_for_array(array, other)
@@ -823,8 +944,10 @@ def _binary_from_array(
     return ndarray(_native.binary_scalar(native_array._native, other, scalar_dtype.code, op, scalar_on_left))
   other_arr = asarray(other)
   if scalar_on_left:
-    return ndarray(_native.binary(other_arr._native, _materialize_array(array)._native, op))
-  return ndarray(_native.binary(_materialize_array(array)._native, other_arr._native, op))
+    lhs, rhs = _coerce_binary_operands(other_arr, _materialize_array(array), op)
+    return ndarray(_native.binary(lhs._native, rhs._native, op))
+  lhs, rhs = _coerce_binary_operands(_materialize_array(array), other_arr, op)
+  return ndarray(_native.binary(lhs._native, rhs._native, op))
 
 
 def _unary(x: object, op: int) -> object:
@@ -858,6 +981,15 @@ def _materialize_array(value: ndarray | _DeferredArray) -> ndarray:
   return value
 
 
+def _coerce_binary_operands(lhs: ndarray, rhs: ndarray, op: int) -> tuple[ndarray, ndarray]:
+  target = _result_dtype_for_binary(lhs.dtype, rhs.dtype, op)
+  if lhs.dtype != target:
+    lhs = lhs.astype(target)
+  if rhs.dtype != target:
+    rhs = rhs.astype(target)
+  return lhs, rhs
+
+
 def _can_defer_unary(value: ndarray | _DeferredArray, op: int) -> builtins.bool:
   return op == UNARY_SIN and value.dtype in (float32, float64)
 
@@ -886,23 +1018,69 @@ def _match_sin_add_mul(x1: object, x2: object) -> ndarray | None:
 
 
 def _result_dtype_for_unary(dtype_value: DType) -> DType:
-  if dtype_value == float32:
-    return float32
-  return float64
+  return _UNARY_RESULT_DTYPES[dtype_value]
 
 
 def _result_dtype_for_binary(lhs_dtype: DType, rhs_dtype: DType, op: int) -> DType:
-  if op == OP_DIV:
-    if lhs_dtype == float32 and rhs_dtype == float32:
-      return float32
-    return float64
-  if lhs_dtype == float64 or rhs_dtype == float64:
-    return float64
-  if lhs_dtype == float32 or rhs_dtype == float32:
-    return float32
-  if lhs_dtype == int64 or rhs_dtype == int64:
+  return _BINARY_RESULT_DTYPES[op][(lhs_dtype, rhs_dtype)]
+
+
+def _diagonal_fallback(arr: ndarray, offset: int, axis1: int, axis2: int) -> ndarray:
+  if arr.ndim < 2:
+    raise ValueError("diag requires an array of at least two dimensions")
+  axis1 = _normalize_axis(axis1, arr.ndim)
+  axis2 = _normalize_axis(axis2, arr.ndim)
+  if axis1 == axis2:
+    raise ValueError("axis1 and axis2 cannot be the same")
+  row_start = builtins.max(-offset, 0)
+  col_start = builtins.max(offset, 0)
+  diag_len = builtins.max(0, builtins.min(arr.shape[axis1] - row_start, arr.shape[axis2] - col_start))
+  remaining_axes = tuple(axis for axis in range(arr.ndim) if axis not in (axis1, axis2))
+  remaining_shape = tuple(arr.shape[axis] for axis in remaining_axes)
+  out_shape = remaining_shape + (diag_len,)
+  flat: list[object] = []
+  for prefix in _iter_indices(remaining_shape):
+    key: list[object] = [0] * arr.ndim
+    for axis, index in zip(remaining_axes, prefix, strict=True):
+      key[axis] = index
+    for diag_index in range(diag_len):
+      key[axis1] = row_start + diag_index
+      key[axis2] = col_start + diag_index
+      flat.append(arr[tuple(key)])
+  return ndarray(
+    _native.from_flat(flat, out_shape, arr.dtype.code),
+    dtype=arr.dtype,
+    shape=out_shape,
+    strides=_c_strides_bytes(out_shape, arr.itemsize),
+  )
+
+
+def _trace_fallback(arr: ndarray, offset: int, axis1: int, axis2: int, dtype_value: object) -> object:
+  diag = diagonal(arr, offset=offset, axis1=axis1, axis2=axis2)
+  target = _resolve_dtype(dtype_value) if dtype_value is not None else _trace_result_dtype(diag.dtype)
+  if diag.dtype != target:
+    diag = diag.astype(target)
+  if diag.ndim == 1:
+    return sum(diag)
+  out_shape = diag.shape[:-1]
+  flat: list[object] = []
+  for prefix in _iter_indices(out_shape):
+    total: object = 0.0 if target in (float32, float64) else 0
+    for diag_index in range(diag.shape[-1]):
+      total += diag[prefix + (diag_index,)]  # type: ignore[operator]
+    flat.append(total)
+  return ndarray(
+    _native.from_flat(flat, out_shape, target.code),
+    dtype=target,
+    shape=out_shape,
+    strides=_c_strides_bytes(out_shape, target.itemsize),
+  )
+
+
+def _trace_result_dtype(dtype_value: DType) -> DType:
+  if dtype_value == bool:
     return int64
-  return bool
+  return dtype_value
 
 
 def _broadcast_shapes(lhs: tuple[int, ...], rhs: tuple[int, ...]) -> tuple[int, ...]:
@@ -961,7 +1139,106 @@ def _resolve_dtype(value: object) -> DType:
     return int64
   if value is builtins.float:
     return float64
+  numpy_dtype = _numpy_dtype_from_object(value)
+  if numpy_dtype is not None:
+    return _dtype_from_numpy_dtype(numpy_dtype)
   raise NotImplementedError(f"unsupported dtype: {value!r}")
+
+
+def _numpy_module() -> object:
+  try:
+    import numpy as numpy_oracle
+  except ModuleNotFoundError as exc:
+    raise NotImplementedError("numpy is required for array interface and dlpack interop") from exc
+  return numpy_oracle
+
+
+def _numpy_dtype_from_object(value: object) -> object | None:
+  try:
+    numpy_oracle = _numpy_module()
+  except NotImplementedError:
+    return None
+  if isinstance(value, numpy_oracle.dtype):
+    return value
+  try:
+    if isinstance(value, type) and issubclass(value, numpy_oracle.generic):
+      return numpy_oracle.dtype(value)
+  except TypeError:
+    return None
+  return None
+
+
+def _numpy_dtype_for(dtype_value: DType) -> object:
+  numpy_oracle = _numpy_module()
+  return numpy_oracle.dtype(dtype_value.typestr)
+
+
+def _dtype_from_numpy_dtype(value: object) -> DType:
+  numpy_oracle = _numpy_module()
+  numpy_dtype = numpy_oracle.dtype(value)
+  if numpy_dtype.fields is not None or numpy_dtype.subdtype is not None:
+    raise NotImplementedError(f"unsupported dtype: {numpy_dtype}")
+  if not numpy_dtype.isnative:
+    raise NotImplementedError(f"unsupported dtype: {numpy_dtype}")
+  try:
+    return _DTYPES_BY_NUMPY_KIND[(numpy_dtype.kind, numpy_dtype.itemsize)]
+  except KeyError as exc:
+    raise NotImplementedError(f"unsupported dtype: {numpy_dtype}") from exc
+
+
+def _has_array_interface(obj: object) -> builtins.bool:
+  try:
+    interface = obj.__array_interface__
+  except Exception:
+    return False
+  return isinstance(interface, dict)
+
+
+def _array_interface_asarray(
+  obj: object,
+  *,
+  dtype: object,
+  copy: builtins.bool | None,
+) -> ndarray:
+  numpy_oracle = _numpy_module()
+  target = _resolve_dtype(dtype) if dtype is not None else None
+  array = numpy_oracle.asarray(obj)
+  source_dtype = _dtype_from_numpy_dtype(array.dtype)
+  if target is not None and target != source_dtype:
+    if copy is False:
+      raise ValueError(_COPY_FALSE_ERROR)
+    return _native_copy_from_numpy_array(array.astype(_numpy_dtype_for(target), copy=True))
+  if copy is True:
+    return _native_copy_from_numpy_array(array)
+  if not builtins.bool(array.flags.writeable):
+    if copy is False:
+      raise ValueError("readonly array requires copy=True")
+    return _native_copy_from_numpy_array(array)
+  return _native_external_from_numpy_array(array, source_dtype)
+
+
+def _native_external_from_numpy_array(array: object, dtype_value: DType) -> ndarray:
+  shape = tuple(int(dim) for dim in array.shape)
+  byte_strides = tuple(int(stride) for stride in array.strides)
+  for stride in byte_strides:
+    if stride % dtype_value.itemsize != 0:
+      raise NotImplementedError("array interface strides must align to dtype itemsize")
+  element_strides = tuple(stride // dtype_value.itemsize for stride in byte_strides)
+  address = int(array.__array_interface__["data"][0])
+  native = _native.from_external(address, shape, element_strides, dtype_value.code, int(array.nbytes))
+  return ndarray(native, dtype=dtype_value, shape=shape, strides=byte_strides, owner=array)
+
+
+def _native_copy_from_numpy_array(array: object) -> ndarray:
+  dtype_value = _dtype_from_numpy_dtype(array.dtype)
+  shape = tuple(int(dim) for dim in array.shape)
+  flat = array.ravel(order="C").tolist()
+  return ndarray(
+    _native.from_flat(flat, shape, dtype_value.code),
+    dtype=dtype_value,
+    shape=shape,
+    strides=_c_strides_bytes(shape, dtype_value.itemsize),
+  )
 
 
 def _infer_dtype(flat: Sequence[object]) -> DType:
@@ -1017,6 +1294,13 @@ def _is_c_contiguous_bytes(shape: tuple[int, ...], strides: tuple[int, ...], ite
       return False
     expected *= shape[axis]
   return True
+
+
+def _iter_indices(shape: tuple[int, ...]) -> Iterable[tuple[int, ...]]:
+  if not shape:
+    yield ()
+    return
+  yield from itertools.product(*(range(dim) for dim in shape))
 
 
 def _shape_from_args(shape: Sequence[int | Sequence[int]]) -> tuple[int, ...]:
@@ -1084,6 +1368,14 @@ def _normalize_index(index: object, dim: int) -> int:
   return index
 
 
+def _normalize_axis(axis: int, ndim: int) -> int:
+  if axis < 0:
+    axis += ndim
+  if axis < 0 or axis >= ndim:
+    raise ValueError("axis out of bounds")
+  return axis
+
+
 def _normalize_axes(axes: Sequence[int], ndim: int) -> tuple[int, ...]:
   normalized = tuple(axis + ndim if axis < 0 else axis for axis in axes)
   if sorted(normalized) != list(range(ndim)):
@@ -1094,6 +1386,9 @@ def _normalize_axes(axes: Sequence[int], ndim: int) -> tuple[int, ...]:
 def _check_cpu_device(device: object) -> None:
   if device not in (None, "cpu"):
     raise NotImplementedError("monpy v1 only supports cpu arrays")
+
+
+linalg = importlib.import_module(f"{__name__}.linalg")
 
 
 __all__ = [
@@ -1107,6 +1402,7 @@ __all__ = [
   "bool",
   "broadcast_to",
   "cos",
+  "diagonal",
   "divide",
   "dtype",
   "e",
@@ -1118,10 +1414,11 @@ __all__ = [
   "full",
   "inf",
   "int64",
-  "layout_smoke",
+  "linalg",
   "linspace",
   "log",
   "matmul",
+  "matrix_transpose",
   "max",
   "mean",
   "min",
@@ -1136,6 +1433,7 @@ __all__ = [
   "sin_add_mul",
   "subtract",
   "sum",
+  "trace",
   "transpose",
   "where",
   "zeros",

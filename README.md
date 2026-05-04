@@ -42,7 +42,8 @@ uv venv --python 3.11 --managed-python --clear
 uv pip install -e git+https://github.com/aarnphm/mohaus
 uv pip install --no-build-isolation -e ".[dev]"
 python -m pytest tests/python
-python benchmarks/bench_array_core.py
+python benchmarks/bench_array_core.py --rounds 3
+python benchmarks/bench_array_core.py --format csv --no-progress
 ```
 
 If you have a custom built Mojo, set `MOHAUS_MOJO` envvar:
