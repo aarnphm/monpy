@@ -9,42 +9,41 @@ from create import (
     array_matmul_method_ops,
     array_mul_method_ops,
     array_sub_method_ops,
-    binary_ops,
+    asarray_from_numpy_ops,
+    astype_ops,
     binary_into_ops,
+    binary_ops,
+    binary_scalar_ops,
+    broadcast_to_ops,
+    copy_from_external_ops,
+    copyto_ops,
     det_ops,
+    diagonal_ops,
     empty_ops,
+    fill_ops,
     from_external_ops,
     from_flat_ops,
     full_ops,
     inv_ops,
     linspace_ops,
-    asarray_from_numpy_ops,
-    binary_scalar_ops,
-    copy_from_external_ops,
+    materialize_c_contiguous_ops,
+    matmul_ops,
+    reduce_ops,
+    reshape_ops,
     result_dtype_for_binary_py_ops,
+    result_dtype_for_reduction_py_ops,
     result_dtype_for_unary_py_ops,
-    solve_ops,
     sin_add_mul_ops,
+    slice_1d_ops,
+    slice_ops,
+    solve_ops,
+    trace_ops,
     transpose_full_reverse_ops,
+    transpose_ops,
     unary_ops,
     where_ops,
 )
 from array import Array
-from matmul import matmul
-from reductions import reduce, result_dtype_for_reduction_py
-from views import (
-    astype,
-    broadcast_to,
-    copyto,
-    diagonal,
-    fill,
-    materialize_c_contiguous,
-    reshape,
-    slice,
-    slice_1d,
-    trace,
-    transpose,
-)
 
 
 # Keep this file as the CPython extension boundary. Mojo modules stay flat and
@@ -76,7 +75,7 @@ def PyInit__native() -> PythonObject:
             .def_method[array_mul_method_ops]("mul")
             .def_method[array_div_method_ops]("div")
             .def_method[array_matmul_method_ops]("matmul")
-            .def_method[slice_1d]("slice_1d_method")
+            .def_method[slice_1d_ops]("slice_1d_method")
             .def_method[transpose_full_reverse_ops]("transpose_full_reverse_method")
         )
         module.def_function[empty_ops]("empty")
@@ -87,32 +86,32 @@ def PyInit__native() -> PythonObject:
         module.def_function[asarray_from_numpy_ops]("asarray_from_numpy")
         module.def_function[arange_ops]("arange")
         module.def_function[linspace_ops]("linspace")
-        module.def_function[reshape]("reshape")
-        module.def_function[transpose]("transpose")
+        module.def_function[reshape_ops]("reshape")
+        module.def_function[transpose_ops]("transpose")
         module.def_function[transpose_full_reverse_ops]("transpose_full_reverse")
-        module.def_function[slice]("slice")
-        module.def_function[broadcast_to]("broadcast_to")
-        module.def_function[astype]("astype")
-        module.def_function[materialize_c_contiguous]("materialize_c_contiguous")
-        module.def_function[diagonal]("diagonal")
-        module.def_function[trace]("trace")
+        module.def_function[slice_ops]("slice")
+        module.def_function[broadcast_to_ops]("broadcast_to")
+        module.def_function[astype_ops]("astype")
+        module.def_function[materialize_c_contiguous_ops]("materialize_c_contiguous")
+        module.def_function[diagonal_ops]("diagonal")
+        module.def_function[trace_ops]("trace")
         module.def_function[unary_ops]("unary")
         module.def_function[binary_ops]("binary")
         module.def_function[binary_into_ops]("binary_into")
         module.def_function[binary_scalar_ops]("binary_scalar")
         module.def_function[sin_add_mul_ops]("sin_add_mul")
         module.def_function[where_ops]("where")
-        module.def_function[reduce]("reduce")
+        module.def_function[reduce_ops]("reduce")
         module.def_function[result_dtype_for_unary_py_ops]("_result_dtype_for_unary")
         module.def_function[result_dtype_for_binary_py_ops]("_result_dtype_for_binary")
-        module.def_function[result_dtype_for_reduction_py]("_result_dtype_for_reduction")
-        module.def_function[matmul]("matmul")
+        module.def_function[result_dtype_for_reduction_py_ops]("_result_dtype_for_reduction")
+        module.def_function[matmul_ops]("matmul")
         module.def_function[solve_ops]("linalg_solve")
         module.def_function[inv_ops]("linalg_inv")
         module.def_function[det_ops]("linalg_det")
-        module.def_function[fill]("fill")
-        module.def_function[copyto]("copyto")
-        module.def_function[slice_1d]("slice_1d")
+        module.def_function[fill_ops]("fill")
+        module.def_function[copyto_ops]("copyto")
+        module.def_function[slice_1d_ops]("slice_1d")
         return module.finalize()
     except e:
         abort(String("failed to create Python module: ", e))
