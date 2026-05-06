@@ -7,15 +7,17 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: array-core-benchmark-${{ github.ref }}-${{ matrix.os }}
-  cancel-in-progress: false
-
 jobs:
   arrays:
     name: bench array core (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    # Per-OS concurrency group so a Linux re-run doesn't cancel an in-flight
+    # macOS run (and vice versa). `matrix.os` is only addressable inside the
+    # job, not at workflow level, so concurrency lives here.
+    concurrency:
+      group: array-core-benchmark-${{ github.ref }}-${{ matrix.os }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
