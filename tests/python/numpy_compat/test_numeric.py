@@ -173,6 +173,40 @@ def test_matmul_dense_transpose_rhs_matches_numpy_and_uses_fast_path_on_macos() 
 
 
 @pytest.mark.parametrize(
+  ("monpy_dtype", "numpy_dtype", "rtol"),
+  [(np.float32, numpy.float32, 1e-4), (np.float64, numpy.float64, 1e-12)],
+)
+def test_matmul_rank1_shapes_match_numpy_and_use_gemv_on_macos(
+  monpy_dtype: np.DType,
+  numpy_dtype: type[numpy.generic],
+  rtol: float,
+) -> None:
+  mat_oracle = (numpy.arange(18 * 12, dtype=numpy_dtype).reshape(18, 12) / 10).astype(
+    numpy_dtype,
+    copy=False,
+  )
+  rhs_oracle = (numpy.arange(20 * 12, dtype=numpy_dtype).reshape(20, 12) / 7).astype(
+    numpy_dtype,
+    copy=False,
+  )
+  vec_oracle = numpy.linspace(0.1, 1.2, 12, dtype=numpy_dtype)
+  lhs = np.asarray(mat_oracle, dtype=monpy_dtype, copy=False)
+  rhs_t = np.asarray(rhs_oracle.T, dtype=monpy_dtype, copy=False)
+  vec = np.asarray(vec_oracle, dtype=monpy_dtype, copy=False)
+
+  matvec = lhs @ vec
+  vecmat = vec @ rhs_t
+
+  assert_same_shape_dtype(matvec, mat_oracle @ vec_oracle)
+  assert_same_values(matvec, mat_oracle @ vec_oracle, rtol=rtol, atol=rtol)
+  assert_same_shape_dtype(vecmat, vec_oracle @ rhs_oracle.T)
+  assert_same_values(vecmat, vec_oracle @ rhs_oracle.T, rtol=rtol, atol=rtol)
+  if sys.platform == "darwin":
+    assert matvec._native.used_accelerate()
+    assert vecmat._native.used_accelerate()
+
+
+@pytest.mark.parametrize(
   ("monpy_dtype", "numpy_dtype"),
   [(np.int64, numpy.int64), (np.float32, numpy.float32), (np.float64, numpy.float64)],
 )

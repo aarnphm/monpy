@@ -64,6 +64,19 @@ _DTYPES_BY_NUMPY_KIND = {
   ("f", 4): float32,
   ("f", 8): float64,
 }
+_DTYPES_BY_TYPESTR = {
+  "|b1": bool,
+  "<i8": int64,
+  ">i8": int64,
+  "=i8": int64,
+  "<f4": float32,
+  ">f4": float32,
+  "=f4": float32,
+  "<f8": float64,
+  ">f8": float64,
+  "=f8": float64,
+}
+_NUMPY_NDARRAY_TYPE: object = None
 
 _NUMERIC_PROMOTION_TABLE = {
   (bool, bool): bool,
@@ -185,7 +198,14 @@ class ndarray:
 
   @property
   def T(self) -> ndarray:
-    return self.transpose()
+    cached_shape = self._shape
+    if cached_shape is not None:
+      ndim = len(cached_shape)
+    else:
+      ndim = int(self._native.ndim())
+    if ndim < 2:
+      return self
+    return ndarray(_native.transpose_full_reverse(self._native), base=self)
 
   @property
   def mT(self) -> ndarray:
@@ -303,18 +323,30 @@ class ndarray:
     return float(self._scalar())
 
   def __add__(self, other: object) -> object:
+    if type(other) is ndarray:
+      self_dtype = self._dtype
+      if self_dtype is not None and self_dtype is other._dtype:
+        return ndarray(_native.binary(self._native, other._native, OP_ADD))
     return _binary_from_array(self, other, OP_ADD, scalar_on_left=False)
 
   def __radd__(self, other: object) -> object:
     return _binary_from_array(self, other, OP_ADD, scalar_on_left=True)
 
   def __sub__(self, other: object) -> object:
+    if type(other) is ndarray:
+      self_dtype = self._dtype
+      if self_dtype is not None and self_dtype is other._dtype:
+        return ndarray(_native.binary(self._native, other._native, OP_SUB))
     return _binary_from_array(self, other, OP_SUB, scalar_on_left=False)
 
   def __rsub__(self, other: object) -> object:
     return _binary_from_array(self, other, OP_SUB, scalar_on_left=True)
 
   def __mul__(self, other: object) -> object:
+    if type(other) is ndarray:
+      self_dtype = self._dtype
+      if self_dtype is not None and self_dtype is other._dtype:
+        return ndarray(_native.binary(self._native, other._native, OP_MUL))
     return _binary_from_array(self, other, OP_MUL, scalar_on_left=False)
 
   def __rmul__(self, other: object) -> object:
@@ -637,10 +669,10 @@ def array(obj: object, dtype: object = None, *, copy: builtins.bool | None = Tru
 
 
 def asarray(obj: object, dtype: object = None, *, copy: builtins.bool | None = None, device: object = None) -> ndarray:
-  _check_cpu_device(device)
-  if isinstance(obj, _DeferredArray):
-    return asarray(obj._materialize(), dtype=dtype, copy=copy, device=device)
-  if isinstance(obj, ndarray):
+  if device is not None and device != "cpu":
+    raise NotImplementedError("monpy v1 only supports cpu arrays")
+  obj_type = type(obj)
+  if obj_type is ndarray:
     if dtype is None:
       if copy is True:
         return obj.astype(obj.dtype, copy=True)
@@ -651,6 +683,13 @@ def asarray(obj: object, dtype: object = None, *, copy: builtins.bool | None = N
     if copy is False:
       raise ValueError(_COPY_FALSE_ERROR)
     return obj.astype(target, copy=True)
+  global _NUMPY_NDARRAY_TYPE
+  if _NUMPY_NDARRAY_TYPE is None:
+    _NUMPY_NDARRAY_TYPE = _numpy_module().ndarray
+  if isinstance(obj, _NUMPY_NDARRAY_TYPE):
+    return _array_interface_asarray(obj, dtype=dtype, copy=copy)
+  if isinstance(obj, _DeferredArray):
+    return asarray(obj._materialize(), dtype=dtype, copy=copy, device=device)
   if _has_array_interface(obj):
     return _array_interface_asarray(obj, dtype=dtype, copy=copy)
   if copy is False:
@@ -866,10 +905,15 @@ def astype(x: object, dtype: object, /, *, copy: builtins.bool = True, device: o
 
 
 def from_dlpack(x: object, /, *, device: object = None, copy: builtins.bool | None = None) -> ndarray:
-  _check_cpu_device(device)
-  numpy_oracle = _numpy_module()
-  array = numpy_oracle.from_dlpack(x, device=device, copy=copy)
-  return asarray(array, copy=True if copy is True else False)
+  if device is not None and device != "cpu":
+    raise NotImplementedError("monpy v1 only supports cpu arrays")
+  global _NUMPY_NDARRAY_TYPE
+  if _NUMPY_NDARRAY_TYPE is None:
+    _NUMPY_NDARRAY_TYPE = _numpy_module().ndarray
+  if isinstance(x, _NUMPY_NDARRAY_TYPE):
+    return _array_interface_asarray(x, dtype=None, copy=True if copy is True else False)
+  array = _numpy_module().from_dlpack(x, device=device, copy=copy)
+  return _array_interface_asarray(array, dtype=None, copy=True if copy is True else False)
 
 
 def __array_namespace_info__() -> object:
@@ -896,6 +940,11 @@ def __array_namespace_info__() -> object:
 
 def _binary(x1: object, x2: object, op: int, *, out: ndarray | None = None) -> object:
   if out is not None:
+    if type(x1) is ndarray and type(x2) is ndarray:
+      lhs_dtype = x1._dtype
+      if lhs_dtype is not None and lhs_dtype is x2._dtype:
+        _native.binary_into(out._native, x1._native, x2._native, op)
+        return out
     lhs = _materialize_array(_as_array_value(x1))
     rhs = _materialize_array(_as_array_value(x2))
     lhs, rhs = _coerce_binary_operands(lhs, rhs, op)
@@ -924,6 +973,8 @@ def _binary_from_array(
   if isinstance(array, ndarray) and isinstance(other, ndarray):
     lhs = other if scalar_on_left else array
     rhs = array if scalar_on_left else other
+    if lhs.dtype is rhs.dtype:
+      return ndarray(_native.binary(lhs._native, rhs._native, op))
     lhs, rhs = _coerce_binary_operands(lhs, rhs, op)
     return ndarray(_native.binary(lhs._native, rhs._native, op))
   if _is_array_value(other):
@@ -1196,44 +1247,99 @@ def _array_interface_asarray(
   copy: builtins.bool | None,
 ) -> ndarray:
   numpy_oracle = _numpy_module()
+  global _NUMPY_NDARRAY_TYPE
+  if _NUMPY_NDARRAY_TYPE is None:
+    _NUMPY_NDARRAY_TYPE = numpy_oracle.ndarray
+  if isinstance(obj, _NUMPY_NDARRAY_TYPE):
+    array = obj
+  else:
+    array = numpy_oracle.asarray(obj)
+  iface = array.__array_interface__
+  source_dtype = _DTYPES_BY_TYPESTR.get(iface["typestr"])
+  if source_dtype is None:
+    source_dtype = _dtype_from_numpy_dtype(array.dtype)
   target = _resolve_dtype(dtype) if dtype is not None else None
-  array = numpy_oracle.asarray(obj)
-  source_dtype = _dtype_from_numpy_dtype(array.dtype)
   if target is not None and target != source_dtype:
     if copy is False:
       raise ValueError(_COPY_FALSE_ERROR)
-    return _copy_from_numpy_array(array.astype(_numpy_dtype_for(target), copy=True))
+    converted = array.astype(_numpy_dtype_for(target), copy=True)
+    return _copy_from_numpy_array(converted)
+  data_address, readonly = iface["data"]
   if copy is True:
-    return _copy_from_numpy_array(array)
-  if not builtins.bool(array.flags.writeable):
+    return _copy_from_numpy_array(array, dtype_value=source_dtype, iface=iface)
+  if readonly:
     if copy is False:
       raise ValueError("readonly array requires copy=True")
-    return _copy_from_numpy_array(array)
-  return _external_from_numpy_array(array, source_dtype)
+    return _copy_from_numpy_array(array, dtype_value=source_dtype, iface=iface)
+  return _external_from_numpy_array(array, source_dtype, iface=iface, data_address=data_address)
 
 
-def _external_from_numpy_array(array: object, dtype_value: DType) -> ndarray:
-  shape = tuple(int(dim) for dim in array.shape)
-  byte_strides = tuple(int(stride) for stride in array.strides)
-  for stride in byte_strides:
-    if stride % dtype_value.itemsize != 0:
-      raise NotImplementedError("array interface strides must align to dtype itemsize")
-  element_strides = tuple(stride // dtype_value.itemsize for stride in byte_strides)
-  address = int(array.__array_interface__["data"][0])
-  native = _native.from_external(address, shape, element_strides, dtype_value.code, int(array.nbytes))
+def _external_from_numpy_array(
+  array: object,
+  dtype_value: DType,
+  *,
+  iface: dict[str, object] | None = None,
+  data_address: int | None = None,
+) -> ndarray:
+  if iface is None:
+    iface = array.__array_interface__
+  shape = iface["shape"]
+  raw_strides = iface["strides"]
+  itemsize = dtype_value.itemsize
+  if raw_strides is None:
+    byte_strides = _c_strides_bytes(shape, itemsize)
+  else:
+    byte_strides = raw_strides
+    for stride in byte_strides:
+      if stride % itemsize != 0:
+        raise NotImplementedError("array interface strides must align to dtype itemsize")
+  element_strides = tuple(stride // itemsize for stride in byte_strides)
+  if data_address is None:
+    data_address = iface["data"][0]
+  byte_len = math.prod(shape) * itemsize
+  native = _native.from_external(data_address, shape, element_strides, dtype_value.code, byte_len)
   return ndarray(native, dtype=dtype_value, shape=shape, strides=byte_strides, owner=array)
 
 
-def _copy_from_numpy_array(array: object) -> ndarray:
-  dtype_value = _dtype_from_numpy_dtype(array.dtype)
-  shape = tuple(int(dim) for dim in array.shape)
-  flat = array.ravel(order="C").tolist()
+def _copy_from_numpy_array(
+  array: object,
+  *,
+  dtype_value: DType | None = None,
+  iface: dict[str, object] | None = None,
+) -> ndarray:
+  if iface is None:
+    iface = array.__array_interface__
+  if dtype_value is None:
+    dtype_value = _DTYPES_BY_TYPESTR.get(iface["typestr"])
+    if dtype_value is None:
+      dtype_value = _dtype_from_numpy_dtype(array.dtype)
+  shape = iface["shape"]
+  raw_strides = iface["strides"]
+  itemsize = dtype_value.itemsize
+  if raw_strides is None:
+    element_strides = _c_strides_elements(shape)
+  else:
+    for stride in raw_strides:
+      if stride % itemsize != 0:
+        raise NotImplementedError("array interface strides must align to dtype itemsize")
+    element_strides = tuple(stride // itemsize for stride in raw_strides)
+  data_address = iface["data"][0]
+  byte_len = math.prod(shape) * itemsize
   return ndarray(
-    _native.from_flat(flat, shape, dtype_value.code),
+    _native.copy_from_external(data_address, shape, element_strides, dtype_value.code, byte_len),
     dtype=dtype_value,
     shape=shape,
-    strides=_c_strides_bytes(shape, dtype_value.itemsize),
+    strides=_c_strides_bytes(shape, itemsize),
   )
+
+
+def _c_strides_elements(shape: tuple[int, ...]) -> tuple[int, ...]:
+  strides = [1] * len(shape)
+  s = 1
+  for axis in range(len(shape) - 1, -1, -1):
+    strides[axis] = s
+    s *= shape[axis]
+  return tuple(strides)
 
 
 def _infer_dtype(flat: Sequence[object]) -> DType:

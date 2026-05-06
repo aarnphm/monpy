@@ -14,10 +14,12 @@ from create import (
     inv,
     linspace,
     binary_scalar,
+    copy_from_external,
     result_dtype_for_binary_py,
     result_dtype_for_unary_py,
     solve,
     sin_add_mul,
+    transpose_full_reverse,
     unary,
     where,
 )
@@ -70,10 +72,12 @@ def PyInit__native() -> PythonObject:
         module.def_function[full]("full")
         module.def_function[from_flat]("from_flat")
         module.def_function[from_external]("from_external")
+        module.def_function[copy_from_external]("copy_from_external")
         module.def_function[arange]("arange")
         module.def_function[linspace]("linspace")
         module.def_function[reshape]("reshape")
         module.def_function[transpose]("transpose")
+        module.def_function[transpose_full_reverse]("transpose_full_reverse")
         module.def_function[slice]("slice")
         module.def_function[broadcast_to]("broadcast_to")
         module.def_function[astype]("astype")

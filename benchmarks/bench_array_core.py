@@ -249,6 +249,8 @@ def build_cases(*, vector_size: int, matrix_sizes: Sequence[int], linalg_sizes: 
       rhs_np = scaled_matrix(size, dtype)
       lhs_mp = mnp.asarray(lhs_np.tolist(), dtype=target)
       rhs_mp = mnp.asarray(rhs_np.tolist(), dtype=target)
+      vec_np = np.linspace(0.1, 1.0, size, dtype=dtype)
+      vec_mp = mnp.asarray(vec_np.tolist(), dtype=target)
       lhs_f_np = np.asfortranarray(lhs_np)
       lhs_f_mp = mnp.asarray(lhs_f_np, dtype=target, copy=False)
       rhs_t_np = rhs_np.T
@@ -262,6 +264,22 @@ def build_cases(*, vector_size: int, matrix_sizes: Sequence[int], linalg_sizes: 
             f"matmul_{size}_{suffix}",
             lambda lhs=lhs_mp, rhs=rhs_mp: lhs @ rhs,
             lambda lhs=lhs_np, rhs=rhs_np: lhs @ rhs,
+            rtol=tolerance,
+            atol=tolerance,
+          ),
+          BenchCase(
+            "matmul",
+            f"matvec_{size}_{suffix}",
+            lambda lhs=lhs_mp, vec=vec_mp: lhs @ vec,
+            lambda lhs=lhs_np, vec=vec_np: lhs @ vec,
+            rtol=tolerance,
+            atol=tolerance,
+          ),
+          BenchCase(
+            "matmul",
+            f"vecmat_{size}_{suffix}",
+            lambda vec=vec_mp, rhs=rhs_mp: vec @ rhs,
+            lambda vec=vec_np, rhs=rhs_np: vec @ rhs,
             rtol=tolerance,
             atol=tolerance,
           ),

@@ -1,4 +1,5 @@
 from std.collections import List
+from std.memory import memcpy
 from std.os import abort
 from std.python import PythonObject
 
@@ -526,6 +527,16 @@ def set_contiguous_from_f64(
 def copy_c_contiguous(src: Array) raises -> Array:
     var shape = clone_int_list(src.shape)
     var result = make_empty_array(src.dtype_code, shape^)
+    if is_c_contiguous(src):
+        var item_bytes = item_size(src.dtype_code)
+        var src_byte_offset = src.offset_elems * item_bytes
+        var byte_count = src.size_value * item_bytes
+        memcpy(
+            dest=result.data,
+            src=src.data + src_byte_offset,
+            count=byte_count,
+        )
+        return result^
     for i in range(src.size_value):
         var physical = physical_offset(src, i)
         if src.dtype_code == DTYPE_BOOL:

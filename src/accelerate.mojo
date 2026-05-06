@@ -44,9 +44,45 @@ comptime cblas_sgemm_type = def(
     Int32,
 ) thin -> None
 
+comptime cblas_dgemv_type = def(
+    _CBLASOrder,
+    _CBLASTranspose,
+    Int32,
+    Int32,
+    Float64,
+    UnsafePointer[Float64, ImmutAnyOrigin],
+    Int32,
+    UnsafePointer[Float64, ImmutAnyOrigin],
+    Int32,
+    Float64,
+    UnsafePointer[Float64, MutAnyOrigin],
+    Int32,
+) thin -> None
+
+comptime cblas_sgemv_type = def(
+    _CBLASOrder,
+    _CBLASTranspose,
+    Int32,
+    Int32,
+    Float32,
+    UnsafePointer[Float32, ImmutAnyOrigin],
+    Int32,
+    UnsafePointer[Float32, ImmutAnyOrigin],
+    Int32,
+    Float32,
+    UnsafePointer[Float32, MutAnyOrigin],
+    Int32,
+) thin -> None
+
 comptime vv_f32_type = def(
     UnsafePointer[Float32, MutAnyOrigin],
     UnsafePointer[Float32, ImmutAnyOrigin],
+    UnsafePointer[Int32, ImmutAnyOrigin],
+) thin -> None
+
+comptime vv_f64_type = def(
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Float64, ImmutAnyOrigin],
     UnsafePointer[Int32, ImmutAnyOrigin],
 ) thin -> None
 
@@ -147,6 +183,16 @@ def get_cblas_f32_function() raises -> cblas_sgemm_type:
 
 
 @always_inline
+def get_cblas_gemv_f64_function() raises -> cblas_dgemv_type:
+    return get_accelerate_function["cblas_dgemv", cblas_dgemv_type]()
+
+
+@always_inline
+def get_cblas_gemv_f32_function() raises -> cblas_sgemv_type:
+    return get_accelerate_function["cblas_sgemv", cblas_sgemv_type]()
+
+
+@always_inline
 def get_lapack_sgesv_function() raises -> lapack_sgesv_type:
     return get_accelerate_function["sgesv_", lapack_sgesv_type]()
 
@@ -184,6 +230,23 @@ def call_vv_f32[
 
 
 @always_inline
+def call_vv_f64[
+    func_name: StaticString
+](
+    out_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    src_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    count_value: Int,
+) raises:
+    var function = get_accelerate_function[func_name, vv_f64_type]()
+    var count = Int32(count_value)
+    function(
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](out_ptr),
+        rebind[UnsafePointer[Float64, ImmutAnyOrigin]](src_ptr),
+        rebind[UnsafePointer[Int32, ImmutAnyOrigin]](UnsafePointer(to=count)),
+    )
+
+
+@always_inline
 def lapack_sgesv(
     n_value: Int,
     rhs_columns_value: Int,
@@ -203,14 +266,10 @@ def lapack_sgesv(
             UnsafePointer(to=rhs_columns)
         ),
         rebind[UnsafePointer[Float32, MutAnyOrigin]](a_ptr),
-        rebind[UnsafePointer[Int32, MutAnyOrigin]](
-            UnsafePointer(to=leading_a)
-        ),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=leading_a)),
         rebind[UnsafePointer[Int32, MutAnyOrigin]](pivot_ptr),
         rebind[UnsafePointer[Float32, MutAnyOrigin]](b_ptr),
-        rebind[UnsafePointer[Int32, MutAnyOrigin]](
-            UnsafePointer(to=leading_b)
-        ),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=leading_b)),
         rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
     )
     return Int(info)
@@ -236,14 +295,10 @@ def lapack_dgesv(
             UnsafePointer(to=rhs_columns)
         ),
         rebind[UnsafePointer[Float64, MutAnyOrigin]](a_ptr),
-        rebind[UnsafePointer[Int32, MutAnyOrigin]](
-            UnsafePointer(to=leading_a)
-        ),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=leading_a)),
         rebind[UnsafePointer[Int32, MutAnyOrigin]](pivot_ptr),
         rebind[UnsafePointer[Float64, MutAnyOrigin]](b_ptr),
-        rebind[UnsafePointer[Int32, MutAnyOrigin]](
-            UnsafePointer(to=leading_b)
-        ),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=leading_b)),
         rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
     )
     return Int(info)
@@ -348,6 +403,33 @@ def cblas_sgemm_row_major_ld(
 
 
 @always_inline
+def cblas_sgemv_row_major_ld(
+    rows: Int,
+    cols: Int,
+    y_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    a_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    x_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    transpose_a: Bool,
+    lda: Int,
+) raises:
+    var sgemv = get_cblas_gemv_f32_function()
+    sgemv(
+        _CBLASOrder.ROW_MAJOR,
+        cblas_transpose_flag(transpose_a),
+        Int32(rows),
+        Int32(cols),
+        1.0,
+        rebind[UnsafePointer[Float32, ImmutAnyOrigin]](a_ptr),
+        Int32(lda),
+        rebind[UnsafePointer[Float32, ImmutAnyOrigin]](x_ptr),
+        Int32(1),
+        0.0,
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](y_ptr),
+        Int32(1),
+    )
+
+
+@always_inline
 def cblas_dgemm_row_major(
     m: Int,
     n: Int,
@@ -391,4 +473,31 @@ def cblas_dgemm_row_major_ld(
         0.0,
         rebind[UnsafePointer[Float64, MutAnyOrigin]](c_ptr),
         Int32(ldc),
+    )
+
+
+@always_inline
+def cblas_dgemv_row_major_ld(
+    rows: Int,
+    cols: Int,
+    y_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    a_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    x_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    transpose_a: Bool,
+    lda: Int,
+) raises:
+    var dgemv = get_cblas_gemv_f64_function()
+    dgemv(
+        _CBLASOrder.ROW_MAJOR,
+        cblas_transpose_flag(transpose_a),
+        Int32(rows),
+        Int32(cols),
+        1.0,
+        rebind[UnsafePointer[Float64, ImmutAnyOrigin]](a_ptr),
+        Int32(lda),
+        rebind[UnsafePointer[Float64, ImmutAnyOrigin]](x_ptr),
+        Int32(1),
+        0.0,
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](y_ptr),
+        Int32(1),
     )

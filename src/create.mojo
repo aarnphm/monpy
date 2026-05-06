@@ -40,6 +40,7 @@ from array import (
     Array,
     broadcast_shape,
     clone_int_list,
+    copy_c_contiguous,
     fill_all_from_py,
     get_broadcast_as_bool,
     get_broadcast_as_f64,
@@ -53,7 +54,6 @@ from array import (
     make_empty_array,
     make_external_array,
     make_view_array,
-    copy_c_contiguous,
     result_dtype_for_binary,
     result_dtype_for_linalg,
     result_dtype_for_linalg_binary,
@@ -121,6 +121,33 @@ def from_external(
     var result = make_external_array(
         Int(py=dtype_obj), shape^, strides^, 0, data, Int(py=byte_len_obj)
     )
+    return PythonObject(alloc=result^)
+
+
+def copy_from_external(
+    data_address_obj: PythonObject,
+    shape_obj: PythonObject,
+    strides_obj: PythonObject,
+    dtype_obj: PythonObject,
+    byte_len_obj: PythonObject,
+) raises -> PythonObject:
+    # One-shot copy: build an external view of `address` with the supplied
+    # shape/strides, then materialize a c-contiguous copy. Saves an FFI
+    # round-trip vs calling `from_external` then `materialize_c_contiguous`
+    # back-to-back. Hits the memcpy fast path when the source is already
+    # c-contig, otherwise the elementwise walk in `copy_c_contiguous`.
+    var address = Int(py=data_address_obj)
+    if address == 0:
+        raise Error("array interface data pointer is null")
+    var shape = int_list_from_py(shape_obj)
+    var strides = int_list_from_py(strides_obj)
+    var data = UnsafePointer[UInt8, MutExternalOrigin](
+        unsafe_from_address=address
+    )
+    var external = make_external_array(
+        Int(py=dtype_obj), shape^, strides^, 0, data, Int(py=byte_len_obj)
+    )
+    var result = copy_c_contiguous(external)
     return PythonObject(alloc=result^)
 
 
@@ -214,6 +241,26 @@ def transpose(
             raise Error("transpose() axis out of bounds")
         shape.append(src[].shape[axis])
         strides.append(src[].strides[axis])
+    var result = make_view_array(
+        src[], shape^, strides^, src[].size_value, src[].offset_elems
+    )
+    return PythonObject(alloc=result^)
+
+
+def transpose_full_reverse(
+    array_obj: PythonObject,
+) raises -> PythonObject:
+    # Fast path for `.T` on rank>=2: reverse every axis without crossing
+    # Python boundaries for an axes tuple. Avoids `int_list_from_py` and
+    # the per-axis bounds check; `make_view_array` validates shape/strides
+    # match.
+    var src = array_obj.downcast_value_ptr[Array]()
+    var ndim = len(src[].shape)
+    var shape = List[Int]()
+    var strides = List[Int]()
+    for i in range(ndim - 1, -1, -1):
+        shape.append(src[].shape[i])
+        strides.append(src[].strides[i])
     var result = make_view_array(
         src[], shape^, strides^, src[].size_value, src[].offset_elems
     )
@@ -445,23 +492,20 @@ def binary(
     var lhs = lhs_obj.downcast_value_ptr[Array]()
     var rhs = rhs_obj.downcast_value_ptr[Array]()
     var op = Int(py=op_obj)
-    if same_shape(lhs[].shape, rhs[].shape):
-        var same_shape_out = clone_int_list(lhs[].shape)
-        var same_shape_dtype = result_dtype_for_binary(
-            lhs[].dtype_code, rhs[].dtype_code, op
-        )
-        var same_shape_result = make_empty_array(
-            same_shape_dtype, same_shape_out^
-        )
-        if maybe_binary_same_shape_contiguous(
-            lhs[], rhs[], same_shape_result, op
-        ):
-            return PythonObject(alloc=same_shape_result^)
-    var shape = broadcast_shape(lhs[], rhs[])
     var dtype_code = result_dtype_for_binary(
         lhs[].dtype_code, rhs[].dtype_code, op
     )
+    # One allocation: prefer the same-shape path (which is the common case)
+    # and only fall back to broadcast_shape when the inputs disagree on shape.
+    var same = same_shape(lhs[].shape, rhs[].shape)
+    var shape: List[Int]
+    if same:
+        shape = clone_int_list(lhs[].shape)
+    else:
+        shape = broadcast_shape(lhs[], rhs[])
     var result = make_empty_array(dtype_code, shape^)
+    if same and maybe_binary_same_shape_contiguous(lhs[], rhs[], result, op):
+        return PythonObject(alloc=result^)
     if maybe_binary_contiguous(lhs[], rhs[], result, op):
         return PythonObject(alloc=result^)
     for i in range(result.size_value):

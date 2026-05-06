@@ -1,5 +1,5 @@
 [build-system]
-requires = ["mohaus>=0.1,<0.2", "mojo==1.0.0.dev0"]
+requires = ["mohaus>=0.1,<0.2", "mojo"]
 build-backend = "mohaus.backend"
 
 [project]

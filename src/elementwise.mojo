@@ -4,8 +4,11 @@ from std.sys import CompilationTarget, simd_width_of
 
 from accelerate import (
     call_vv_f32,
+    call_vv_f64,
     cblas_dgemm_row_major_ld,
+    cblas_dgemv_row_major_ld,
     cblas_sgemm_row_major_ld,
+    cblas_sgemv_row_major_ld,
     lapack_dgesv,
     lapack_dgetrf,
     lapack_sgesv,
@@ -207,6 +210,9 @@ def maybe_unary_contiguous(
     if op == UNARY_LOG:
         return False
     if src.dtype_code == DTYPE_FLOAT64 and result.dtype_code == DTYPE_FLOAT64:
+        comptime if CompilationTarget.is_macos():
+            if maybe_unary_accelerate_f64(src, result, op):
+                return True
         var src_ptr = contiguous_f64_ptr(src)
         var out_ptr = contiguous_f64_ptr(result)
         comptime width = simd_width_of[DType.float64]()
@@ -236,6 +242,23 @@ def maybe_unary_accelerate_f32(
         call_vv_f32["vvexpf"](out_ptr, src_ptr, src.size_value)
     elif op == UNARY_LOG:
         call_vv_f32["vvlogf"](out_ptr, src_ptr, src.size_value)
+    else:
+        return False
+    result.backend_code = BACKEND_ACCELERATE
+    return True
+
+
+def maybe_unary_accelerate_f64(
+    src: Array, mut result: Array, op: Int
+) raises -> Bool:
+    var src_ptr = contiguous_f64_ptr(src)
+    var out_ptr = contiguous_f64_ptr(result)
+    if op == UNARY_SIN:
+        call_vv_f64["vvsin"](out_ptr, src_ptr, src.size_value)
+    elif op == UNARY_COS:
+        call_vv_f64["vvcos"](out_ptr, src_ptr, src.size_value)
+    elif op == UNARY_EXP:
+        call_vv_f64["vvexp"](out_ptr, src_ptr, src.size_value)
     else:
         return False
     result.backend_code = BACKEND_ACCELERATE
@@ -572,6 +595,268 @@ def maybe_binary_row_broadcast_contiguous(
     return True
 
 
+@fieldwise_init
+struct StridedInnerChoice(ImplicitlyCopyable, Movable):
+    var axis: Int
+    var kind: Int  # 0=scalar, 1=full-SIMD, 2=SIMD-load+scatter
+
+
+def pick_inner_axis_for_strided_binary(
+    lhs: Array, rhs: Array, result: Array
+) raises -> StridedInnerChoice:
+    # Pick the inner axis for a same-shape strided binary walk.
+    #   kind == 1: all three operands have stride 1 on `axis` -> full SIMD
+    #   kind == 2: lhs and rhs have stride 1 -> SIMD load + scatter store
+    #   kind == 0: scalar walk (no stride-1 axis on inputs)
+    # Prefers higher-`kind` choices, then the rightmost (innermost) axis among
+    # equally-good candidates so iteration order remains C-natural.
+    var ndim = len(lhs.shape)
+    var inner_axis = ndim - 1
+    var inner_kind = 0
+    for axis in range(ndim - 1, -1, -1):
+        if lhs.strides[axis] == 1 and rhs.strides[axis] == 1:
+            if result.strides[axis] == 1:
+                return StridedInnerChoice(axis, 1)
+            if inner_kind < 2:
+                inner_axis = axis
+                inner_kind = 2
+    return StridedInnerChoice(inner_axis, inner_kind)
+
+
+def maybe_binary_same_shape_strided(
+    lhs: Array, rhs: Array, mut result: Array, op: Int
+) raises -> Bool:
+    # General N-D same-shape strided walker. Walks `inner_axis` with SIMD when
+    # possible (full or load-only) and walks the remaining axes with a coord
+    # stack that uses incremental offset arithmetic (no divmod per element).
+    # Subsumes the previous rank-1 and rank-2 special cases.
+    if (
+        not same_shape(lhs.shape, rhs.shape)
+        or not same_shape(lhs.shape, result.shape)
+    ):
+        return False
+    if (
+        lhs.dtype_code != rhs.dtype_code
+        or rhs.dtype_code != result.dtype_code
+    ):
+        return False
+    if (
+        lhs.dtype_code != DTYPE_FLOAT32
+        and lhs.dtype_code != DTYPE_FLOAT64
+    ):
+        return False
+    var ndim = len(lhs.shape)
+    if ndim == 0:
+        return False
+    var total = lhs.size_value
+    if total == 0:
+        return True
+    var picked = pick_inner_axis_for_strided_binary(lhs, rhs, result)
+    var inner_axis = picked.axis
+    var inner_kind = picked.kind
+    var inner_size = lhs.shape[inner_axis]
+    var inner_lhs_stride = lhs.strides[inner_axis]
+    var inner_rhs_stride = rhs.strides[inner_axis]
+    var inner_result_stride = result.strides[inner_axis]
+    # Build the outer axes list (every axis except inner). Pre-compute the
+    # carry-back step per outer axis so the inner loop touches only Ints.
+    var outer_axes = List[Int]()
+    var outer_shape = List[Int]()
+    var outer_lhs_stride = List[Int]()
+    var outer_rhs_stride = List[Int]()
+    var outer_result_stride = List[Int]()
+    var outer_lhs_carry = List[Int]()
+    var outer_rhs_carry = List[Int]()
+    var outer_result_carry = List[Int]()
+    for axis in range(ndim):
+        if axis == inner_axis:
+            continue
+        var dim = lhs.shape[axis]
+        outer_axes.append(axis)
+        outer_shape.append(dim)
+        outer_lhs_stride.append(lhs.strides[axis])
+        outer_rhs_stride.append(rhs.strides[axis])
+        outer_result_stride.append(result.strides[axis])
+        var span = 0
+        if dim > 1:
+            span = dim - 1
+        outer_lhs_carry.append(lhs.strides[axis] * span)
+        outer_rhs_carry.append(rhs.strides[axis] * span)
+        outer_result_carry.append(result.strides[axis] * span)
+    var outer_ndim = len(outer_axes)
+    var coords = List[Int]()
+    for _ in range(outer_ndim):
+        coords.append(0)
+    var lhs_offset = lhs.offset_elems
+    var rhs_offset = rhs.offset_elems
+    var result_offset = result.offset_elems
+    if lhs.dtype_code == DTYPE_FLOAT32:
+        var lhs_data = lhs.data.bitcast[Float32]()
+        var rhs_data = rhs.data.bitcast[Float32]()
+        var result_data = result.data.bitcast[Float32]()
+        comptime width = simd_width_of[DType.float32]()
+        while True:
+            if inner_kind == 1:
+                var lp = lhs_data + lhs_offset
+                var rp = rhs_data + rhs_offset
+                var op_ = result_data + result_offset
+                var i = 0
+                while i + width <= inner_size:
+                    op_.store(
+                        i,
+                        apply_binary_f32_vec[width](
+                            lp.load[width=width](i),
+                            rp.load[width=width](i),
+                            op,
+                        ),
+                    )
+                    i += width
+                while i < inner_size:
+                    op_[i] = Float32(
+                        apply_binary_f64(
+                            Float64(lp[i]), Float64(rp[i]), op
+                        )
+                    )
+                    i += 1
+            elif inner_kind == 2:
+                var lp = lhs_data + lhs_offset
+                var rp = rhs_data + rhs_offset
+                var i = 0
+                while i + width <= inner_size:
+                    var ovec = apply_binary_f32_vec[width](
+                        lp.load[width=width](i),
+                        rp.load[width=width](i),
+                        op,
+                    )
+                    comptime for k in range(width):
+                        result_data[
+                            result_offset + (i + k) * inner_result_stride
+                        ] = ovec[k]
+                    i += width
+                while i < inner_size:
+                    result_data[
+                        result_offset + i * inner_result_stride
+                    ] = Float32(
+                        apply_binary_f64(
+                            Float64(lp[i]), Float64(rp[i]), op
+                        )
+                    )
+                    i += 1
+            else:
+                for i in range(inner_size):
+                    result_data[
+                        result_offset + i * inner_result_stride
+                    ] = Float32(
+                        apply_binary_f64(
+                            Float64(
+                                lhs_data[
+                                    lhs_offset + i * inner_lhs_stride
+                                ]
+                            ),
+                            Float64(
+                                rhs_data[
+                                    rhs_offset + i * inner_rhs_stride
+                                ]
+                            ),
+                            op,
+                        )
+                    )
+            if outer_ndim == 0:
+                break
+            var idx = outer_ndim - 1
+            var done = False
+            while idx >= 0:
+                coords[idx] += 1
+                if coords[idx] < outer_shape[idx]:
+                    lhs_offset += outer_lhs_stride[idx]
+                    rhs_offset += outer_rhs_stride[idx]
+                    result_offset += outer_result_stride[idx]
+                    break
+                coords[idx] = 0
+                lhs_offset -= outer_lhs_carry[idx]
+                rhs_offset -= outer_rhs_carry[idx]
+                result_offset -= outer_result_carry[idx]
+                idx -= 1
+                if idx < 0:
+                    done = True
+            if done:
+                break
+        return True
+    var lhs_data = lhs.data.bitcast[Float64]()
+    var rhs_data = rhs.data.bitcast[Float64]()
+    var result_data = result.data.bitcast[Float64]()
+    comptime width = simd_width_of[DType.float64]()
+    while True:
+        if inner_kind == 1:
+            var lp = lhs_data + lhs_offset
+            var rp = rhs_data + rhs_offset
+            var op_ = result_data + result_offset
+            var i = 0
+            while i + width <= inner_size:
+                op_.store(
+                    i,
+                    apply_binary_f64_vec[width](
+                        lp.load[width=width](i),
+                        rp.load[width=width](i),
+                        op,
+                    ),
+                )
+                i += width
+            while i < inner_size:
+                op_[i] = apply_binary_f64(lp[i], rp[i], op)
+                i += 1
+        elif inner_kind == 2:
+            var lp = lhs_data + lhs_offset
+            var rp = rhs_data + rhs_offset
+            var i = 0
+            while i + width <= inner_size:
+                var ovec = apply_binary_f64_vec[width](
+                    lp.load[width=width](i),
+                    rp.load[width=width](i),
+                    op,
+                )
+                comptime for k in range(width):
+                    result_data[
+                        result_offset + (i + k) * inner_result_stride
+                    ] = ovec[k]
+                i += width
+            while i < inner_size:
+                result_data[
+                    result_offset + i * inner_result_stride
+                ] = apply_binary_f64(lp[i], rp[i], op)
+                i += 1
+        else:
+            for i in range(inner_size):
+                result_data[
+                    result_offset + i * inner_result_stride
+                ] = apply_binary_f64(
+                    lhs_data[lhs_offset + i * inner_lhs_stride],
+                    rhs_data[rhs_offset + i * inner_rhs_stride],
+                    op,
+                )
+        if outer_ndim == 0:
+            break
+        var idx = outer_ndim - 1
+        var done = False
+        while idx >= 0:
+            coords[idx] += 1
+            if coords[idx] < outer_shape[idx]:
+                lhs_offset += outer_lhs_stride[idx]
+                rhs_offset += outer_rhs_stride[idx]
+                result_offset += outer_result_stride[idx]
+                break
+            coords[idx] = 0
+            lhs_offset -= outer_lhs_carry[idx]
+            rhs_offset -= outer_rhs_carry[idx]
+            result_offset -= outer_result_carry[idx]
+            idx -= 1
+            if idx < 0:
+                done = True
+        if done:
+            break
+    return True
+
+
 def maybe_binary_contiguous(
     lhs: Array, rhs: Array, mut result: Array, op: Int
 ) raises -> Bool:
@@ -587,6 +872,8 @@ def maybe_binary_contiguous(
     if maybe_binary_row_broadcast_contiguous(lhs, rhs, result, op, False):
         return True
     if maybe_binary_row_broadcast_contiguous(rhs, lhs, result, op, True):
+        return True
+    if maybe_binary_same_shape_strided(lhs, rhs, result, op):
         return True
     return False
 
@@ -732,9 +1019,7 @@ def maybe_reduce_contiguous(
     return True
 
 
-def maybe_argmax_contiguous(
-    src: Array, mut result: Array
-) raises -> Bool:
+def maybe_argmax_contiguous(src: Array, mut result: Array) raises -> Bool:
     if not is_contiguous_float_array(src):
         return False
     var best_index = 0
@@ -756,6 +1041,9 @@ def maybe_matmul_contiguous(
     n: Int,
     k_lhs: Int,
 ) raises -> Bool:
+    comptime if CompilationTarget.is_macos():
+        if maybe_matmul_vector_accelerate(lhs, rhs, result, m, n, k_lhs):
+            return True
     if (
         len(lhs.shape) != 2
         or len(rhs.shape) != 2
@@ -827,6 +1115,113 @@ def maybe_matmul_contiguous(
     return True
 
 
+def maybe_matmul_vector_accelerate(
+    lhs: Array,
+    rhs: Array,
+    mut result: Array,
+    m: Int,
+    n: Int,
+    k_lhs: Int,
+) raises -> Bool:
+    var lhs_ndim = len(lhs.shape)
+    var rhs_ndim = len(rhs.shape)
+    if (
+        lhs_ndim == 2
+        and rhs_ndim == 1
+        and is_contiguous_float_array(rhs)
+        and is_contiguous_float_array(result)
+    ):
+        var lhs_layout = rank2_blas_layout(lhs)
+        if not lhs_layout.can_use:
+            return False
+        var rows = m
+        var cols = k_lhs
+        if lhs_layout.transpose:
+            rows = k_lhs
+            cols = m
+        if (
+            lhs.dtype_code == DTYPE_FLOAT32
+            and rhs.dtype_code == DTYPE_FLOAT32
+            and result.dtype_code == DTYPE_FLOAT32
+        ):
+            cblas_sgemv_row_major_ld(
+                rows,
+                cols,
+                contiguous_f32_ptr(result),
+                contiguous_f32_ptr(lhs),
+                contiguous_f32_ptr(rhs),
+                lhs_layout.transpose,
+                lhs_layout.leading_dim,
+            )
+            result.backend_code = BACKEND_ACCELERATE
+            return True
+        if (
+            lhs.dtype_code == DTYPE_FLOAT64
+            and rhs.dtype_code == DTYPE_FLOAT64
+            and result.dtype_code == DTYPE_FLOAT64
+        ):
+            cblas_dgemv_row_major_ld(
+                rows,
+                cols,
+                contiguous_f64_ptr(result),
+                contiguous_f64_ptr(lhs),
+                contiguous_f64_ptr(rhs),
+                lhs_layout.transpose,
+                lhs_layout.leading_dim,
+            )
+            result.backend_code = BACKEND_ACCELERATE
+            return True
+    if (
+        lhs_ndim == 1
+        and rhs_ndim == 2
+        and is_contiguous_float_array(lhs)
+        and is_contiguous_float_array(result)
+    ):
+        var rhs_layout = rank2_blas_layout(rhs)
+        if not rhs_layout.can_use:
+            return False
+        var rows = k_lhs
+        var cols = n
+        var transpose_rhs = True
+        if rhs_layout.transpose:
+            rows = n
+            cols = k_lhs
+            transpose_rhs = False
+        if (
+            lhs.dtype_code == DTYPE_FLOAT32
+            and rhs.dtype_code == DTYPE_FLOAT32
+            and result.dtype_code == DTYPE_FLOAT32
+        ):
+            cblas_sgemv_row_major_ld(
+                rows,
+                cols,
+                contiguous_f32_ptr(result),
+                contiguous_f32_ptr(rhs),
+                contiguous_f32_ptr(lhs),
+                transpose_rhs,
+                rhs_layout.leading_dim,
+            )
+            result.backend_code = BACKEND_ACCELERATE
+            return True
+        if (
+            lhs.dtype_code == DTYPE_FLOAT64
+            and rhs.dtype_code == DTYPE_FLOAT64
+            and result.dtype_code == DTYPE_FLOAT64
+        ):
+            cblas_dgemv_row_major_ld(
+                rows,
+                cols,
+                contiguous_f64_ptr(result),
+                contiguous_f64_ptr(rhs),
+                contiguous_f64_ptr(lhs),
+                transpose_rhs,
+                rhs_layout.leading_dim,
+            )
+            result.backend_code = BACKEND_ACCELERATE
+            return True
+    return False
+
+
 def maybe_matmul_f32_small(
     lhs: Array,
     rhs: Array,
@@ -888,9 +1283,7 @@ def maybe_lapack_solve_f32(
     var pivots = alloc[Int32](n)
     for row in range(n):
         for col in range(n):
-            a_ptr[row + col * n] = Float32(
-                get_logical_as_f64(a, row * n + col)
-            )
+            a_ptr[row + col * n] = Float32(get_logical_as_f64(a, row * n + col))
     for row in range(n):
         for col in range(rhs_columns):
             var logical = row
@@ -917,7 +1310,9 @@ def maybe_lapack_solve_f32(
             var out_index = row
             if not vector_result:
                 out_index = row * rhs_columns + col
-            set_logical_from_f64(result, out_index, Float64(b_ptr[row + col * n]))
+            set_logical_from_f64(
+                result, out_index, Float64(b_ptr[row + col * n])
+            )
     a_ptr.free()
     b_ptr.free()
     pivots.free()
@@ -996,9 +1391,7 @@ def maybe_lapack_inverse_f32(a: Array, mut result: Array) raises -> Bool:
     var pivots = alloc[Int32](n)
     for row in range(n):
         for col in range(n):
-            a_ptr[row + col * n] = Float32(
-                get_logical_as_f64(a, row * n + col)
-            )
+            a_ptr[row + col * n] = Float32(get_logical_as_f64(a, row * n + col))
             if row == col:
                 b_ptr[row + col * n] = 1.0
             else:
@@ -1074,7 +1467,9 @@ def maybe_lapack_inverse_f64(a: Array, mut result: Array) raises -> Bool:
     return True
 
 
-def lapack_pivot_sign(pivots: UnsafePointer[Int32, MutExternalOrigin], n: Int) -> Float64:
+def lapack_pivot_sign(
+    pivots: UnsafePointer[Int32, MutExternalOrigin], n: Int
+) -> Float64:
     var sign = 1.0
     for i in range(n):
         if Int(pivots[i]) != i + 1:
@@ -1095,9 +1490,7 @@ def maybe_lapack_det_f32(a: Array, mut result: Array) raises -> Bool:
     var pivots = alloc[Int32](n)
     for row in range(n):
         for col in range(n):
-            a_ptr[row + col * n] = Float32(
-                get_logical_as_f64(a, row * n + col)
-            )
+            a_ptr[row + col * n] = Float32(get_logical_as_f64(a, row * n + col))
     try:
         var info = lapack_sgetrf(n, a_ptr, pivots)
         if info < 0:
@@ -1258,9 +1651,7 @@ def solve_lu_factor_into(
             )
 
 
-def lu_solve_into(
-    a: Array, b: Array, mut result: Array
-) raises:
+def lu_solve_into(a: Array, b: Array, mut result: Array) raises:
     if len(a.shape) != 2 or a.shape[0] != a.shape[1]:
         raise Error(
             "linalg.solve() requires a square rank-2 coefficient matrix"
