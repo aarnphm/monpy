@@ -66,19 +66,17 @@ def result_rows(results: Sequence[Mapping[str, object]]) -> list[tuple[str, ...]
     )
   ]
   for result in results:
-    rows.append(
-      (
-        string_value(result["group"]),
-        string_value(result["name"]),
-        format_us(result["monpy_median_us"]),
-        format_us(result["numpy_median_us"]),
-        format_ratio(result["ratio_median"]),
-        format_range(result["monpy_min_us"], result["monpy_max_us"]),
-        format_range(result["numpy_min_us"], result["numpy_max_us"]),
-        format_range(result["ratio_min"], result["ratio_max"], ratio=True),
-        string_value(result["rounds"]),
-      )
-    )
+    rows.append((
+      string_value(result["group"]),
+      string_value(result["name"]),
+      format_us(result["monpy_median_us"]),
+      format_us(result["numpy_median_us"]),
+      format_ratio(result["ratio_median"]),
+      format_range(result["monpy_min_us"], result["monpy_max_us"]),
+      format_range(result["numpy_min_us"], result["numpy_max_us"]),
+      format_range(result["ratio_min"], result["ratio_max"], ratio=True),
+      string_value(result["rounds"]),
+    ))
   return rows
 
 
@@ -101,10 +99,7 @@ def render_markdown_table(payload: Mapping[str, object]) -> str:
   header = "| " + " | ".join(rows[0]) + " |"
   align = "| " + " | ".join(["---", "---", "---:", "---:", "---:", "---:", "---:", "---:", "---:"]) + " |"
   body = ["| " + " | ".join(row) + " |" for row in rows[1:]]
-  line = (
-    f"rounds={config['rounds']} repeats={config['repeats']} "
-    f"loops={config['loops']} unit={config['unit']}"
-  )
+  line = f"rounds={config['rounds']} repeats={config['repeats']} loops={config['loops']} unit={config['unit']}"
   return "\n".join([line, "", header, align, *body])
 
 
@@ -157,15 +152,13 @@ def render_metadata_table(rows: Sequence[tuple[str, str]]) -> str:
 
 
 def render_comment(payload: Mapping[str, object]) -> str:
-  return "\n\n".join(
-    [
-      MARKER,
-      "### array core benchmark",
-      render_metadata_table(metadata_rows()),
-      "lower `monpy/numpy` is better for monpy.",
-      render_markdown_table(payload),
-    ]
-  )
+  return "\n\n".join([
+    MARKER,
+    "### array core benchmark",
+    render_metadata_table(metadata_rows()),
+    "lower `monpy/numpy` is better for monpy.",
+    render_markdown_table(payload),
+  ])
 
 
 def request_json(method: str, path: str, *, token: str, body: Mapping[str, object] | None = None) -> object:

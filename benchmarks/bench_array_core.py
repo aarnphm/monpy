@@ -147,7 +147,13 @@ def monpy_dtype(dtype: type[np.floating]) -> object:
   return mnp.float32 if dtype is np.float32 else mnp.float64
 
 
-def build_cases(*, vector_size: int, matrix_sizes: Sequence[int], linalg_sizes: Sequence[int]) -> list[BenchCase]:
+def build_cases(
+  *,
+  vector_size: int,
+  vector_sizes: Sequence[int],
+  matrix_sizes: Sequence[int],
+  linalg_sizes: Sequence[int],
+) -> list[BenchCase]:
   x_np = np.linspace(0.1, 2.0, vector_size, dtype=np.float32)
   y_np = np.linspace(2.0, 4.0, vector_size, dtype=np.float32)
   x_mp = mnp.asarray(x_np.tolist(), dtype=mnp.float32)
@@ -196,7 +202,12 @@ def build_cases(*, vector_size: int, matrix_sizes: Sequence[int], linalg_sizes: 
   verify_same(eager_fused_probe, np.sin(x_np) + y_np * 3.0, rtol=1e-4, atol=1e-4)
 
   cases = [
-    BenchCase("interop", "asarray_zero_copy_f32", lambda: mnp.asarray(x_np, dtype=mnp.float32, copy=False), lambda: np.asarray(x_np)),
+    BenchCase(
+      "interop",
+      "asarray_zero_copy_f32",
+      lambda: mnp.asarray(x_np, dtype=mnp.float32, copy=False),
+      lambda: np.asarray(x_np),
+    ),
     BenchCase(
       "interop",
       "array_copy_f32",
@@ -228,18 +239,23 @@ def build_cases(*, vector_size: int, matrix_sizes: Sequence[int], linalg_sizes: 
     BenchCase("views", "reversed_add_f32", lambda: x_mp[::-1] + y_mp[::-1], lambda: x_np[::-1] + y_np[::-1]),
     BenchCase("views", "transpose_add_f32", lambda: m_mp.T + n_mp.T, lambda: m_np.T + n_np.T),
     BenchCase("reductions", "sum_f32", lambda: mnp.sum(x_mp), lambda: np.sum(x_np)),
-    BenchCase("expressions", "eager_expression_f32", lambda: mnp.sin(x_mp) + y_mp * 3.0, lambda: np.sin(x_np) + y_np * 3.0),
-    BenchCase("expressions", "fused_sin_add_mul_f32", lambda: mnp.sin_add_mul(x_mp, y_mp, 3.0), lambda: np.sin(x_np) + y_np * 3.0),
+    BenchCase(
+      "expressions", "eager_expression_f32", lambda: mnp.sin(x_mp) + y_mp * 3.0, lambda: np.sin(x_np) + y_np * 3.0
+    ),
+    BenchCase(
+      "expressions",
+      "fused_sin_add_mul_f32",
+      lambda: mnp.sin_add_mul(x_mp, y_mp, 3.0),
+      lambda: np.sin(x_np) + y_np * 3.0,
+    ),
   ]
 
   diag_np = np.arange(64 * 64, dtype=np.float64).reshape(64, 64)
   diag_mp = mnp.asarray(diag_np.tolist(), dtype=mnp.float64)
-  cases.extend(
-    [
-      BenchCase("views", "diagonal_64_f64", lambda: mnp.diagonal(diag_mp), lambda: np.diagonal(diag_np)),
-      BenchCase("reductions", "trace_64_f64", lambda: mnp.trace(diag_mp), lambda: np.trace(diag_np)),
-    ]
-  )
+  cases.extend([
+    BenchCase("views", "diagonal_64_f64", lambda: mnp.diagonal(diag_mp), lambda: np.diagonal(diag_np)),
+    BenchCase("reductions", "trace_64_f64", lambda: mnp.trace(diag_mp), lambda: np.trace(diag_np)),
+  ])
 
   for size in matrix_sizes:
     for dtype in (np.float32, np.float64):
@@ -257,50 +273,103 @@ def build_cases(*, vector_size: int, matrix_sizes: Sequence[int], linalg_sizes: 
       rhs_t_mp = mnp.asarray(rhs_t_np, dtype=target, copy=False)
       tolerance = 1e-4 if dtype is np.float32 else 1e-9
 
-      cases.extend(
-        [
-          BenchCase(
-            "matmul",
-            f"matmul_{size}_{suffix}",
-            lambda lhs=lhs_mp, rhs=rhs_mp: lhs @ rhs,
-            lambda lhs=lhs_np, rhs=rhs_np: lhs @ rhs,
-            rtol=tolerance,
-            atol=tolerance,
-          ),
-          BenchCase(
-            "matmul",
-            f"matvec_{size}_{suffix}",
-            lambda lhs=lhs_mp, vec=vec_mp: lhs @ vec,
-            lambda lhs=lhs_np, vec=vec_np: lhs @ vec,
-            rtol=tolerance,
-            atol=tolerance,
-          ),
-          BenchCase(
-            "matmul",
-            f"vecmat_{size}_{suffix}",
-            lambda vec=vec_mp, rhs=rhs_mp: vec @ rhs,
-            lambda vec=vec_np, rhs=rhs_np: vec @ rhs,
-            rtol=tolerance,
-            atol=tolerance,
-          ),
-          BenchCase(
-            "matmul",
-            f"matmul_lhs_f_{size}_{suffix}",
-            lambda lhs=lhs_f_mp, rhs=rhs_mp: lhs @ rhs,
-            lambda lhs=lhs_f_np, rhs=rhs_np: lhs @ rhs,
-            rtol=tolerance,
-            atol=tolerance,
-          ),
-          BenchCase(
-            "matmul",
-            f"matmul_rhs_t_{size}_{suffix}",
-            lambda lhs=lhs_mp, rhs=rhs_t_mp: lhs @ rhs,
-            lambda lhs=lhs_np, rhs=rhs_t_np: lhs @ rhs,
-            rtol=tolerance,
-            atol=tolerance,
-          ),
-        ]
-      )
+      cases.extend([
+        BenchCase(
+          "matmul",
+          f"matmul_{size}_{suffix}",
+          lambda lhs=lhs_mp, rhs=rhs_mp: lhs @ rhs,
+          lambda lhs=lhs_np, rhs=rhs_np: lhs @ rhs,
+          rtol=tolerance,
+          atol=tolerance,
+        ),
+        BenchCase(
+          "matmul",
+          f"matvec_{size}_{suffix}",
+          lambda lhs=lhs_mp, vec=vec_mp: lhs @ vec,
+          lambda lhs=lhs_np, vec=vec_np: lhs @ vec,
+          rtol=tolerance,
+          atol=tolerance,
+        ),
+        BenchCase(
+          "matmul",
+          f"vecmat_{size}_{suffix}",
+          lambda vec=vec_mp, rhs=rhs_mp: vec @ rhs,
+          lambda vec=vec_np, rhs=rhs_np: vec @ rhs,
+          rtol=tolerance,
+          atol=tolerance,
+        ),
+        BenchCase(
+          "matmul",
+          f"matmul_lhs_f_{size}_{suffix}",
+          lambda lhs=lhs_f_mp, rhs=rhs_mp: lhs @ rhs,
+          lambda lhs=lhs_f_np, rhs=rhs_np: lhs @ rhs,
+          rtol=tolerance,
+          atol=tolerance,
+        ),
+        BenchCase(
+          "matmul",
+          f"matmul_rhs_t_{size}_{suffix}",
+          lambda lhs=lhs_mp, rhs=rhs_t_mp: lhs @ rhs,
+          lambda lhs=lhs_np, rhs=rhs_t_np: lhs @ rhs,
+          rtol=tolerance,
+          atol=tolerance,
+        ),
+      ])
+
+  # Bandwidth-regime elementwise. Cases past 16K elements should land
+  # within ~5% of numpy on a single core: the kernel is memory-bandwidth
+  # bound and threading would just contend on the same DRAM channels.
+  # Wrapper overhead amortizes away once the work-per-call is large enough
+  # to absorb it. Anything below 16K stays wrapper-bound and is covered by
+  # the existing 1024-element cases.
+  for size in vector_sizes:
+    if size == vector_size:
+      continue
+    bw_x_np = np.linspace(0.1, 2.0, size, dtype=np.float32)
+    bw_y_np = np.linspace(2.0, 4.0, size, dtype=np.float32)
+    bw_x_mp = mnp.asarray(bw_x_np, dtype=mnp.float32, copy=False)
+    bw_y_mp = mnp.asarray(bw_y_np, dtype=mnp.float32, copy=False)
+    bw_out_np = np.empty_like(bw_x_np)
+    bw_out_mp = mnp.empty(bw_x_mp.shape, dtype=mnp.float32)
+    suffix = f"{size}_f32"
+    cases.extend([
+      BenchCase(
+        "bandwidth",
+        f"binary_add_{suffix}",
+        lambda lhs=bw_x_mp, rhs=bw_y_mp: lhs + rhs,
+        lambda lhs=bw_x_np, rhs=bw_y_np: lhs + rhs,
+      ),
+      BenchCase(
+        "bandwidth",
+        f"binary_add_out_{suffix}",
+        lambda lhs=bw_x_mp, rhs=bw_y_mp, out=bw_out_mp: mnp.add(lhs, rhs, out=out),
+        lambda lhs=bw_x_np, rhs=bw_y_np, out=bw_out_np: np.add(lhs, rhs, out=out),
+      ),
+      BenchCase(
+        "bandwidth",
+        f"unary_sin_{suffix}",
+        lambda src=bw_x_mp: mnp.sin(src),
+        lambda src=bw_x_np: np.sin(src),
+      ),
+      BenchCase(
+        "bandwidth",
+        f"reduce_sum_{suffix}",
+        lambda src=bw_x_mp: mnp.sum(src),
+        lambda src=bw_x_np: np.sum(src),
+      ),
+      BenchCase(
+        "bandwidth",
+        f"fused_sin_add_mul_{suffix}",
+        lambda lhs=bw_x_mp, rhs=bw_y_mp: mnp.sin_add_mul(lhs, rhs, 3.0),
+        lambda lhs=bw_x_np, rhs=bw_y_np: np.sin(lhs) + rhs * 3.0,
+      ),
+      BenchCase(
+        "bandwidth",
+        f"reversed_add_{suffix}",
+        lambda lhs=bw_x_mp, rhs=bw_y_mp: lhs[::-1] + rhs[::-1],
+        lambda lhs=bw_x_np, rhs=bw_y_np: lhs[::-1] + rhs[::-1],
+      ),
+    ])
 
   for size in linalg_sizes:
     for dtype in (np.float32, np.float64):
@@ -312,34 +381,32 @@ def build_cases(*, vector_size: int, matrix_sizes: Sequence[int], linalg_sizes: 
       rhs_mp = mnp.asarray(rhs_np.tolist(), dtype=target)
       tolerance = 1e-4 if dtype is np.float32 else 1e-8
 
-      cases.extend(
-        [
-          BenchCase(
-            "linalg",
-            f"solve_{size}_{suffix}",
-            lambda lhs=lhs_mp, rhs=rhs_mp: mnp.linalg.solve(lhs, rhs),
-            lambda lhs=lhs_np, rhs=rhs_np: np.linalg.solve(lhs, rhs),
-            rtol=tolerance,
-            atol=tolerance,
-          ),
-          BenchCase(
-            "linalg",
-            f"inv_{size}_{suffix}",
-            lambda lhs=lhs_mp: mnp.linalg.inv(lhs),
-            lambda lhs=lhs_np: np.linalg.inv(lhs),
-            rtol=tolerance,
-            atol=tolerance,
-          ),
-          BenchCase(
-            "linalg",
-            f"det_{size}_{suffix}",
-            lambda lhs=lhs_mp: mnp.linalg.det(lhs),
-            lambda lhs=lhs_np: np.linalg.det(lhs),
-            rtol=tolerance,
-            atol=tolerance,
-          ),
-        ]
-      )
+      cases.extend([
+        BenchCase(
+          "linalg",
+          f"solve_{size}_{suffix}",
+          lambda lhs=lhs_mp, rhs=rhs_mp: mnp.linalg.solve(lhs, rhs),
+          lambda lhs=lhs_np, rhs=rhs_np: np.linalg.solve(lhs, rhs),
+          rtol=tolerance,
+          atol=tolerance,
+        ),
+        BenchCase(
+          "linalg",
+          f"inv_{size}_{suffix}",
+          lambda lhs=lhs_mp: mnp.linalg.inv(lhs),
+          lambda lhs=lhs_np: np.linalg.inv(lhs),
+          rtol=tolerance,
+          atol=tolerance,
+        ),
+        BenchCase(
+          "linalg",
+          f"det_{size}_{suffix}",
+          lambda lhs=lhs_mp: mnp.linalg.det(lhs),
+          lambda lhs=lhs_np: np.linalg.det(lhs),
+          rtol=tolerance,
+          atol=tolerance,
+        ),
+      ])
 
   return cases
 
@@ -350,7 +417,9 @@ def run_case(case: BenchCase, *, loops: int, repeats: int, round_index: int) -> 
   verify_same(monpy_result, numpy_result, rtol=case.rtol, atol=case.atol)
   monpy_us = time_call(case.monpy_fn, loops=loops, repeats=repeats, force=force_monpy) * 1_000_000
   numpy_us = time_call(case.numpy_fn, loops=loops, repeats=repeats) * 1_000_000
-  return BenchSample(round_index=round_index, monpy_us=monpy_us, numpy_us=numpy_us, ratio=ratio_value(monpy_us, numpy_us))
+  return BenchSample(
+    round_index=round_index, monpy_us=monpy_us, numpy_us=numpy_us, ratio=ratio_value(monpy_us, numpy_us)
+  )
 
 
 def summarize(case: BenchCase, samples: Sequence[BenchSample]) -> BenchResult:
@@ -374,7 +443,9 @@ def summarize(case: BenchCase, samples: Sequence[BenchSample]) -> BenchResult:
   )
 
 
-def run_benchmarks(cases: Sequence[BenchCase], *, rounds: int, loops: int, repeats: int, progress: bool) -> list[BenchResult]:
+def run_benchmarks(
+  cases: Sequence[BenchCase], *, rounds: int, loops: int, repeats: int, progress: bool
+) -> list[BenchResult]:
   samples_by_case: dict[str, list[BenchSample]] = {case.name: [] for case in cases}
   total = rounds * len(cases)
   with progress_bar(total=total, enabled=progress) as bar:
@@ -417,21 +488,21 @@ def sorted_results(results: Sequence[BenchResult], *, sort: str) -> list[BenchRe
 
 
 def table_rows(results: Sequence[BenchResult]) -> list[tuple[str, ...]]:
-  rows = [("group", "case", "monpy us", "numpy us", "monpy/numpy", "monpy range", "numpy range", "ratio range", "rounds")]
+  rows = [
+    ("group", "case", "monpy us", "numpy us", "monpy/numpy", "monpy range", "numpy range", "ratio range", "rounds")
+  ]
   for result in results:
-    rows.append(
-      (
-        result.group,
-        result.name,
-        format_us(result.monpy_median_us),
-        format_us(result.numpy_median_us),
-        format_ratio(result.ratio_median),
-        format_range(result.monpy_min_us, result.monpy_max_us),
-        format_range(result.numpy_min_us, result.numpy_max_us),
-        format_range(result.ratio_min, result.ratio_max, ratio=True),
-        str(result.rounds),
-      )
-    )
+    rows.append((
+      result.group,
+      result.name,
+      format_us(result.monpy_median_us),
+      format_us(result.numpy_median_us),
+      format_ratio(result.ratio_median),
+      format_range(result.monpy_min_us, result.monpy_max_us),
+      format_range(result.numpy_min_us, result.numpy_max_us),
+      format_range(result.ratio_min, result.ratio_max, ratio=True),
+      str(result.rounds),
+    ))
   return rows
 
 
@@ -547,15 +618,41 @@ def main() -> None:
   parser.add_argument("--loops", type=positive_int, default=200, help="inner calls per timing sample")
   parser.add_argument("--repeats", type=positive_int, default=5, help="timing samples per case per round")
   parser.add_argument("--rounds", type=positive_int, default=3, help="full benchmark passes to aggregate")
-  parser.add_argument("--vector-size", type=positive_int, default=1024)
-  parser.add_argument("--matrix-sizes", type=parse_sizes, default=parse_sizes("16,64,128"))
-  parser.add_argument("--linalg-sizes", type=parse_sizes, default=parse_sizes("2,4,8"))
+  parser.add_argument(
+    "--vector-size",
+    type=positive_int,
+    default=1024,
+    help="size for the wrapper-bound elementwise cases (default 1024)",
+  )
+  parser.add_argument(
+    "--vector-sizes",
+    type=parse_sizes,
+    default=parse_sizes("16384,262144,1048576"),
+    help="sizes for the bandwidth-regime cases (default 16K,256K,1M)",
+  )
+  parser.add_argument(
+    "--matrix-sizes",
+    type=parse_sizes,
+    default=parse_sizes("16,64,128,256"),
+    help="square matrix sizes for matmul/matvec/vecmat (default 16,64,128,256)",
+  )
+  parser.add_argument(
+    "--linalg-sizes",
+    type=parse_sizes,
+    default=parse_sizes("2,4,8,32,128"),
+    help="square matrix sizes for solve/inv/det (default 2,4,8,32,128)",
+  )
   parser.add_argument("--format", choices=("table", "csv", "json", "markdown"), default="table")
   parser.add_argument("--sort", choices=("input", "name", "monpy", "ratio"), default="input")
   parser.add_argument("--progress", action=argparse.BooleanOptionalAction, default=True)
   args = parser.parse_args()
 
-  cases = build_cases(vector_size=args.vector_size, matrix_sizes=args.matrix_sizes, linalg_sizes=args.linalg_sizes)
+  cases = build_cases(
+    vector_size=args.vector_size,
+    vector_sizes=args.vector_sizes,
+    matrix_sizes=args.matrix_sizes,
+    linalg_sizes=args.linalg_sizes,
+  )
   results = run_benchmarks(cases, rounds=args.rounds, loops=args.loops, repeats=args.repeats, progress=args.progress)
   print(render_results(results, args=args))
 

@@ -1037,11 +1037,27 @@ def maybe_reduce_contiguous(
     if not is_contiguous_float_array(src):
         return False
     if op == REDUCE_SUM or op == REDUCE_MEAN:
+        # Sum reductions use 4 parallel SIMD accumulators to break the FADD
+        # latency dependency chain. With one accumulator the loop is bound by
+        # FADD latency (~3 cycles on M1). Four accumulators let the pipeline
+        # issue ~4 FADDs per cycle, which matters at large N (1M elements
+        # roughly halves vs a single-acc loop).
         if src.dtype_code == DTYPE_FLOAT32:
             var src_ptr = contiguous_f32_ptr(src)
             comptime width = simd_width_of[DType.float32]()
-            var acc_vec = SIMD[DType.float32, width](0)
+            comptime block = width * 4
+            var acc0 = SIMD[DType.float32, width](0)
+            var acc1 = SIMD[DType.float32, width](0)
+            var acc2 = SIMD[DType.float32, width](0)
+            var acc3 = SIMD[DType.float32, width](0)
             var i = 0
+            while i + block <= src.size_value:
+                acc0 += src_ptr.load[width=width](i)
+                acc1 += src_ptr.load[width=width](i + width)
+                acc2 += src_ptr.load[width=width](i + 2 * width)
+                acc3 += src_ptr.load[width=width](i + 3 * width)
+                i += block
+            var acc_vec = (acc0 + acc1) + (acc2 + acc3)
             while i + width <= src.size_value:
                 acc_vec += src_ptr.load[width=width](i)
                 i += width
@@ -1056,8 +1072,19 @@ def maybe_reduce_contiguous(
         if src.dtype_code == DTYPE_FLOAT64:
             var src_ptr = contiguous_f64_ptr(src)
             comptime width = simd_width_of[DType.float64]()
-            var acc_vec = SIMD[DType.float64, width](0)
+            comptime block = width * 4
+            var acc0 = SIMD[DType.float64, width](0)
+            var acc1 = SIMD[DType.float64, width](0)
+            var acc2 = SIMD[DType.float64, width](0)
+            var acc3 = SIMD[DType.float64, width](0)
             var i = 0
+            while i + block <= src.size_value:
+                acc0 += src_ptr.load[width=width](i)
+                acc1 += src_ptr.load[width=width](i + width)
+                acc2 += src_ptr.load[width=width](i + 2 * width)
+                acc3 += src_ptr.load[width=width](i + 3 * width)
+                i += block
+            var acc_vec = (acc0 + acc1) + (acc2 + acc3)
             while i + width <= src.size_value:
                 acc_vec += src_ptr.load[width=width](i)
                 i += width
@@ -1334,6 +1361,143 @@ def abs_f64(value: Float64) -> Float64:
     return value
 
 
+def transpose_to_col_major_f32(
+    src: Array,
+    dst: UnsafePointer[Float32, MutExternalOrigin],
+    n: Int,
+) raises:
+    # Copy `src` (rank-2 n×n) into a column-major buffer pointed to by `dst`.
+    # Fast path for c-contiguous source skips the per-element `physical_offset`
+    # divmod that `get_logical_as_f64` pays. At n=128 this is ~50 µs vs ~5 µs.
+    if is_c_contiguous(src):
+        var src_ptr = contiguous_f32_ptr(src)
+        for row in range(n):
+            for col in range(n):
+                dst[row + col * n] = src_ptr[row * n + col]
+        return
+    for row in range(n):
+        for col in range(n):
+            dst[row + col * n] = Float32(
+                get_logical_as_f64(src, row * n + col)
+            )
+
+
+def transpose_to_col_major_f64(
+    src: Array,
+    dst: UnsafePointer[Float64, MutExternalOrigin],
+    n: Int,
+) raises:
+    if is_c_contiguous(src):
+        var src_ptr = contiguous_f64_ptr(src)
+        for row in range(n):
+            for col in range(n):
+                dst[row + col * n] = src_ptr[row * n + col]
+        return
+    for row in range(n):
+        for col in range(n):
+            dst[row + col * n] = get_logical_as_f64(src, row * n + col)
+
+
+def copy_rhs_to_col_major_f32(
+    b: Array,
+    dst: UnsafePointer[Float32, MutExternalOrigin],
+    n: Int,
+    rhs_columns: Int,
+    vector_result: Bool,
+) raises:
+    if is_c_contiguous(b) and b.dtype_code == DTYPE_FLOAT32:
+        var src_ptr = contiguous_f32_ptr(b)
+        if vector_result:
+            for row in range(n):
+                dst[row] = src_ptr[row]
+            return
+        for row in range(n):
+            for col in range(rhs_columns):
+                dst[row + col * n] = src_ptr[row * rhs_columns + col]
+        return
+    for row in range(n):
+        for col in range(rhs_columns):
+            var logical = row
+            if not vector_result:
+                logical = row * rhs_columns + col
+            dst[row + col * n] = Float32(get_logical_as_f64(b, logical))
+
+
+def copy_rhs_to_col_major_f64(
+    b: Array,
+    dst: UnsafePointer[Float64, MutExternalOrigin],
+    n: Int,
+    rhs_columns: Int,
+    vector_result: Bool,
+) raises:
+    if is_c_contiguous(b) and b.dtype_code == DTYPE_FLOAT64:
+        var src_ptr = contiguous_f64_ptr(b)
+        if vector_result:
+            for row in range(n):
+                dst[row] = src_ptr[row]
+            return
+        for row in range(n):
+            for col in range(rhs_columns):
+                dst[row + col * n] = src_ptr[row * rhs_columns + col]
+        return
+    for row in range(n):
+        for col in range(rhs_columns):
+            var logical = row
+            if not vector_result:
+                logical = row * rhs_columns + col
+            dst[row + col * n] = get_logical_as_f64(b, logical)
+
+
+def write_solve_result_f32(
+    src: UnsafePointer[Float32, MutExternalOrigin],
+    mut result: Array,
+    n: Int,
+    rhs_columns: Int,
+    vector_result: Bool,
+) raises:
+    if is_c_contiguous(result) and result.dtype_code == DTYPE_FLOAT32:
+        var dst = contiguous_f32_ptr(result)
+        if vector_result:
+            for row in range(n):
+                dst[row] = src[row]
+            return
+        for row in range(n):
+            for col in range(rhs_columns):
+                dst[row * rhs_columns + col] = src[row + col * n]
+        return
+    for row in range(n):
+        for col in range(rhs_columns):
+            var out_index = row
+            if not vector_result:
+                out_index = row * rhs_columns + col
+            set_logical_from_f64(result, out_index, Float64(src[row + col * n]))
+
+
+def write_solve_result_f64(
+    src: UnsafePointer[Float64, MutExternalOrigin],
+    mut result: Array,
+    n: Int,
+    rhs_columns: Int,
+    vector_result: Bool,
+) raises:
+    if is_c_contiguous(result) and result.dtype_code == DTYPE_FLOAT64:
+        var dst = contiguous_f64_ptr(result)
+        if vector_result:
+            for row in range(n):
+                dst[row] = src[row]
+            return
+        for row in range(n):
+            for col in range(rhs_columns):
+                dst[row * rhs_columns + col] = src[row + col * n]
+        return
+    for row in range(n):
+        for col in range(rhs_columns):
+            var out_index = row
+            if not vector_result:
+                out_index = row * rhs_columns + col
+            set_logical_from_f64(result, out_index, src[row + col * n])
+
+
 def maybe_lapack_solve_f32(
     a: Array, b: Array, mut result: Array
 ) raises -> Bool:
@@ -1354,15 +1518,8 @@ def maybe_lapack_solve_f32(
     var a_ptr = alloc[Float32](n * n)
     var b_ptr = alloc[Float32](n * rhs_columns)
     var pivots = alloc[Int32](n)
-    for row in range(n):
-        for col in range(n):
-            a_ptr[row + col * n] = Float32(get_logical_as_f64(a, row * n + col))
-    for row in range(n):
-        for col in range(rhs_columns):
-            var logical = row
-            if not vector_result:
-                logical = row * rhs_columns + col
-            b_ptr[row + col * n] = Float32(get_logical_as_f64(b, logical))
+    transpose_to_col_major_f32(a, a_ptr, n)
+    copy_rhs_to_col_major_f32(b, b_ptr, n, rhs_columns, vector_result)
     var info: Int
     try:
         info = lapack_sgesv(n, rhs_columns, a_ptr, pivots, b_ptr)
@@ -1378,14 +1535,7 @@ def maybe_lapack_solve_f32(
         if info > 0:
             raise Error("linalg.solve() singular matrix")
         return False
-    for row in range(n):
-        for col in range(rhs_columns):
-            var out_index = row
-            if not vector_result:
-                out_index = row * rhs_columns + col
-            set_logical_from_f64(
-                result, out_index, Float64(b_ptr[row + col * n])
-            )
+    write_solve_result_f32(b_ptr, result, n, rhs_columns, vector_result)
     a_ptr.free()
     b_ptr.free()
     pivots.free()
@@ -1413,15 +1563,8 @@ def maybe_lapack_solve_f64(
     var a_ptr = alloc[Float64](n * n)
     var b_ptr = alloc[Float64](n * rhs_columns)
     var pivots = alloc[Int32](n)
-    for row in range(n):
-        for col in range(n):
-            a_ptr[row + col * n] = get_logical_as_f64(a, row * n + col)
-    for row in range(n):
-        for col in range(rhs_columns):
-            var logical = row
-            if not vector_result:
-                logical = row * rhs_columns + col
-            b_ptr[row + col * n] = get_logical_as_f64(b, logical)
+    transpose_to_col_major_f64(a, a_ptr, n)
+    copy_rhs_to_col_major_f64(b, b_ptr, n, rhs_columns, vector_result)
     var info: Int
     try:
         info = lapack_dgesv(n, rhs_columns, a_ptr, pivots, b_ptr)
@@ -1437,12 +1580,7 @@ def maybe_lapack_solve_f64(
         if info > 0:
             raise Error("linalg.solve() singular matrix")
         return False
-    for row in range(n):
-        for col in range(rhs_columns):
-            var out_index = row
-            if not vector_result:
-                out_index = row * rhs_columns + col
-            set_logical_from_f64(result, out_index, b_ptr[row + col * n])
+    write_solve_result_f64(b_ptr, result, n, rhs_columns, vector_result)
     a_ptr.free()
     b_ptr.free()
     pivots.free()
@@ -1462,9 +1600,9 @@ def maybe_lapack_inverse_f32(a: Array, mut result: Array) raises -> Bool:
     var a_ptr = alloc[Float32](n * n)
     var b_ptr = alloc[Float32](n * n)
     var pivots = alloc[Int32](n)
+    transpose_to_col_major_f32(a, a_ptr, n)
     for row in range(n):
         for col in range(n):
-            a_ptr[row + col * n] = Float32(get_logical_as_f64(a, row * n + col))
             if row == col:
                 b_ptr[row + col * n] = 1.0
             else:
@@ -1484,11 +1622,7 @@ def maybe_lapack_inverse_f32(a: Array, mut result: Array) raises -> Bool:
         if info > 0:
             raise Error("linalg.inv() singular matrix")
         return False
-    for row in range(n):
-        for col in range(n):
-            set_logical_from_f64(
-                result, row * n + col, Float64(b_ptr[row + col * n])
-            )
+    write_solve_result_f32(b_ptr, result, n, n, False)
     a_ptr.free()
     b_ptr.free()
     pivots.free()
@@ -1508,9 +1642,9 @@ def maybe_lapack_inverse_f64(a: Array, mut result: Array) raises -> Bool:
     var a_ptr = alloc[Float64](n * n)
     var b_ptr = alloc[Float64](n * n)
     var pivots = alloc[Int32](n)
+    transpose_to_col_major_f64(a, a_ptr, n)
     for row in range(n):
         for col in range(n):
-            a_ptr[row + col * n] = get_logical_as_f64(a, row * n + col)
             if row == col:
                 b_ptr[row + col * n] = 1.0
             else:
@@ -1530,9 +1664,7 @@ def maybe_lapack_inverse_f64(a: Array, mut result: Array) raises -> Bool:
         if info > 0:
             raise Error("linalg.inv() singular matrix")
         return False
-    for row in range(n):
-        for col in range(n):
-            set_logical_from_f64(result, row * n + col, b_ptr[row + col * n])
+    write_solve_result_f64(b_ptr, result, n, n, False)
     a_ptr.free()
     b_ptr.free()
     pivots.free()
@@ -1561,9 +1693,7 @@ def maybe_lapack_det_f32(a: Array, mut result: Array) raises -> Bool:
     var n = a.shape[0]
     var a_ptr = alloc[Float32](n * n)
     var pivots = alloc[Int32](n)
-    for row in range(n):
-        for col in range(n):
-            a_ptr[row + col * n] = Float32(get_logical_as_f64(a, row * n + col))
+    transpose_to_col_major_f32(a, a_ptr, n)
     try:
         var info = lapack_sgetrf(n, a_ptr, pivots)
         if info < 0:
@@ -1598,9 +1728,7 @@ def maybe_lapack_det_f64(a: Array, mut result: Array) raises -> Bool:
     var n = a.shape[0]
     var a_ptr = alloc[Float64](n * n)
     var pivots = alloc[Int32](n)
-    for row in range(n):
-        for col in range(n):
-            a_ptr[row + col * n] = get_logical_as_f64(a, row * n + col)
+    transpose_to_col_major_f64(a, a_ptr, n)
     try:
         var info = lapack_dgetrf(n, a_ptr, pivots)
         if info < 0:
