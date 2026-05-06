@@ -73,18 +73,14 @@ from array import (
 
 # Python-callable entrypoints.
 # Includes Storage -> Shape -> Backend FFI imports from submodules.
-def empty(
-    shape_obj: PythonObject, dtype_obj: PythonObject
-) raises -> PythonObject:
+def empty_ops(shape_obj: PythonObject, dtype_obj: PythonObject) raises -> PythonObject:
     var dtype_code = Int(py=dtype_obj)
     var shape = int_list_from_py(shape_obj)
     var result = make_empty_array(dtype_code, shape^)
     return PythonObject(alloc=result^)
 
 
-def full(
-    shape_obj: PythonObject, value_obj: PythonObject, dtype_obj: PythonObject
-) raises -> PythonObject:
+def full_ops(shape_obj: PythonObject, value_obj: PythonObject, dtype_obj: PythonObject) raises -> PythonObject:
     var dtype_code = Int(py=dtype_obj)
     var shape = int_list_from_py(shape_obj)
     var result = make_empty_array(dtype_code, shape^)
@@ -92,9 +88,7 @@ def full(
     return PythonObject(alloc=result^)
 
 
-def from_flat(
-    values_obj: PythonObject, shape_obj: PythonObject, dtype_obj: PythonObject
-) raises -> PythonObject:
+def from_flat_ops(values_obj: PythonObject, shape_obj: PythonObject, dtype_obj: PythonObject) raises -> PythonObject:
     var dtype_code = Int(py=dtype_obj)
     var shape = int_list_from_py(shape_obj)
     var result = make_empty_array(dtype_code, shape^)
@@ -105,7 +99,7 @@ def from_flat(
     return PythonObject(alloc=result^)
 
 
-def from_external(
+def from_external_ops(
     data_address_obj: PythonObject,
     shape_obj: PythonObject,
     strides_obj: PythonObject,
@@ -117,16 +111,12 @@ def from_external(
         raise Error("array interface data pointer is null")
     var shape = int_list_from_py(shape_obj)
     var strides = int_list_from_py(strides_obj)
-    var data = UnsafePointer[UInt8, MutExternalOrigin](
-        unsafe_from_address=address
-    )
-    var result = make_external_array(
-        Int(py=dtype_obj), shape^, strides^, 0, data, Int(py=byte_len_obj)
-    )
+    var data = UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=address)
+    var result = make_external_array(Int(py=dtype_obj), shape^, strides^, 0, data, Int(py=byte_len_obj))
     return PythonObject(alloc=result^)
 
 
-def copy_from_external(
+def copy_from_external_ops(
     data_address_obj: PythonObject,
     shape_obj: PythonObject,
     strides_obj: PythonObject,
@@ -135,7 +125,7 @@ def copy_from_external(
 ) raises -> PythonObject:
     # One-shot copy: build an external view of `address` with the supplied
     # shape/strides, then materialize a c-contiguous copy. Saves an FFI
-    # round-trip vs calling `from_external` then `materialize_c_contiguous`
+    # round-trip vs calling `from_external_ops` then `materialize_c_contiguous_ops`
     # back-to-back. Hits the memcpy fast path when the source is already
     # c-contig, otherwise the elementwise walk in `copy_c_contiguous`.
     var address = Int(py=data_address_obj)
@@ -143,47 +133,28 @@ def copy_from_external(
         raise Error("array interface data pointer is null")
     var shape = int_list_from_py(shape_obj)
     var strides = int_list_from_py(strides_obj)
-    var data = UnsafePointer[UInt8, MutExternalOrigin](
-        unsafe_from_address=address
-    )
-    var external = make_external_array(
-        Int(py=dtype_obj), shape^, strides^, 0, data, Int(py=byte_len_obj)
-    )
+    var data = UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=address)
+    var external = make_external_array(Int(py=dtype_obj), shape^, strides^, 0, data, Int(py=byte_len_obj))
     var result = copy_c_contiguous(external)
     return PythonObject(alloc=result^)
 
 
-def dtype_code_from_typestr_string(typestr: String) raises -> Int:
+def dtype_code_from_typestr_string_ops(typestr: String) raises -> Int:
     # Recognize numpy `__array_interface__` typestr values for our supported
     # dtypes. Endian-marker `<`, `>`, `=`, `|` all map identically. Native
     # endian on darwin-arm64 is `<` so that's the common case.
-    if (
-        typestr == "<f4"
-        or typestr == ">f4"
-        or typestr == "=f4"
-        or typestr == "|f4"
-    ):
+    if typestr == "<f4" or typestr == ">f4" or typestr == "=f4" or typestr == "|f4":
         return DTYPE_FLOAT32
-    if (
-        typestr == "<f8"
-        or typestr == ">f8"
-        or typestr == "=f8"
-        or typestr == "|f8"
-    ):
+    if typestr == "<f8" or typestr == ">f8" or typestr == "=f8" or typestr == "|f8":
         return DTYPE_FLOAT64
-    if (
-        typestr == "<i8"
-        or typestr == ">i8"
-        or typestr == "=i8"
-        or typestr == "|i8"
-    ):
+    if typestr == "<i8" or typestr == ">i8" or typestr == "=i8" or typestr == "|i8":
         return DTYPE_INT64
     if typestr == "|b1":
         return DTYPE_BOOL
     raise Error("unsupported array interface typestr")
 
 
-def asarray_from_numpy(
+def asarray_from_numpy_ops(
     obj: PythonObject,
     requested_dtype_obj: PythonObject,
     copy_obj: PythonObject,
@@ -194,12 +165,12 @@ def asarray_from_numpy(
     # `copy_obj` is 0 (False), 1 (True), or -1 (None / default).
     var iface = obj.__array_interface__
     var typestr = String(py=iface["typestr"])
-    var source_dtype_code = dtype_code_from_typestr_string(typestr)
+    var source_dtype_code = dtype_code_from_typestr_string_ops(typestr)
     var requested_code = Int(py=requested_dtype_obj)
     var copy_flag = Int(py=copy_obj)
     if requested_code >= 0 and requested_code != source_dtype_code:
         # dtype conversion needed; punt to the python wrapper which already
-        # knows how to handle astype + copy_from_numpy_array.
+        # knows how to handle astype_ops + copy_from_numpy_array.
         raise Error("asarray_from_numpy: dtype conversion handled in python")
     var shape_obj = iface["shape"]
     var raw_strides_obj = iface["strides"]
@@ -230,9 +201,7 @@ def asarray_from_numpy(
         for i in range(ndim):
             var bs = Int(py=raw_strides_obj[i])
             if bs % item_bytes != 0:
-                raise Error(
-                    "array interface strides must align to dtype itemsize"
-                )
+                raise Error("array interface strides must align to dtype itemsize")
             element_strides.append(bs // item_bytes)
     var byte_len = element_size * item_bytes
     var must_copy = (copy_flag == 1) or readonly
@@ -240,9 +209,7 @@ def asarray_from_numpy(
         var view_strides = List[Int]()
         for i in range(len(element_strides)):
             view_strides.append(element_strides[i])
-        var data = UnsafePointer[UInt8, MutExternalOrigin](
-            unsafe_from_address=address
-        )
+        var data = UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=address)
         var view_shape = List[Int]()
         for i in range(len(shape)):
             view_shape.append(shape[i])
@@ -256,16 +223,12 @@ def asarray_from_numpy(
         )
         var result = copy_c_contiguous(external)
         return PythonObject(alloc=result^)
-    var data = UnsafePointer[UInt8, MutExternalOrigin](
-        unsafe_from_address=address
-    )
-    var result = make_external_array(
-        source_dtype_code, shape^, element_strides^, 0, data, byte_len
-    )
+    var data = UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=address)
+    var result = make_external_array(source_dtype_code, shape^, element_strides^, 0, data, byte_len)
     return PythonObject(alloc=result^)
 
 
-def arange(
+def arange_ops(
     start_obj: PythonObject,
     stop_obj: PythonObject,
     step_obj: PythonObject,
@@ -297,7 +260,7 @@ def arange(
     return PythonObject(alloc=result^)
 
 
-def linspace(
+def linspace_ops(
     start_obj: PythonObject,
     stop_obj: PythonObject,
     num_obj: PythonObject,
@@ -323,9 +286,7 @@ def linspace(
     return PythonObject(alloc=result^)
 
 
-def reshape(
-    array_obj: PythonObject, shape_obj: PythonObject
-) raises -> PythonObject:
+def reshape_ops(array_obj: PythonObject, shape_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
     if not is_c_contiguous(src[]):
         raise Error("reshape() only supports c-contiguous arrays for now")
@@ -334,15 +295,11 @@ def reshape(
     if new_size != src[].size_value:
         raise Error("cannot reshape array to requested size")
     var strides = make_c_strides(shape)
-    var result = make_view_array(
-        src[], shape^, strides^, src[].size_value, src[].offset_elems
-    )
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
     return PythonObject(alloc=result^)
 
 
-def transpose(
-    array_obj: PythonObject, axes_obj: PythonObject
-) raises -> PythonObject:
+def transpose_ops(array_obj: PythonObject, axes_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
     var axes = int_list_from_py(axes_obj)
     if len(axes) != len(src[].shape):
@@ -355,13 +312,11 @@ def transpose(
             raise Error("transpose() axis out of bounds")
         shape.append(src[].shape[axis])
         strides.append(src[].strides[axis])
-    var result = make_view_array(
-        src[], shape^, strides^, src[].size_value, src[].offset_elems
-    )
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
     return PythonObject(alloc=result^)
 
 
-def transpose_full_reverse(
+def transpose_full_reverse_ops(
     array_obj: PythonObject,
 ) raises -> PythonObject:
     # Fast path for `.T` on rank>=2: reverse every axis without crossing
@@ -375,13 +330,11 @@ def transpose_full_reverse(
     for i in range(ndim - 1, -1, -1):
         shape.append(src[].shape[i])
         strides.append(src[].strides[i])
-    var result = make_view_array(
-        src[], shape^, strides^, src[].size_value, src[].offset_elems
-    )
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
     return PythonObject(alloc=result^)
 
 
-def slice(
+def slice_ops(
     array_obj: PythonObject,
     starts_obj: PythonObject,
     stops_obj: PythonObject,
@@ -406,21 +359,13 @@ def slice(
     for axis in range(len(src[].shape)):
         offset += starts[axis] * src[].strides[axis]
         if drops[axis] == 0:
-            shape.append(
-                slice_length(
-                    src[].shape[axis], starts[axis], stops[axis], steps[axis]
-                )
-            )
+            shape.append(slice_length(src[].shape[axis], starts[axis], stops[axis], steps[axis]))
             strides.append(src[].strides[axis] * steps[axis])
-    var result = make_view_array(
-        src[], shape^, strides^, shape_size(shape), offset
-    )
+    var result = make_view_array(src[], shape^, strides^, shape_size(shape), offset)
     return PythonObject(alloc=result^)
 
 
-def broadcast_to(
-    array_obj: PythonObject, shape_obj: PythonObject
-) raises -> PythonObject:
+def broadcast_to_ops(array_obj: PythonObject, shape_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
     var shape = int_list_from_py(shape_obj)
     var ndim_out = len(shape)
@@ -441,15 +386,11 @@ def broadcast_to(
                 strides.append(0)
             else:
                 raise Error("shape is not broadcastable")
-    var result = make_view_array(
-        src[], shape^, strides^, shape_size(shape), src[].offset_elems
-    )
+    var result = make_view_array(src[], shape^, strides^, shape_size(shape), src[].offset_elems)
     return PythonObject(alloc=result^)
 
 
-def astype(
-    array_obj: PythonObject, dtype_obj: PythonObject
-) raises -> PythonObject:
+def astype_ops(array_obj: PythonObject, dtype_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
     var dtype_code = Int(py=dtype_obj)
     var shape = clone_int_list(src[].shape)
@@ -459,7 +400,7 @@ def astype(
     return PythonObject(alloc=result^)
 
 
-def materialize_c_contiguous(
+def materialize_c_contiguous_ops(
     array_obj: PythonObject,
 ) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
@@ -467,7 +408,7 @@ def materialize_c_contiguous(
     return PythonObject(alloc=result^)
 
 
-def normalize_axis(axis_value: Int, ndim: Int, name: String) raises -> Int:
+def normalize_axis_ops(axis_value: Int, ndim: Int, name: String) raises -> Int:
     var axis = axis_value
     if axis < 0:
         axis += ndim
@@ -483,9 +424,7 @@ struct DiagonalMetadata(ImplicitlyCopyable, Movable, Writable):
     var stride: Int
 
 
-def diagonal_metadata(
-    src: Array, offset: Int, axis1: Int, axis2: Int
-) raises -> DiagonalMetadata:
+def diagonal_metadata_ops(src: Array, offset: Int, axis1: Int, axis2: Int) raises -> DiagonalMetadata:
     if len(src.shape) != 2:
         raise Error("diagonal() and trace() currently require rank-2 arrays")
     if axis1 == axis2:
@@ -505,36 +444,30 @@ def diagonal_metadata(
         diag_len = rows_left
         if cols_left < diag_len:
             diag_len = cols_left
-    var diag_offset = (
-        src.offset_elems
-        + row_start * src.strides[axis1]
-        + col_start * src.strides[axis2]
-    )
+    var diag_offset = src.offset_elems + row_start * src.strides[axis1] + col_start * src.strides[axis2]
     var diag_stride = src.strides[axis1] + src.strides[axis2]
     return DiagonalMetadata(diag_len, diag_offset, diag_stride)
 
 
-def diagonal(
+def diagonal_ops(
     array_obj: PythonObject,
     offset_obj: PythonObject,
     axis1_obj: PythonObject,
     axis2_obj: PythonObject,
 ) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
-    var axis1 = normalize_axis(Int(py=axis1_obj), len(src[].shape), "axis1")
-    var axis2 = normalize_axis(Int(py=axis2_obj), len(src[].shape), "axis2")
-    var metadata = diagonal_metadata(src[], Int(py=offset_obj), axis1, axis2)
+    var axis1 = normalize_axis_ops(Int(py=axis1_obj), len(src[].shape), "axis1")
+    var axis2 = normalize_axis_ops(Int(py=axis2_obj), len(src[].shape), "axis2")
+    var metadata = diagonal_metadata_ops(src[], Int(py=offset_obj), axis1, axis2)
     var shape = List[Int]()
     shape.append(metadata.length)
     var strides = List[Int]()
     strides.append(metadata.stride)
-    var result = make_view_array(
-        src[], shape^, strides^, metadata.length, metadata.offset
-    )
+    var result = make_view_array(src[], shape^, strides^, metadata.length, metadata.offset)
     return PythonObject(alloc=result^)
 
 
-def trace(
+def trace_ops(
     array_obj: PythonObject,
     offset_obj: PythonObject,
     axis1_obj: PythonObject,
@@ -542,9 +475,9 @@ def trace(
     dtype_obj: PythonObject,
 ) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
-    var axis1 = normalize_axis(Int(py=axis1_obj), len(src[].shape), "axis1")
-    var axis2 = normalize_axis(Int(py=axis2_obj), len(src[].shape), "axis2")
-    var metadata = diagonal_metadata(src[], Int(py=offset_obj), axis1, axis2)
+    var axis1 = normalize_axis_ops(Int(py=axis1_obj), len(src[].shape), "axis1")
+    var axis2 = normalize_axis_ops(Int(py=axis2_obj), len(src[].shape), "axis2")
+    var metadata = diagonal_metadata_ops(src[], Int(py=offset_obj), axis1, axis2)
     var diag_len = metadata.length
     var diag_offset = metadata.offset
     var diag_stride = metadata.stride
@@ -572,15 +505,11 @@ def trace(
     return PythonObject(alloc=result^)
 
 
-def unary(
-    array_obj: PythonObject, op_obj: PythonObject
-) raises -> PythonObject:
+def unary_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
     var op = Int(py=op_obj)
     var shape = clone_int_list(src[].shape)
-    var result = make_empty_array(
-        result_dtype_for_unary(src[].dtype_code), shape^
-    )
+    var result = make_empty_array(result_dtype_for_unary(src[].dtype_code), shape^)
     if maybe_unary_contiguous(src[], result, op):
         return PythonObject(alloc=result^)
     for i in range(src[].size_value):
@@ -600,16 +529,12 @@ def unary(
     return PythonObject(alloc=result^)
 
 
-def binary_dispatch(
-    lhs: Array, rhs: Array, op: Int
-) raises -> Array:
-    # Internal binary dispatch core. Allocates the result and runs the
+def binary_dispatch_ops(lhs: Array, rhs: Array, op: Int) raises -> Array:
+    # Internal binary_ops dispatch core. Allocates the result and runs the
     # contiguous / strided fast paths; if all fail, falls back to the
-    # broadcast-divmod walker. Used by both the Python `binary` function and
+    # broadcast-divmod walker. Used by both the Python `binary_ops` function and
     # the Array.add/sub/mul/div method shortcuts.
-    var dtype_code = result_dtype_for_binary(
-        lhs.dtype_code, rhs.dtype_code, op
-    )
+    var dtype_code = result_dtype_for_binary(lhs.dtype_code, rhs.dtype_code, op)
     var same = same_shape(lhs.shape, rhs.shape)
     var shape: List[Int]
     if same:
@@ -639,46 +564,34 @@ def binary_dispatch(
     return result^
 
 
-def binary_op_method(
-    py_self: PythonObject, other_obj: PythonObject, op: Int
-) raises -> PythonObject:
+def binary_op_method_ops(py_self: PythonObject, other_obj: PythonObject, op: Int) raises -> PythonObject:
     # Method-style entrypoint shared by Array.add/sub/mul/div. The Mojo
     # PythonObject method dispatch is measurably tighter than def_function
     # for arg-marshal-bound calls; per-op trampolines (add_method_py etc.)
     # bake `op` into the dispatch so Python doesn't need to pass it.
     var self_ptr = py_self.downcast_value_ptr[Array]()
     var other_ptr = other_obj.downcast_value_ptr[Array]()
-    var result = binary_dispatch(self_ptr[], other_ptr[], op)
+    var result = binary_dispatch_ops(self_ptr[], other_ptr[], op)
     return PythonObject(alloc=result^)
 
 
-def array_add_method(
-    py_self: PythonObject, other_obj: PythonObject
-) raises -> PythonObject:
-    return binary_op_method(py_self, other_obj, OP_ADD)
+def array_add_method_ops(py_self: PythonObject, other_obj: PythonObject) raises -> PythonObject:
+    return binary_op_method_ops(py_self, other_obj, OP_ADD)
 
 
-def array_sub_method(
-    py_self: PythonObject, other_obj: PythonObject
-) raises -> PythonObject:
-    return binary_op_method(py_self, other_obj, OP_SUB)
+def array_sub_method_ops(py_self: PythonObject, other_obj: PythonObject) raises -> PythonObject:
+    return binary_op_method_ops(py_self, other_obj, OP_SUB)
 
 
-def array_mul_method(
-    py_self: PythonObject, other_obj: PythonObject
-) raises -> PythonObject:
-    return binary_op_method(py_self, other_obj, OP_MUL)
+def array_mul_method_ops(py_self: PythonObject, other_obj: PythonObject) raises -> PythonObject:
+    return binary_op_method_ops(py_self, other_obj, OP_MUL)
 
 
-def array_div_method(
-    py_self: PythonObject, other_obj: PythonObject
-) raises -> PythonObject:
-    return binary_op_method(py_self, other_obj, OP_DIV)
+def array_div_method_ops(py_self: PythonObject, other_obj: PythonObject) raises -> PythonObject:
+    return binary_op_method_ops(py_self, other_obj, OP_DIV)
 
 
-def array_matmul_method(
-    py_self: PythonObject, other_obj: PythonObject
-) raises -> PythonObject:
+def array_matmul_method_ops(py_self: PythonObject, other_obj: PythonObject) raises -> PythonObject:
     var self_ptr = py_self.downcast_value_ptr[Array]()
     var other_ptr = other_obj.downcast_value_ptr[Array]()
     var lhs_ndim = len(self_ptr[].shape)
@@ -705,22 +618,16 @@ def array_matmul_method(
     elif lhs_ndim == 1 and rhs_ndim == 2:
         out_shape.append(n)
     var result = make_empty_array(
-        result_dtype_for_binary(
-            self_ptr[].dtype_code, other_ptr[].dtype_code, OP_MUL
-        ),
+        result_dtype_for_binary(self_ptr[].dtype_code, other_ptr[].dtype_code, OP_MUL),
         out_shape^,
     )
     if lhs_ndim == 1 and rhs_ndim == 1:
         var total = 0.0
         for k in range(k_lhs):
-            total += get_logical_as_f64(
-                self_ptr[], k
-            ) * get_logical_as_f64(other_ptr[], k)
+            total += get_logical_as_f64(self_ptr[], k) * get_logical_as_f64(other_ptr[], k)
         set_logical_from_f64(result, 0, total)
         return PythonObject(alloc=result^)
-    if maybe_matmul_contiguous(
-        self_ptr[], other_ptr[], result, m, n, k_lhs
-    ):
+    if maybe_matmul_contiguous(self_ptr[], other_ptr[], result, m, n, k_lhs):
         return PythonObject(alloc=result^)
     for i in range(m):
         for j in range(n):
@@ -732,9 +639,7 @@ def array_matmul_method(
                 var rhs_index = k
                 if rhs_ndim == 2:
                     rhs_index = k * n + j
-                total += get_logical_as_f64(
-                    self_ptr[], lhs_index
-                ) * get_logical_as_f64(other_ptr[], rhs_index)
+                total += get_logical_as_f64(self_ptr[], lhs_index) * get_logical_as_f64(other_ptr[], rhs_index)
             var out_index = j
             if lhs_ndim == 2:
                 out_index = i * n + j
@@ -742,17 +647,15 @@ def array_matmul_method(
     return PythonObject(alloc=result^)
 
 
-def binary(
-    lhs_obj: PythonObject, rhs_obj: PythonObject, op_obj: PythonObject
-) raises -> PythonObject:
+def binary_ops(lhs_obj: PythonObject, rhs_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
     var lhs = lhs_obj.downcast_value_ptr[Array]()
     var rhs = rhs_obj.downcast_value_ptr[Array]()
     var op = Int(py=op_obj)
-    var result = binary_dispatch(lhs[], rhs[], op)
+    var result = binary_dispatch_ops(lhs[], rhs[], op)
     return PythonObject(alloc=result^)
 
 
-def binary_into(
+def binary_into_ops(
     dst_obj: PythonObject,
     lhs_obj: PythonObject,
     rhs_obj: PythonObject,
@@ -762,14 +665,10 @@ def binary_into(
     var lhs = lhs_obj.downcast_value_ptr[Array]()
     var rhs = rhs_obj.downcast_value_ptr[Array]()
     var op = Int(py=op_obj)
-    var dtype_code = result_dtype_for_binary(
-        lhs[].dtype_code, rhs[].dtype_code, op
-    )
+    var dtype_code = result_dtype_for_binary(lhs[].dtype_code, rhs[].dtype_code, op)
     if dst[].dtype_code != dtype_code:
         raise Error("out dtype does not match binary result dtype")
-    if same_shape(lhs[].shape, rhs[].shape) and same_shape(
-        lhs[].shape, dst[].shape
-    ):
+    if same_shape(lhs[].shape, rhs[].shape) and same_shape(lhs[].shape, dst[].shape):
         if maybe_binary_same_shape_contiguous(lhs[], rhs[], dst[], op):
             return PythonObject(None)
     else:
@@ -785,7 +684,7 @@ def binary_into(
     return PythonObject(None)
 
 
-def binary_scalar(
+def binary_scalar_ops(
     array_obj: PythonObject,
     scalar_obj: PythonObject,
     scalar_dtype_obj: PythonObject,
@@ -797,14 +696,10 @@ def binary_scalar(
     var op = Int(py=op_obj)
     var scalar_on_left = Bool(py=scalar_on_left_obj)
     var shape = clone_int_list(array[].shape)
-    var dtype_code = result_dtype_for_binary(
-        array[].dtype_code, scalar_dtype, op
-    )
+    var dtype_code = result_dtype_for_binary(array[].dtype_code, scalar_dtype, op)
     var result = make_empty_array(dtype_code, shape^)
     var scalar_value = scalar_py_as_f64(scalar_obj, scalar_dtype)
-    if maybe_binary_scalar_value_contiguous(
-        array[], scalar_value, result, op, scalar_on_left
-    ):
+    if maybe_binary_scalar_value_contiguous(array[], scalar_value, result, op, scalar_on_left):
         return PythonObject(alloc=result^)
     for i in range(result.size_value):
         var lhs = get_logical_as_f64(array[], i)
@@ -816,29 +711,23 @@ def binary_scalar(
     return PythonObject(alloc=result^)
 
 
-def result_dtype_for_unary_py(dtype_obj: PythonObject) raises -> PythonObject:
+def result_dtype_for_unary_py_ops(dtype_obj: PythonObject) raises -> PythonObject:
     return PythonObject(result_dtype_for_unary(Int(py=dtype_obj)))
 
 
-def result_dtype_for_binary_py(
-    lhs_dtype_obj: PythonObject, rhs_dtype_obj: PythonObject, op_obj: PythonObject
+def result_dtype_for_binary_py_ops(
+    lhs_dtype_obj: PythonObject,
+    rhs_dtype_obj: PythonObject,
+    op_obj: PythonObject,
 ) raises -> PythonObject:
-    return PythonObject(
-        result_dtype_for_binary(
-            Int(py=lhs_dtype_obj), Int(py=rhs_dtype_obj), Int(py=op_obj)
-        )
-    )
+    return PythonObject(result_dtype_for_binary(Int(py=lhs_dtype_obj), Int(py=rhs_dtype_obj), Int(py=op_obj)))
 
 
-def result_dtype_for_reduction_py(
-    dtype_obj: PythonObject, op_obj: PythonObject
-) raises -> PythonObject:
-    return PythonObject(
-        result_dtype_for_reduction(Int(py=dtype_obj), Int(py=op_obj))
-    )
+def result_dtype_for_reduction_py_ops(dtype_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
+    return PythonObject(result_dtype_for_reduction(Int(py=dtype_obj), Int(py=op_obj)))
 
 
-def sin_add_mul(
+def sin_add_mul_ops(
     lhs_obj: PythonObject,
     rhs_obj: PythonObject,
     scalar_obj: PythonObject,
@@ -857,17 +746,11 @@ def sin_add_mul(
     ):
         var fast_shape = clone_int_list(lhs[].shape)
         var fast_result = make_empty_array(lhs[].dtype_code, fast_shape^)
-        if maybe_sin_add_mul_contiguous(
-            lhs[], rhs[], scalar_value, fast_result
-        ):
+        if maybe_sin_add_mul_contiguous(lhs[], rhs[], scalar_value, fast_result):
             return PythonObject(alloc=fast_result^)
     var shape = broadcast_shape(lhs[], rhs[])
-    var rhs_mul_dtype = result_dtype_for_binary(
-        rhs[].dtype_code, scalar_dtype, OP_MUL
-    )
-    var dtype_code = result_dtype_for_binary(
-        result_dtype_for_unary(lhs[].dtype_code), rhs_mul_dtype, OP_ADD
-    )
+    var rhs_mul_dtype = result_dtype_for_binary(rhs[].dtype_code, scalar_dtype, OP_MUL)
+    var dtype_code = result_dtype_for_binary(result_dtype_for_unary(lhs[].dtype_code), rhs_mul_dtype, OP_ADD)
     var result = make_empty_array(dtype_code, shape^)
     if maybe_sin_add_mul_contiguous(lhs[], rhs[], scalar_value, result):
         return PythonObject(alloc=result^)
@@ -880,34 +763,24 @@ def sin_add_mul(
     return PythonObject(alloc=result^)
 
 
-def where(
-    cond_obj: PythonObject, lhs_obj: PythonObject, rhs_obj: PythonObject
-) raises -> PythonObject:
+def where_ops(cond_obj: PythonObject, lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObject:
     var cond = cond_obj.downcast_value_ptr[Array]()
     var lhs = lhs_obj.downcast_value_ptr[Array]()
     var rhs = rhs_obj.downcast_value_ptr[Array]()
     var partial_shape = broadcast_shape(cond[], lhs[])
     var tmp = make_empty_array(lhs[].dtype_code, partial_shape^)
     var shape = broadcast_shape(tmp, rhs[])
-    var dtype_code = result_dtype_for_binary(
-        lhs[].dtype_code, rhs[].dtype_code, OP_ADD
-    )
+    var dtype_code = result_dtype_for_binary(lhs[].dtype_code, rhs[].dtype_code, OP_ADD)
     var result = make_empty_array(dtype_code, shape^)
     for i in range(result.size_value):
         if get_broadcast_as_bool(cond[], i, result.shape):
-            set_logical_from_f64(
-                result, i, get_broadcast_as_f64(lhs[], i, result.shape)
-            )
+            set_logical_from_f64(result, i, get_broadcast_as_f64(lhs[], i, result.shape))
         else:
-            set_logical_from_f64(
-                result, i, get_broadcast_as_f64(rhs[], i, result.shape)
-            )
+            set_logical_from_f64(result, i, get_broadcast_as_f64(rhs[], i, result.shape))
     return PythonObject(alloc=result^)
 
 
-def reduce(
-    array_obj: PythonObject, op_obj: PythonObject
-) raises -> PythonObject:
+def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
     var op = Int(py=op_obj)
     var shape = List[Int]()
@@ -955,9 +828,7 @@ def reduce(
     return PythonObject(alloc=result^)
 
 
-def matmul(
-    lhs_obj: PythonObject, rhs_obj: PythonObject
-) raises -> PythonObject:
+def matmul_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObject:
     var lhs = lhs_obj.downcast_value_ptr[Array]()
     var rhs = rhs_obj.downcast_value_ptr[Array]()
     var lhs_ndim = len(lhs[].shape)
@@ -1005,9 +876,7 @@ def matmul(
                 var rhs_index = k
                 if rhs_ndim == 2:
                     rhs_index = k * n + j
-                total += get_logical_as_f64(
-                    lhs[], lhs_index
-                ) * get_logical_as_f64(rhs[], rhs_index)
+                total += get_logical_as_f64(lhs[], lhs_index) * get_logical_as_f64(rhs[], rhs_index)
             var out_index = j
             if lhs_ndim == 2:
                 out_index = i * n + j
@@ -1015,15 +884,11 @@ def matmul(
     return PythonObject(alloc=result^)
 
 
-def solve(
-    a_obj: PythonObject, b_obj: PythonObject
-) raises -> PythonObject:
+def solve_ops(a_obj: PythonObject, b_obj: PythonObject) raises -> PythonObject:
     var a = a_obj.downcast_value_ptr[Array]()
     var b = b_obj.downcast_value_ptr[Array]()
     if len(a[].shape) != 2 or a[].shape[0] != a[].shape[1]:
-        raise Error(
-            "linalg.solve() requires a square rank-2 coefficient matrix"
-        )
+        raise Error("linalg.solve_ops() requires a square rank-2 coefficient matrix")
     var n = a[].shape[0]
     var out_shape = List[Int]()
     if len(b[].shape) == 1:
@@ -1045,54 +910,44 @@ def solve(
     return PythonObject(alloc=result^)
 
 
-def inv(array_obj: PythonObject) raises -> PythonObject:
+def inv_ops(array_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
     if len(src[].shape) != 2 or src[].shape[0] != src[].shape[1]:
         raise Error("linalg.inv() requires a square rank-2 matrix")
     var shape = List[Int]()
     shape.append(src[].shape[0])
     shape.append(src[].shape[1])
-    var result = make_empty_array(
-        result_dtype_for_linalg(src[].dtype_code), shape^
-    )
+    var result = make_empty_array(result_dtype_for_linalg(src[].dtype_code), shape^)
     lu_inverse_into(src[], result)
     return PythonObject(alloc=result^)
 
 
-def det(array_obj: PythonObject) raises -> PythonObject:
+def det_ops(array_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
     var shape = List[Int]()
-    var result = make_empty_array(
-        result_dtype_for_linalg(src[].dtype_code), shape^
-    )
+    var result = make_empty_array(result_dtype_for_linalg(src[].dtype_code), shape^)
     lu_det_into(src[], result)
     return PythonObject(alloc=result^)
 
 
-def fill(
-    array_obj: PythonObject, value_obj: PythonObject
-) raises -> PythonObject:
+def fill_ops(array_obj: PythonObject, value_obj: PythonObject) raises -> PythonObject:
     var dst = array_obj.downcast_value_ptr[Array]()
     fill_all_from_py(dst[], value_obj)
     return PythonObject(None)
 
 
-def copyto(
-    dst_obj: PythonObject, src_obj: PythonObject
-) raises -> PythonObject:
+def copyto_ops(dst_obj: PythonObject, src_obj: PythonObject) raises -> PythonObject:
     var dst = dst_obj.downcast_value_ptr[Array]()
     var src = src_obj.downcast_value_ptr[Array]()
     var shape = broadcast_shape(src[], dst[])
     if not same_shape(shape, dst[].shape):
         raise Error("copyto() source is not broadcastable to destination")
     for i in range(dst[].size_value):
-        set_logical_from_f64(
-            dst[], i, get_broadcast_as_f64(src[], i, dst[].shape)
-        )
+        set_logical_from_f64(dst[], i, get_broadcast_as_f64(src[], i, dst[].shape))
     return PythonObject(None)
 
 
-def slice_1d(
+def slice_1d_ops(
     array_obj: PythonObject,
     start_obj: PythonObject,
     stop_obj: PythonObject,

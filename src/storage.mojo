@@ -34,9 +34,7 @@ def make_external_storage(
     return storage
 
 
-def retain_storage(
-    storage: UnsafePointer[Storage, MutExternalOrigin]
-) -> UnsafePointer[Storage, MutExternalOrigin]:
+def retain_storage(storage: UnsafePointer[Storage, MutExternalOrigin]) -> UnsafePointer[Storage, MutExternalOrigin]:
     storage[].ref_count += 1
     return storage
 

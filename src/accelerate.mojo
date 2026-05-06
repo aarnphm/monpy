@@ -9,9 +9,7 @@ from std.sys import CompilationTarget
 # fall back to the netlib reference libraries. cblas_* and *gesv_/*getrf_
 # function names are identical across both, so the call helpers below are
 # platform-agnostic — only the dylib resolution branches.
-comptime LIB_ACC_PATH = (
-    "/System/Library/Frameworks/Accelerate.framework/Accelerate"
-)
+comptime LIB_ACC_PATH = "/System/Library/Frameworks/Accelerate.framework/Accelerate"
 
 # Linux dylib candidates, tried in order in `init_*_dylib`. OpenBLAS is the
 # de-facto standard on Linux distros (Ubuntu, Debian, Fedora, Arch all ship
@@ -174,8 +172,7 @@ def blas_error_msg() -> Error:
         return Error("cannot find Apple Accelerate at ", LIB_ACC_PATH)
     elif CompilationTarget.is_linux():
         return Error(
-            "cannot find OpenBLAS / libblas on Linux. install with `apt"
-            " install libopenblas-dev` or equivalent."
+            "cannot find OpenBLAS / libblas on Linux. install with `apt install libopenblas-dev` or equivalent."
         )
     return Error("BLAS backend not configured for this platform")
 
@@ -262,9 +259,7 @@ def is_blas_available() -> Bool:
 
 
 @always_inline
-def get_blas_function[
-    func_name: StaticString, result_type: TrivialRegisterPassable
-]() raises -> result_type:
+def get_blas_function[func_name: StaticString, result_type: TrivialRegisterPassable]() raises -> result_type:
     comptime assert (
         CompilationTarget.is_macos() or CompilationTarget.is_linux()
     ), "BLAS backend requires macOS or Linux"
@@ -276,9 +271,7 @@ def get_blas_function[
 
 
 @always_inline
-def get_lapack_function[
-    func_name: StaticString, result_type: TrivialRegisterPassable
-]() raises -> result_type:
+def get_lapack_function[func_name: StaticString, result_type: TrivialRegisterPassable]() raises -> result_type:
     comptime assert (
         CompilationTarget.is_macos() or CompilationTarget.is_linux()
     ), "LAPACK backend requires macOS or Linux"
@@ -295,9 +288,7 @@ def get_lapack_function[
 # there. On Linux, callers should prefer the explicit BLAS / LAPACK
 # helpers below; this alias preserves source compatibility.
 @always_inline
-def get_accelerate_function[
-    func_name: StaticString, result_type: TrivialRegisterPassable
-]() raises -> result_type:
+def get_accelerate_function[func_name: StaticString, result_type: TrivialRegisterPassable]() raises -> result_type:
     return get_blas_function[func_name, result_type]()
 
 
@@ -391,9 +382,7 @@ def lapack_sgesv(
     var info = Int32(0)
     function(
         rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
-        rebind[UnsafePointer[Int32, MutAnyOrigin]](
-            UnsafePointer(to=rhs_columns)
-        ),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=rhs_columns)),
         rebind[UnsafePointer[Float32, MutAnyOrigin]](a_ptr),
         rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=leading_a)),
         rebind[UnsafePointer[Int32, MutAnyOrigin]](pivot_ptr),
@@ -420,9 +409,7 @@ def lapack_dgesv(
     var info = Int32(0)
     function(
         rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
-        rebind[UnsafePointer[Int32, MutAnyOrigin]](
-            UnsafePointer(to=rhs_columns)
-        ),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=rhs_columns)),
         rebind[UnsafePointer[Float64, MutAnyOrigin]](a_ptr),
         rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=leading_a)),
         rebind[UnsafePointer[Int32, MutAnyOrigin]](pivot_ptr),
@@ -493,9 +480,7 @@ def cblas_sgemm_row_major(
     a_ptr: UnsafePointer[Float32, MutExternalOrigin],
     b_ptr: UnsafePointer[Float32, MutExternalOrigin],
 ) raises:
-    cblas_sgemm_row_major_ld(
-        m, n, k, c_ptr, a_ptr, b_ptr, False, False, k, n, n
-    )
+    cblas_sgemm_row_major_ld(m, n, k, c_ptr, a_ptr, b_ptr, False, False, k, n, n)
 
 
 @always_inline
@@ -567,9 +552,7 @@ def cblas_dgemm_row_major(
     a_ptr: UnsafePointer[Float64, MutExternalOrigin],
     b_ptr: UnsafePointer[Float64, MutExternalOrigin],
 ) raises:
-    cblas_dgemm_row_major_ld(
-        m, n, k, c_ptr, a_ptr, b_ptr, False, False, k, n, n
-    )
+    cblas_dgemm_row_major_ld(m, n, k, c_ptr, a_ptr, b_ptr, False, False, k, n, n)
 
 
 @always_inline

@@ -64,17 +64,13 @@ struct Array(Movable, Writable):
         return PythonObject(self_ptr[].size_value)
 
     @staticmethod
-    def shape_at_py(
-        py_self: PythonObject, index_obj: PythonObject
-    ) raises -> PythonObject:
+    def shape_at_py(py_self: PythonObject, index_obj: PythonObject) raises -> PythonObject:
         var self_ptr = Self._get_self_ptr(py_self)
         var index = Int(py=index_obj)
         return PythonObject(self_ptr[].shape[index])
 
     @staticmethod
-    def stride_at_py(
-        py_self: PythonObject, index_obj: PythonObject
-    ) raises -> PythonObject:
+    def stride_at_py(py_self: PythonObject, index_obj: PythonObject) raises -> PythonObject:
         var self_ptr = Self._get_self_ptr(py_self)
         var index = Int(py=index_obj)
         return PythonObject(self_ptr[].strides[index])
@@ -87,9 +83,7 @@ struct Array(Movable, Writable):
     @staticmethod
     def data_address_py(py_self: PythonObject) raises -> PythonObject:
         var self_ptr = Self._get_self_ptr(py_self)
-        var byte_offset = self_ptr[].offset_elems * item_size(
-            self_ptr[].dtype_code
-        )
+        var byte_offset = self_ptr[].offset_elems * item_size(self_ptr[].dtype_code)
         return PythonObject((self_ptr[].data + byte_offset).__int__())
 
     @staticmethod
@@ -133,28 +127,16 @@ struct Array(Movable, Writable):
         return PythonObject(self_ptr[].backend_code)
 
     @staticmethod
-    def get_scalar_py(
-        py_self: PythonObject, index_obj: PythonObject
-    ) raises -> PythonObject:
+    def get_scalar_py(py_self: PythonObject, index_obj: PythonObject) raises -> PythonObject:
         var self_ptr = Self._get_self_ptr(py_self)
         var index = Int(py=index_obj)
         if self_ptr[].dtype_code == DTYPE_BOOL:
-            return PythonObject(
-                get_physical_bool(
-                    self_ptr[], physical_offset(self_ptr[], index)
-                )
-            )
+            return PythonObject(get_physical_bool(self_ptr[], physical_offset(self_ptr[], index)))
         if self_ptr[].dtype_code == DTYPE_INT64:
-            return PythonObject(
-                get_physical_i64(self_ptr[], physical_offset(self_ptr[], index))
-            )
+            return PythonObject(get_physical_i64(self_ptr[], physical_offset(self_ptr[], index)))
         if self_ptr[].dtype_code == DTYPE_FLOAT32:
-            return PythonObject(
-                get_physical_f32(self_ptr[], physical_offset(self_ptr[], index))
-            )
-        return PythonObject(
-            get_physical_f64(self_ptr[], physical_offset(self_ptr[], index))
-        )
+            return PythonObject(get_physical_f32(self_ptr[], physical_offset(self_ptr[], index)))
+        return PythonObject(get_physical_f64(self_ptr[], physical_offset(self_ptr[], index)))
 
     def write_to(self, mut writer: Some[Writer]):
         writer.write("Array(dtype_code=")
@@ -201,9 +183,7 @@ def make_c_strides(shape: List[Int]) raises -> List[Int]:
     return strides^
 
 
-def make_empty_array(
-    dtype_code: Int, var shape: List[Int]
-) raises -> Array:
+def make_empty_array(dtype_code: Int, var shape: List[Int]) raises -> Array:
     var size = shape_size(shape)
     var strides = make_c_strides(shape)
     var byte_len = size * item_size(dtype_code)
@@ -358,9 +338,7 @@ def physical_offset(array: Array, logical: Int) raises -> Int:
     return physical
 
 
-def broadcast_physical_offset(
-    array: Array, logical: Int, out_shape: List[Int]
-) raises -> Int:
+def broadcast_physical_offset(array: Array, logical: Int, out_shape: List[Int]) raises -> Int:
     var out_ndim = len(out_shape)
     var array_ndim = len(array.shape)
     var physical = array.offset_elems
@@ -411,26 +389,18 @@ def get_logical_as_f64(array: Array, logical: Int) raises -> Float64:
     return get_physical_as_f64(array, physical_offset(array, logical))
 
 
-def get_broadcast_as_f64(
-    array: Array, logical: Int, out_shape: List[Int]
-) raises -> Float64:
-    return get_physical_as_f64(
-        array, broadcast_physical_offset(array, logical, out_shape)
-    )
+def get_broadcast_as_f64(array: Array, logical: Int, out_shape: List[Int]) raises -> Float64:
+    return get_physical_as_f64(array, broadcast_physical_offset(array, logical, out_shape))
 
 
-def get_broadcast_as_bool(
-    array: Array, logical: Int, out_shape: List[Int]
-) raises -> Bool:
+def get_broadcast_as_bool(array: Array, logical: Int, out_shape: List[Int]) raises -> Bool:
     var physical = broadcast_physical_offset(array, logical, out_shape)
     if array.dtype_code == DTYPE_BOOL:
         return get_physical_bool(array, physical)
     return get_physical_as_f64(array, physical) != 0.0
 
 
-def set_physical_from_f64(
-    mut array: Array, physical: Int, value: Float64
-) raises:
+def set_physical_from_f64(mut array: Array, physical: Int, value: Float64) raises:
     if array.dtype_code == DTYPE_BOOL:
         if value != 0.0:
             array.data[physical] = UInt8(1)
@@ -444,24 +414,18 @@ def set_physical_from_f64(
         array.data.bitcast[Float64]()[physical] = value
 
 
-def set_logical_from_f64(
-    mut array: Array, logical: Int, value: Float64
-) raises:
+def set_logical_from_f64(mut array: Array, logical: Int, value: Float64) raises:
     set_physical_from_f64(array, physical_offset(array, logical), value)
 
 
-def set_logical_from_i64(
-    mut array: Array, logical: Int, value: Int64
-) raises:
+def set_logical_from_i64(mut array: Array, logical: Int, value: Int64) raises:
     if array.dtype_code == DTYPE_INT64:
         array.data.bitcast[Int64]()[physical_offset(array, logical)] = value
     else:
         set_logical_from_f64(array, logical, Float64(value))
 
 
-def set_logical_from_py(
-    mut array: Array, logical: Int, value_obj: PythonObject
-) raises:
+def set_logical_from_py(mut array: Array, logical: Int, value_obj: PythonObject) raises:
     var physical = physical_offset(array, logical)
     if array.dtype_code == DTYPE_BOOL:
         if Bool(py=value_obj):
@@ -476,9 +440,7 @@ def set_logical_from_py(
         array.data.bitcast[Float64]()[physical] = Float64(py=value_obj)
 
 
-def scalar_py_as_f64(
-    value_obj: PythonObject, dtype_code: Int
-) raises -> Float64:
+def scalar_py_as_f64(value_obj: PythonObject, dtype_code: Int) raises -> Float64:
     if dtype_code == DTYPE_BOOL:
         if Bool(py=value_obj):
             return 1.0
@@ -513,9 +475,7 @@ def contiguous_as_f64(array: Array, index: Int) raises -> Float64:
     return get_physical_as_f64(array, array.offset_elems + index)
 
 
-def set_contiguous_from_f64(
-    mut array: Array, index: Int, value: Float64
-) raises:
+def set_contiguous_from_f64(mut array: Array, index: Int, value: Float64) raises:
     if array.dtype_code == DTYPE_FLOAT32:
         contiguous_f32_ptr(array)[index] = Float32(value)
     elif array.dtype_code == DTYPE_FLOAT64:
@@ -547,9 +507,7 @@ def copy_c_contiguous(src: Array) raises -> Array:
         elif src.dtype_code == DTYPE_INT64:
             set_logical_from_i64(result, i, get_physical_i64(src, physical))
         elif src.dtype_code == DTYPE_FLOAT32:
-            set_logical_from_f64(
-                result, i, Float64(get_physical_f32(src, physical))
-            )
+            set_logical_from_f64(result, i, Float64(get_physical_f32(src, physical)))
         else:
             set_logical_from_f64(result, i, get_physical_f64(src, physical))
     return result^
@@ -563,15 +521,9 @@ def result_dtype_for_unary(dtype_code: Int) -> Int:
 
 def result_dtype_for_binary(lhs_dtype: Int, rhs_dtype: Int, op: Int) -> Int:
     if op == OP_DIV:
-        if (
-            lhs_dtype == DTYPE_FLOAT32
-            and (rhs_dtype == DTYPE_FLOAT32 or rhs_dtype == DTYPE_BOOL)
-        ):
+        if lhs_dtype == DTYPE_FLOAT32 and (rhs_dtype == DTYPE_FLOAT32 or rhs_dtype == DTYPE_BOOL):
             return DTYPE_FLOAT32
-        if (
-            rhs_dtype == DTYPE_FLOAT32
-            and (lhs_dtype == DTYPE_FLOAT32 or lhs_dtype == DTYPE_BOOL)
-        ):
+        if rhs_dtype == DTYPE_FLOAT32 and (lhs_dtype == DTYPE_FLOAT32 or lhs_dtype == DTYPE_BOOL):
             return DTYPE_FLOAT32
         return DTYPE_FLOAT64
     if lhs_dtype == DTYPE_FLOAT64 or rhs_dtype == DTYPE_FLOAT64:

@@ -1,27 +1,23 @@
 from std.python import PythonObject
 
-from create import astype as create_astype
-from create import broadcast_to as create_broadcast_to
-from create import copyto as create_copyto
-from create import diagonal as create_diagonal
-from create import fill as create_fill
-from create import materialize_c_contiguous as create_materialize_c_contiguous
-from create import reshape as create_reshape
-from create import slice as create_slice
-from create import slice_1d as create_slice_1d
-from create import trace as create_trace
-from create import transpose as create_transpose
+from create import astype_ops as create_astype
+from create import broadcast_to_ops as create_broadcast_to
+from create import copyto_ops as create_copyto
+from create import diagonal_ops as create_diagonal
+from create import fill_ops as create_fill
+from create import materialize_c_contiguous_ops as create_materialize_c_contiguous
+from create import reshape_ops as create_reshape
+from create import slice_ops as create_slice
+from create import slice_1d_ops as create_slice_1d
+from create import trace_ops as create_trace
+from create import transpose_ops as create_transpose
 
 
-def reshape(
-    array_obj: PythonObject, shape_obj: PythonObject
-) raises -> PythonObject:
+def reshape(array_obj: PythonObject, shape_obj: PythonObject) raises -> PythonObject:
     return create_reshape(array_obj, shape_obj)
 
 
-def transpose(
-    array_obj: PythonObject, axes_obj: PythonObject
-) raises -> PythonObject:
+def transpose(array_obj: PythonObject, axes_obj: PythonObject) raises -> PythonObject:
     return create_transpose(array_obj, axes_obj)
 
 
@@ -32,20 +28,14 @@ def slice(
     steps_obj: PythonObject,
     drops_obj: PythonObject,
 ) raises -> PythonObject:
-    return create_slice(
-        array_obj, starts_obj, stops_obj, steps_obj, drops_obj
-    )
+    return create_slice(array_obj, starts_obj, stops_obj, steps_obj, drops_obj)
 
 
-def broadcast_to(
-    array_obj: PythonObject, shape_obj: PythonObject
-) raises -> PythonObject:
+def broadcast_to(array_obj: PythonObject, shape_obj: PythonObject) raises -> PythonObject:
     return create_broadcast_to(array_obj, shape_obj)
 
 
-def astype(
-    array_obj: PythonObject, dtype_obj: PythonObject
-) raises -> PythonObject:
+def astype(array_obj: PythonObject, dtype_obj: PythonObject) raises -> PythonObject:
     return create_astype(array_obj, dtype_obj)
 
 
@@ -71,20 +61,14 @@ def trace(
     axis2_obj: PythonObject,
     dtype_obj: PythonObject,
 ) raises -> PythonObject:
-    return create_trace(
-        array_obj, offset_obj, axis1_obj, axis2_obj, dtype_obj
-    )
+    return create_trace(array_obj, offset_obj, axis1_obj, axis2_obj, dtype_obj)
 
 
-def fill(
-    array_obj: PythonObject, value_obj: PythonObject
-) raises -> PythonObject:
+def fill(array_obj: PythonObject, value_obj: PythonObject) raises -> PythonObject:
     return create_fill(array_obj, value_obj)
 
 
-def copyto(
-    dst_obj: PythonObject, src_obj: PythonObject
-) raises -> PythonObject:
+def copyto(dst_obj: PythonObject, src_obj: PythonObject) raises -> PythonObject:
     return create_copyto(dst_obj, src_obj)
 
 
