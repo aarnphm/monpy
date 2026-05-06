@@ -44,34 +44,37 @@ newaxis=None;nan=math.nan;inf=math.inf;pi=math.pi;e=math.e
 
 
 class ndarray:
+  # Slim wrapper around _native.Array.
+  # We will recompute properties via Mojo each call (~80 ns
+  # for dtype, ~150 ns for shape/strides at rank 2).
+  # The hot binary-op paths don't read these properties at all
+  # (Mojo handles dtype promotion in `binary_dispatch_ops`)
   __array_priority__=1000
-  __slots__=("_base","_dtype","_native","_owner","_shape","_strides")
-  def __init__(_s,native:_native.Array,base:ndarray|None=None,*,dtype:DType|None=None,shape:tuple[int,...]|None=None,strides:tuple[int,...]|None=None,owner:object|None=None)->None:
-    _s._native=native;_s._base=base;_s._dtype=dtype;_s._owner=owner;_s._shape=shape;_s._strides=strides
+  __slots__=("_base","_native","_owner")
+  def __init__(_s,native:_native.Array,base:ndarray|None=None,*,owner:object|None=None)->None:
+    _s._native=native;_s._base=base;_s._owner=owner
+  @staticmethod
+  def _wrap(native:_native.Array,base:ndarray|None=None)->ndarray:
+    # Hot-path constructor: skip __init__'s arg parsing for fresh op results.
+    r=ndarray.__new__(ndarray);r._native=native;r._base=base;r._owner=None;return r
   @property
-  def dtype(self)->DType:
-    if self._dtype is None:self._dtype=_DTC[int(self._native.dtype_code())]
-    return self._dtype
+  def dtype(self)->DType:return _DTC[builtins.int(self._native.dtype_code())]
   @property
-  def shape(self)->tuple[int,...]:
-    if self._shape is None:n=int(self._native.ndim());self._shape=tuple(int(self._native.shape_at(a)) for a in range(n))
-    return self._shape
+  def shape(self)->tuple[int,...]:n=builtins.int(self._native.ndim());return tuple(builtins.int(self._native.shape_at(a)) for a in range(n))
   @property
-  def ndim(self)->int:return len(self._shape) if self._shape is not None else int(self._native.ndim())
+  def ndim(self)->int:return builtins.int(self._native.ndim())
   @property
-  def size(self)->int:return math.prod(self._shape) if self._shape is not None else int(self._native.size())
+  def size(self)->int:return builtins.int(self._native.size())
   @property
   def itemsize(self)->int:return self.dtype.itemsize
   @property
-  def strides(self)->tuple[int,...]:
-    if self._strides is None:i=self.itemsize;self._strides=tuple(int(self._native.stride_at(a))*i for a in range(self.ndim))  # native strides are in elements; we expose bytes
-    return self._strides
+  def strides(self)->tuple[int,...]:i=self.itemsize;n=self.ndim;return tuple(int(self._native.stride_at(a))*i for a in range(n))
   @property
   def device(self)->str:return"cpu"
   @property
   def T(self)->ndarray:
-    n=len(self._shape) if self._shape is not None else int(self._native.ndim())
-    return self if n<2 else ndarray(self._native.transpose_full_reverse_method(),base=self)
+    n=builtins.int(self._native.ndim())
+    return self if n<2 else ndarray._wrap(self._native.transpose_full_reverse_method(),base=self)
   @property
   def mT(self)->ndarray:
     if self.ndim<2:raise ValueError("matrix transpose requires at least two dimensions")
@@ -79,7 +82,7 @@ class ndarray:
   @property
   def __array_interface__(self)->dict[str,object]:
     s,st,i=self.shape,self.strides,self.itemsize
-    return{"version":3,"shape":s,"typestr":self.dtype.typestr,"data":(int(self._native.data_address()),False),"strides":None if _is_c_contig(s,st,i) else st}
+    return{"version":3,"shape":s,"typestr":self.dtype.typestr,"data":(builtins.int(self._native.data_address()),False),"strides":None if _is_c_contig(s,st,i) else st}
   def __array__(self,dtype:object=None,copy:builtins.bool|None=None)->np.ndarray:
     class _O:
       def __init__(o,a:ndarray)->None:o._owner=a;o.__array_interface__=a.__array_interface__
@@ -106,7 +109,7 @@ class ndarray:
       if step==0:raise ValueError("slice step cannot be zero")
       if k.start is None and k.stop is None:start=d-1 if step<0 else 0;stop=-1 if step<0 else d                                # whole-axis defaults; -1 stop tells native to walk past 0 with negative step
       else:start,stop,step=k.indices(d)
-      return ndarray(self._native.slice_1d_method(start,stop,step),base=self,dtype=self.dtype,shape=(len(range(start,stop,step)),),strides=(self.strides[0]*step,))
+      return ndarray._wrap(self._native.slice_1d_method(start,stop,step),base=self)
     v=self._view_for_key(k)
     return v._scalar() if v.ndim==0 else v                                                                                    # scalar collapse for full-integer indexing
   def __setitem__(self,k:object,v:object)->None:
@@ -122,37 +125,34 @@ class ndarray:
   def __float__(self)->float:
     if self.size!=1:raise TypeError(_S1E)
     return float(self._scalar())
-  # binary fast paths: same-dtype same-shape ndarray×ndarray dispatches directly to the native method,
-  # bypassing dtype lookup + coercion. We forward _dtype/_shape so chained ops stay on the fast path.
+  # binary fast paths: ndarray×ndarray dispatches straight to the native method.
+  # Mojo's `binary_dispatch_ops` (in `create.mojo`) handles dtype promotion
+  # internally via `result_dtype_for_binary`, so the python-side dtype check
+  # is redundant — dropping it skips ~80 ns of dtype-cache reads per call.
+  # `_wrap` skips __init__'s arg parsing (~150 ns).
   def __add__(self,o:object)->object:
-    if type(o) is ndarray and self._dtype is not None and self._dtype is o._dtype:
-      r=ndarray(self._native.add(o._native));r._dtype=self._dtype;r._shape=self._shape;return r
+    if type(o) is ndarray:return ndarray._wrap(self._native.add(o._native))
     return _binary_from_array(self,o,OP_ADD,scalar_on_left=False)
   def __radd__(self,o:object)->object:return _binary_from_array(self,o,OP_ADD,scalar_on_left=True)
   def __sub__(self,o:object)->object:
-    if type(o) is ndarray and self._dtype is not None and self._dtype is o._dtype:
-      r=ndarray(self._native.sub(o._native));r._dtype=self._dtype;r._shape=self._shape;return r
+    if type(o) is ndarray:return ndarray._wrap(self._native.sub(o._native))
     return _binary_from_array(self,o,OP_SUB,scalar_on_left=False)
   def __rsub__(self,o:object)->object:return _binary_from_array(self,o,OP_SUB,scalar_on_left=True)
   def __mul__(self,o:object)->object:
-    if type(o) is ndarray and self._dtype is not None and self._dtype is o._dtype:
-      r=ndarray(self._native.mul(o._native));r._dtype=self._dtype;r._shape=self._shape;return r
+    if type(o) is ndarray:return ndarray._wrap(self._native.mul(o._native))
     return _binary_from_array(self,o,OP_MUL,scalar_on_left=False)
   def __rmul__(self,o:object)->object:return _binary_from_array(self,o,OP_MUL,scalar_on_left=True)
   def __truediv__(self,o:object)->object:
-    if type(o) is ndarray and self._dtype is not None and self._dtype is o._dtype and self._dtype in (float32,float64):     # div fast path only valid for floats — int÷int promotes to f64
-      r=ndarray(self._native.div(o._native));r._dtype=self._dtype;r._shape=self._shape;return r
+    if type(o) is ndarray:return ndarray._wrap(self._native.div(o._native))
     return _binary_from_array(self,o,OP_DIV,scalar_on_left=False)
   def __rtruediv__(self,o:object)->object:return _binary_from_array(self,o,OP_DIV,scalar_on_left=True)
   def __matmul__(self,o:object)->ndarray:
-    if type(o) is ndarray and self._dtype is not None and self._dtype is o._dtype:
-      r=ndarray(self._native.matmul(o._native));r._dtype=self._dtype;return r
-    if isinstance(o,ndarray):l,r=_coerce(self,o,OP_MUL);return ndarray(_native.matmul(l._native,r._native))
+    if type(o) is ndarray:return ndarray._wrap(self._native.matmul(o._native))
+    if isinstance(o,ndarray):l,r=_coerce(self,o,OP_MUL);return ndarray._wrap(_native.matmul(l._native,r._native))
     return matmul(self,o)
   def __rmatmul__(self,o:object)->ndarray:
-    if type(o) is ndarray and self._dtype is not None and self._dtype is o._dtype:
-      r=ndarray(o._native.matmul(self._native));r._dtype=self._dtype;return r
-    if isinstance(o,ndarray):l,r=_coerce(o,self,OP_MUL);return ndarray(_native.matmul(l._native,r._native))
+    if type(o) is ndarray:return ndarray._wrap(o._native.matmul(self._native))
+    if isinstance(o,ndarray):l,r=_coerce(o,self,OP_MUL);return ndarray._wrap(_native.matmul(l._native,r._native))
     return matmul(o,self)
   def __neg__(self)->ndarray:return multiply(self,-1)
   def __pos__(self)->ndarray:return self
@@ -300,27 +300,27 @@ def asarray(obj:object,dtype:object=None,*,copy:builtins.bool|None=None,device:o
   if copy is False:raise ValueError(_CFE)
   shape,flat=_flat(obj)                                                                                                      # nested list/tuple → (shape, flat values)
   tgt=_resolve_dtype(dtype) if dtype is not None else _infer_dtype(flat)
-  return ndarray(_native.from_flat(flat,shape,tgt.code),dtype=tgt,shape=shape,strides=_csb(shape,tgt.itemsize))
+  return ndarray(_native.from_flat(flat,shape,tgt.code))
 
 def empty(shape:int|Sequence[int],dtype:object=None,*,device:object=None)->ndarray:
   _check_cpu(device);t=_resolve_dtype(dtype) if dtype is not None else float64;n=_norm_shape(shape)
-  return ndarray(_native.empty(n,t.code),dtype=t,shape=n,strides=_csb(n,t.itemsize))
+  return ndarray(_native.empty(n,t.code))
 
 def zeros(shape:int|Sequence[int],dtype:object=None,*,device:object=None)->ndarray:return full(shape,0,dtype=_resolve_dtype(dtype) if dtype is not None else float64,device=device)
 def ones(shape:int|Sequence[int],dtype:object=None,*,device:object=None)->ndarray:return full(shape,1,dtype=_resolve_dtype(dtype) if dtype is not None else float64,device=device)
 
 def full(shape:int|Sequence[int],fill_value:object,*,dtype:object=None,device:object=None)->ndarray:
   _check_cpu(device);t=_resolve_dtype(dtype) if dtype is not None else _infer_dtype([fill_value]);n=_norm_shape(shape)
-  return ndarray(_native.full(n,fill_value,t.code),dtype=t,shape=n,strides=_csb(n,t.itemsize))
+  return ndarray(_native.full(n,fill_value,t.code))
 
 def arange(start:int|float,stop:int|float|None=None,step:int|float=1,*,dtype:object=None,device:object=None)->ndarray:
   _check_cpu(device);a=0 if stop is None else start;b=start if stop is None else stop                                         # 1-arg form: stop=start, start=0 (numpy convention)
   t=_resolve_dtype(dtype) if dtype is not None else (float64 if any(isinstance(v,builtins.float) for v in(a,b,step)) else int64)
-  return ndarray(_native.arange(a,b,step,t.code),dtype=t)
+  return ndarray(_native.arange(a,b,step,t.code))
 
 def linspace(start:int|float,stop:int|float,num:int=50,*,dtype:object=None,device:object=None)->ndarray:
   _check_cpu(device);t=_resolve_dtype(dtype) if dtype is not None else float64
-  return ndarray(_native.linspace(start,stop,num,t.code),dtype=t,shape=(num,),strides=(t.itemsize,))
+  return ndarray(_native.linspace(start,stop,num,t.code))
 
 def reshape(x:object,shape:int|Sequence[int])->ndarray:return asarray(x).reshape(shape)
 def transpose(x:object,axes:Sequence[int]|None=None)->ndarray:return asarray(x).transpose(axes)
@@ -354,10 +354,10 @@ def max(x:object,axis:object=None)->object:return _reduce(x,axis,REDUCE_MAX)  # 
 def argmax(x:object,axis:object=None)->object:return _reduce(x,axis,REDUCE_ARGMAX)
 
 def matmul(x1:object,x2:object)->ndarray:
-  if type(x1) is ndarray and type(x2) is ndarray and x1._dtype is not None and x1._dtype is x2._dtype:                        # same-dtype fast path
-    return ndarray(_native.matmul(x1._native,x2._native))
+  if type(x1) is ndarray and type(x2) is ndarray:                                                                             # ndarray×ndarray fast path; mojo handles promotion
+    return ndarray._wrap(_native.matmul(x1._native,x2._native))
   l=_mat(_av(x1));r=_mat(_av(x2));l,r=_coerce(l,r,OP_MUL)
-  return ndarray(_native.matmul(l._native,r._native))
+  return ndarray._wrap(_native.matmul(l._native,r._native))
 
 def diagonal(a:object,offset:int=0,axis1:int=0,axis2:int=1)->ndarray:
   arr=asarray(a);d=getattr(_native,"diagonal",None)                                                                           # native impl is feature-gated; fall back if absent
@@ -391,7 +391,7 @@ def __array_namespace_info__()->object:
 
 def _binary(x1:object,x2:object,op:int,*,out:ndarray|None=None)->object:
   if out is not None:                                                                                                         # `out=` skips the deferred path; everything materialises into out._native
-    if type(x1) is ndarray and type(x2) is ndarray and x1._dtype is not None and x1._dtype is x2._dtype:
+    if type(x1) is ndarray and type(x2) is ndarray:                                                                           # ndarray×ndarray fast path; mojo handles promotion in binary_into
       _native.binary_into(out._native,x1._native,x2._native,op);return out
     l=_mat(_av(x1));r=_mat(_av(x2));l,r=_coerce(l,r,op)
     _native.binary_into(out._native,l._native,r._native,op);return out
@@ -471,7 +471,7 @@ def _diag_fallback(arr:ndarray,offset:int,axis1:int,axis2:int)->ndarray:
     key:list[object]=[0]*arr.ndim
     for a,i in zip(ra,prefix,strict=True):key[a]=i
     for di in range(dl):key[axis1]=rs+di;key[axis2]=cs+di;flat.append(arr[tuple(key)])
-  return ndarray(_native.from_flat(flat,out_shape,arr.dtype.code),dtype=arr.dtype,shape=out_shape,strides=_csb(out_shape,arr.itemsize))
+  return ndarray(_native.from_flat(flat,out_shape,arr.dtype.code))
 
 def _trace_fallback(arr:ndarray,offset:int,axis1:int,axis2:int,dt:object)->object:
   # python-side trace when native is missing — reduces along the diagonal.
@@ -484,7 +484,7 @@ def _trace_fallback(arr:ndarray,offset:int,axis1:int,axis2:int,dt:object)->objec
     total:object=0.0 if t in(float32,float64) else 0
     for di in range(d.shape[-1]):total+=d[prefix+(di,)]  # type: ignore[operator]
     flat.append(total)
-  return ndarray(_native.from_flat(flat,out_shape,t.code),dtype=t,shape=out_shape,strides=_csb(out_shape,t.itemsize))
+  return ndarray(_native.from_flat(flat,out_shape,t.code))
 
 def _is_scalar(v:object)->builtins.bool:return isinstance(v,(builtins.bool,builtins.int,builtins.float))                      # python scalar (bool/int/float)
 
@@ -573,7 +573,7 @@ def _ext_from_np(a:object,d:DType,*,iface:dict[str,object]|None=None,data_addres
   es=tuple(s//i for s in bs)                                                                                                   # convert byte strides → element strides for native side
   if data_address is None:data_address=iface["data"][0]
   bl=math.prod(sh)*i                                                                                                           # byte length (used by native bounds check)
-  return ndarray(_native.from_external(data_address,sh,es,d.code,bl),dtype=d,shape=sh,strides=bs,owner=a)
+  return ndarray(_native.from_external(data_address,sh,es,d.code,bl),owner=a)
 
 def _copy_from_np(a:object,*,dtype_value:DType|None=None,iface:dict[str,object]|None=None)->ndarray:
   # forced-copy ingest from any array-interface source.
@@ -586,7 +586,7 @@ def _copy_from_np(a:object,*,dtype_value:DType|None=None,iface:dict[str,object]|
       if s%i!=0:raise NotImplementedError("array interface strides must align to dtype itemsize")
     es=tuple(s//i for s in rs)
   da=iface["data"][0];bl=math.prod(sh)*i
-  return ndarray(_native.copy_from_external(da,sh,es,dtype_value.code,bl),dtype=dtype_value,shape=sh,strides=_csb(sh,i))
+  return ndarray(_native.copy_from_external(da,sh,es,dtype_value.code,bl))
 
 def _cse(sh:tuple[int,...])->tuple[int,...]:                                                                                  # c-contiguous strides in elements
   st=[1]*len(sh);s=1

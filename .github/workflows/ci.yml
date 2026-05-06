@@ -58,7 +58,12 @@ jobs:
             --index https://whl.modular.com/nightly/simple/ \
             --prerelease allow
 
-          "$GITHUB_WORKSPACE/.venv/bin/mojo" --version
+          mojo_version_output="$("$GITHUB_WORKSPACE/.venv/bin/mojo" --version)"
+          printf '%s\n' "$mojo_version_output"
+          printf '%s\n' "$mojo_version_output" \
+            | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /[0-9]/) { gsub(/^[^[:alnum:]]+|[^[:alnum:]]+$/, "", $i); sub(/^v/, "", $i); print $i; exit } }' \
+            > .mojo-version
+          test -s .mojo-version
 
           python -m uv pip install \
             --python "$venv_python" \

@@ -106,6 +106,100 @@ def apply_binary_f64_vec[
     raise Error("unknown binary op")
 
 
+def apply_binary_typed_vec[
+    dtype: DType, width: Int
+](
+    lhs: SIMD[dtype, width], rhs: SIMD[dtype, width], op: Int
+) raises -> SIMD[dtype, width]:
+    # Comptime-typed parametric variant of apply_binary_*_vec. Once a kernel
+    # has dispatched on dtype at the runtime boundary, all subsequent SIMD
+    # work is dtype-monomorphic — this function lets us write each kernel
+    # body once instead of duplicating the f32 / f64 paths.
+    if op == OP_ADD:
+        return lhs + rhs
+    if op == OP_SUB:
+        return lhs - rhs
+    if op == OP_MUL:
+        return lhs * rhs
+    if op == OP_DIV:
+        return lhs / rhs
+    raise Error("unknown binary op")
+
+
+def binary_same_shape_contig_typed[
+    dtype: DType
+](
+    lhs_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    rhs_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    size: Int,
+    op: Int,
+) raises:
+    # Single typed kernel for the contig+contig→contig binary case, used by
+    # both f32 and f64 callers. Replaces the duplicated f32 / f64 branches in
+    # `maybe_binary_same_shape_contiguous`. SIMD width derives from `dtype`
+    # at comptime.
+    comptime width = simd_width_of[dtype]()
+    var i = 0
+    while i + width <= size:
+        out_ptr.store(
+            i,
+            apply_binary_typed_vec[dtype, width](
+                lhs_ptr.load[width=width](i),
+                rhs_ptr.load[width=width](i),
+                op,
+            ),
+        )
+        i += width
+    while i < size:
+        out_ptr[i] = apply_binary_typed_vec[dtype, 1](
+            SIMD[dtype, 1](lhs_ptr[i]), SIMD[dtype, 1](rhs_ptr[i]), op
+        )[0]
+        i += 1
+
+
+def binary_scalar_contig_typed[
+    dtype: DType
+](
+    array_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    scalar_value: Scalar[dtype],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    size: Int,
+    op: Int,
+    scalar_on_left: Bool,
+) raises:
+    # Comptime-typed kernel for array⊕scalar (and scalar⊕array). Replaces the
+    # f32 / f64 duplicate branches in `maybe_binary_scalar_contiguous`.
+    comptime width = simd_width_of[dtype]()
+    var scalar_vec = SIMD[dtype, width](scalar_value)
+    var i = 0
+    while i + width <= size:
+        var array_vec = array_ptr.load[width=width](i)
+        if scalar_on_left:
+            out_ptr.store(
+                i,
+                apply_binary_typed_vec[dtype, width](
+                    scalar_vec, array_vec, op
+                ),
+            )
+        else:
+            out_ptr.store(
+                i,
+                apply_binary_typed_vec[dtype, width](
+                    array_vec, scalar_vec, op
+                ),
+            )
+        i += width
+    while i < size:
+        var lhs_v = SIMD[dtype, 1](array_ptr[i])
+        var rhs_v = SIMD[dtype, 1](scalar_value)
+        if scalar_on_left:
+            out_ptr[i] = apply_binary_typed_vec[dtype, 1](rhs_v, lhs_v, op)[0]
+        else:
+            out_ptr[i] = apply_binary_typed_vec[dtype, 1](lhs_v, rhs_v, op)[0]
+        i += 1
+
+
 def apply_unary_f32_vec[
     width: Int
 ](value: SIMD[DType.float32, width], op: Int) raises -> SIMD[
@@ -136,6 +230,48 @@ def apply_unary_f64_vec[
     if op == UNARY_LOG:
         return log(value)
     raise Error("unknown unary op")
+
+
+def apply_unary_typed_vec[
+    dtype: DType, width: Int
+](value: SIMD[dtype, width], op: Int) raises -> SIMD[dtype, width] where dtype.is_floating_point():
+    # Comptime-typed parametric variant of apply_unary_*_vec. Constrained
+    # to floating-point dtypes since std.math sin/cos/exp/log require it.
+    if op == UNARY_SIN:
+        return sin(value)
+    if op == UNARY_COS:
+        return cos(value)
+    if op == UNARY_EXP:
+        return exp(value)
+    if op == UNARY_LOG:
+        return log(value)
+    raise Error("unknown unary op")
+
+
+def unary_contig_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    size: Int,
+    op: Int,
+) raises where dtype.is_floating_point():
+    # Comptime-typed unary kernel. SIMD width derives from dtype.
+    comptime width = simd_width_of[dtype]()
+    var i = 0
+    while i + width <= size:
+        out_ptr.store(
+            i,
+            apply_unary_typed_vec[dtype, width](
+                src_ptr.load[width=width](i), op
+            ),
+        )
+        i += width
+    while i < size:
+        out_ptr[i] = apply_unary_typed_vec[dtype, 1](
+            SIMD[dtype, 1](src_ptr[i]), op
+        )[0]
+        i += 1
 
 
 def is_float_dtype(dtype_code: Int) -> Bool:
@@ -194,18 +330,12 @@ def maybe_unary_contiguous(
         comptime if CompilationTarget.is_macos():
             if maybe_unary_accelerate_f32(src, result, op):
                 return True
-        var src_ptr = contiguous_f32_ptr(src)
-        var out_ptr = contiguous_f32_ptr(result)
-        comptime width = simd_width_of[DType.float32]()
-        var i = 0
-        while i + width <= src.size_value:
-            out_ptr.store(
-                i, apply_unary_f32_vec[width](src_ptr.load[width=width](i), op)
-            )
-            i += width
-        while i < src.size_value:
-            out_ptr[i] = Float32(apply_unary_f64(Float64(src_ptr[i]), op))
-            i += 1
+        unary_contig_typed[DType.float32](
+            contiguous_f32_ptr(src),
+            contiguous_f32_ptr(result),
+            src.size_value,
+            op,
+        )
         return True
     if op == UNARY_LOG:
         return False
@@ -213,18 +343,12 @@ def maybe_unary_contiguous(
         comptime if CompilationTarget.is_macos():
             if maybe_unary_accelerate_f64(src, result, op):
                 return True
-        var src_ptr = contiguous_f64_ptr(src)
-        var out_ptr = contiguous_f64_ptr(result)
-        comptime width = simd_width_of[DType.float64]()
-        var i = 0
-        while i + width <= src.size_value:
-            out_ptr.store(
-                i, apply_unary_f64_vec[width](src_ptr.load[width=width](i), op)
-            )
-            i += width
-        while i < src.size_value:
-            out_ptr[i] = apply_unary_f64(src_ptr[i], op)
-            i += 1
+        unary_contig_typed[DType.float64](
+            contiguous_f64_ptr(src),
+            contiguous_f64_ptr(result),
+            src.size_value,
+            op,
+        )
         return True
     return False
 
@@ -281,50 +405,26 @@ def maybe_binary_same_shape_contiguous(
         and rhs.dtype_code == DTYPE_FLOAT32
         and result.dtype_code == DTYPE_FLOAT32
     ):
-        var lhs_ptr = contiguous_f32_ptr(lhs)
-        var rhs_ptr = contiguous_f32_ptr(rhs)
-        var out_ptr = contiguous_f32_ptr(result)
-        comptime width = simd_width_of[DType.float32]()
-        var i = 0
-        while i + width <= result.size_value:
-            out_ptr.store(
-                i,
-                apply_binary_f32_vec[width](
-                    lhs_ptr.load[width=width](i),
-                    rhs_ptr.load[width=width](i),
-                    op,
-                ),
-            )
-            i += width
-        while i < result.size_value:
-            out_ptr[i] = Float32(
-                apply_binary_f64(Float64(lhs_ptr[i]), Float64(rhs_ptr[i]), op)
-            )
-            i += 1
+        binary_same_shape_contig_typed[DType.float32](
+            contiguous_f32_ptr(lhs),
+            contiguous_f32_ptr(rhs),
+            contiguous_f32_ptr(result),
+            result.size_value,
+            op,
+        )
         return True
     if (
         lhs.dtype_code == DTYPE_FLOAT64
         and rhs.dtype_code == DTYPE_FLOAT64
         and result.dtype_code == DTYPE_FLOAT64
     ):
-        var lhs_ptr = contiguous_f64_ptr(lhs)
-        var rhs_ptr = contiguous_f64_ptr(rhs)
-        var out_ptr = contiguous_f64_ptr(result)
-        comptime width = simd_width_of[DType.float64]()
-        var i = 0
-        while i + width <= result.size_value:
-            out_ptr.store(
-                i,
-                apply_binary_f64_vec[width](
-                    lhs_ptr.load[width=width](i),
-                    rhs_ptr.load[width=width](i),
-                    op,
-                ),
-            )
-            i += width
-        while i < result.size_value:
-            out_ptr[i] = apply_binary_f64(lhs_ptr[i], rhs_ptr[i], op)
-            i += 1
+        binary_same_shape_contig_typed[DType.float64](
+            contiguous_f64_ptr(lhs),
+            contiguous_f64_ptr(rhs),
+            contiguous_f64_ptr(result),
+            result.size_value,
+            op,
+        )
         return True
     for i in range(result.size_value):
         set_contiguous_from_f64(
@@ -354,56 +454,24 @@ def maybe_binary_scalar_contiguous(
         return False
     var scalar_value = contiguous_as_f64(scalar, 0)
     if array.dtype_code == DTYPE_FLOAT32 and result.dtype_code == DTYPE_FLOAT32:
-        var array_ptr = contiguous_f32_ptr(array)
-        var out_ptr = contiguous_f32_ptr(result)
-        comptime width = simd_width_of[DType.float32]()
-        var scalar_vec = SIMD[DType.float32, width](Float32(scalar_value))
-        var i = 0
-        while i + width <= result.size_value:
-            var array_vec = array_ptr.load[width=width](i)
-            if scalar_on_left:
-                out_ptr.store(
-                    i, apply_binary_f32_vec[width](scalar_vec, array_vec, op)
-                )
-            else:
-                out_ptr.store(
-                    i, apply_binary_f32_vec[width](array_vec, scalar_vec, op)
-                )
-            i += width
-        while i < result.size_value:
-            var lhs = Float64(array_ptr[i])
-            var rhs = scalar_value
-            if scalar_on_left:
-                lhs = scalar_value
-                rhs = Float64(array_ptr[i])
-            out_ptr[i] = Float32(apply_binary_f64(lhs, rhs, op))
-            i += 1
+        binary_scalar_contig_typed[DType.float32](
+            contiguous_f32_ptr(array),
+            Float32(scalar_value),
+            contiguous_f32_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
         return True
     if array.dtype_code == DTYPE_FLOAT64 and result.dtype_code == DTYPE_FLOAT64:
-        var array_ptr = contiguous_f64_ptr(array)
-        var out_ptr = contiguous_f64_ptr(result)
-        comptime width = simd_width_of[DType.float64]()
-        var scalar_vec = SIMD[DType.float64, width](scalar_value)
-        var i = 0
-        while i + width <= result.size_value:
-            var array_vec = array_ptr.load[width=width](i)
-            if scalar_on_left:
-                out_ptr.store(
-                    i, apply_binary_f64_vec[width](scalar_vec, array_vec, op)
-                )
-            else:
-                out_ptr.store(
-                    i, apply_binary_f64_vec[width](array_vec, scalar_vec, op)
-                )
-            i += width
-        while i < result.size_value:
-            var lhs = array_ptr[i]
-            var rhs = scalar_value
-            if scalar_on_left:
-                lhs = scalar_value
-                rhs = array_ptr[i]
-            out_ptr[i] = apply_binary_f64(lhs, rhs, op)
-            i += 1
+        binary_scalar_contig_typed[DType.float64](
+            contiguous_f64_ptr(array),
+            scalar_value,
+            contiguous_f64_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
         return True
     for i in range(result.size_value):
         var lhs = contiguous_as_f64(array, i)
