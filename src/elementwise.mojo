@@ -605,21 +605,33 @@ def pick_inner_axis_for_strided_binary(
     lhs: Array, rhs: Array, result: Array
 ) raises -> StridedInnerChoice:
     # Pick the inner axis for a same-shape strided binary walk.
-    #   kind == 1: all three operands have stride 1 on `axis` -> full SIMD
-    #   kind == 2: lhs and rhs have stride 1 -> SIMD load + scatter store
-    #   kind == 0: scalar walk (no stride-1 axis on inputs)
+    #   kind == 1: all three operands have stride +1 on `axis` -> full SIMD
+    #   kind == 2: lhs and rhs have stride +1 -> SIMD load + scatter store
+    #   kind == 3: lhs and rhs have stride -1, result has stride +1 (or -1) ->
+    #              SIMD reversed-load + contiguous store. covers `[::-1]+[::-1]`.
+    #   kind == 0: scalar walk (no |stride|==1 axis on inputs)
     # Prefers higher-`kind` choices, then the rightmost (innermost) axis among
     # equally-good candidates so iteration order remains C-natural.
     var ndim = len(lhs.shape)
     var inner_axis = ndim - 1
     var inner_kind = 0
     for axis in range(ndim - 1, -1, -1):
-        if lhs.strides[axis] == 1 and rhs.strides[axis] == 1:
-            if result.strides[axis] == 1:
+        var ls = lhs.strides[axis]
+        var rs = rhs.strides[axis]
+        var os = result.strides[axis]
+        if ls == 1 and rs == 1:
+            if os == 1:
                 return StridedInnerChoice(axis, 1)
             if inner_kind < 2:
                 inner_axis = axis
                 inner_kind = 2
+        elif ls == -1 and rs == -1 and (os == 1 or os == -1):
+            # Reversed inputs with contig (or reversed-contig) output. Covers
+            # the rank-1 `arr[::-1] + brr[::-1]` family without falling into
+            # the scalar path.
+            if inner_kind < 3:
+                inner_axis = axis
+                inner_kind = 3
     return StridedInnerChoice(inner_axis, inner_kind)
 
 
@@ -742,6 +754,41 @@ def maybe_binary_same_shape_strided(
                         )
                     )
                     i += 1
+            elif inner_kind == 3:
+                # lhs/rhs stride -1, result stride +/-1. Logical position i
+                # maps to physical (offset - i). Loading [W] at physical
+                # (offset - i - W + 1) gives us elements at logical positions
+                # [i+W-1, i+W-2, ..., i] — reverse the SIMD vector to put
+                # them back in logical order, then store contiguously (or
+                # reversed, matching result's stride sign).
+                var i = 0
+                while i + width <= inner_size:
+                    var lvec = (
+                        lhs_data + lhs_offset - i - width + 1
+                    ).load[width=width](0).reversed()
+                    var rvec = (
+                        rhs_data + rhs_offset - i - width + 1
+                    ).load[width=width](0).reversed()
+                    var ovec = apply_binary_f32_vec[width](lvec, rvec, op)
+                    if inner_result_stride == 1:
+                        (result_data + result_offset + i).store(0, ovec)
+                    else:
+                        # result stride -1: store reversed at (offset - i - W + 1)
+                        (
+                            result_data + result_offset - i - width + 1
+                        ).store(0, ovec.reversed())
+                    i += width
+                while i < inner_size:
+                    result_data[
+                        result_offset + i * inner_result_stride
+                    ] = Float32(
+                        apply_binary_f64(
+                            Float64(lhs_data[lhs_offset - i]),
+                            Float64(rhs_data[rhs_offset - i]),
+                            op,
+                        )
+                    )
+                    i += 1
             else:
                 for i in range(inner_size):
                     result_data[
@@ -824,6 +871,32 @@ def maybe_binary_same_shape_strided(
                 result_data[
                     result_offset + i * inner_result_stride
                 ] = apply_binary_f64(lp[i], rp[i], op)
+                i += 1
+        elif inner_kind == 3:
+            var i = 0
+            while i + width <= inner_size:
+                var lvec = (
+                    lhs_data + lhs_offset - i - width + 1
+                ).load[width=width](0).reversed()
+                var rvec = (
+                    rhs_data + rhs_offset - i - width + 1
+                ).load[width=width](0).reversed()
+                var ovec = apply_binary_f64_vec[width](lvec, rvec, op)
+                if inner_result_stride == 1:
+                    (result_data + result_offset + i).store(0, ovec)
+                else:
+                    (
+                        result_data + result_offset - i - width + 1
+                    ).store(0, ovec.reversed())
+                i += width
+            while i < inner_size:
+                result_data[
+                    result_offset + i * inner_result_stride
+                ] = apply_binary_f64(
+                    lhs_data[lhs_offset - i],
+                    rhs_data[rhs_offset - i],
+                    op,
+                )
                 i += 1
         else:
             for i in range(inner_size):

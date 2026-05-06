@@ -38,22 +38,31 @@ jobs:
         run: |
           set -euo pipefail
 
-          python -m uv venv --python 3.11 --clear
+          python -m uv venv --python 3.11 --clear "$GITHUB_WORKSPACE/.venv"
           echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+          venv_python="$GITHUB_WORKSPACE/.venv/bin/python"
 
           python -m uv pip install \
+            --python "$venv_python" \
             mojo \
             --index https://whl.modular.com/nightly/simple/ \
             --prerelease allow
 
-          .venv/bin/mojo --version
+          mojo_version_output="$("$GITHUB_WORKSPACE/.venv/bin/mojo" --version)"
+          printf '%s\n' "$mojo_version_output"
+          printf '%s\n' "$mojo_version_output" \
+            | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /[0-9]/) { gsub(/^[^[:alnum:]]+|[^[:alnum:]]+$/, "", $i); sub(/^v/, "", $i); print $i; exit } }' \
+            > .mojo-version
+          test -s .mojo-version
 
           python -m uv pip install \
+            --python "$venv_python" \
             mohaus \
             --index-url https://aarnphm.github.io/mohaus/simple \
             --extra-index-url https://pypi.org/simple
 
           python -m uv pip install \
+            --python "$venv_python" \
             --reinstall-package monpy \
             --no-build-isolation \
             --index https://whl.modular.com/nightly/simple/ \
