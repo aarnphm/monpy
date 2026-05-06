@@ -635,6 +635,118 @@ def pick_inner_axis_for_strided_binary(
     return StridedInnerChoice(inner_axis, inner_kind)
 
 
+def maybe_binary_rank2_transposed_tile_f32(
+    lhs: Array, rhs: Array, mut result: Array, op: Int
+) raises -> Bool:
+    # Tile-transpose fast path for rank-2 binary ops where both inputs have
+    # stride-1 axis 0 (the F-contig pattern that `arr.T` produces from a
+    # c-contig `arr`) and the result is c-contig. Without this, the generic
+    # strided walker picks kind=2 (SIMD-load + W-element scatter store)
+    # which loses 4-8× to scattered stores stalling the write buffer.
+    #
+    # Strategy: process the array as 4-by-4 tiles. For each tile we do four
+    # contiguous SIMD loads from each input along axis 0 (stride-1), apply
+    # the binary op, transpose the resulting 4 SIMD vectors in registers,
+    # and emit four contiguous SIMD stores to result. Both load and store
+    # streams are contiguous; only the in-register shuffle costs.
+    if len(lhs.shape) != 2:
+        return False
+    if not same_shape(lhs.shape, rhs.shape) or not same_shape(
+        lhs.shape, result.shape
+    ):
+        return False
+    if (
+        lhs.dtype_code != DTYPE_FLOAT32
+        or rhs.dtype_code != DTYPE_FLOAT32
+        or result.dtype_code != DTYPE_FLOAT32
+    ):
+        return False
+    if lhs.strides[0] != 1 or rhs.strides[0] != 1:
+        return False
+    if not is_c_contiguous(result):
+        return False
+    var rows = lhs.shape[0]
+    var cols = lhs.shape[1]
+    if rows < 4 or cols < 4:
+        return False
+    var lhs_col_stride = lhs.strides[1]
+    var rhs_col_stride = rhs.strides[1]
+    var result_row_stride = result.strides[0]
+    var lhs_data = lhs.data.bitcast[Float32]() + lhs.offset_elems
+    var rhs_data = rhs.data.bitcast[Float32]() + rhs.offset_elems
+    var result_data = result.data.bitcast[Float32]() + result.offset_elems
+    comptime tile = 4
+    var main_rows = rows - (rows % tile)
+    var main_cols = cols - (cols % tile)
+    var i = 0
+    while i < main_rows:
+        var j = 0
+        while j < main_cols:
+            var l0 = (lhs_data + i + j * lhs_col_stride).load[width=tile](0)
+            var l1 = (lhs_data + i + (j + 1) * lhs_col_stride).load[width=tile](
+                0
+            )
+            var l2 = (lhs_data + i + (j + 2) * lhs_col_stride).load[width=tile](
+                0
+            )
+            var l3 = (lhs_data + i + (j + 3) * lhs_col_stride).load[width=tile](
+                0
+            )
+            var r0 = (rhs_data + i + j * rhs_col_stride).load[width=tile](0)
+            var r1 = (rhs_data + i + (j + 1) * rhs_col_stride).load[width=tile](
+                0
+            )
+            var r2 = (rhs_data + i + (j + 2) * rhs_col_stride).load[width=tile](
+                0
+            )
+            var r3 = (rhs_data + i + (j + 3) * rhs_col_stride).load[width=tile](
+                0
+            )
+            var s0 = apply_binary_f32_vec[tile](l0, r0, op)
+            var s1 = apply_binary_f32_vec[tile](l1, r1, op)
+            var s2 = apply_binary_f32_vec[tile](l2, r2, op)
+            var s3 = apply_binary_f32_vec[tile](l3, r3, op)
+            # 4x4 in-register transpose. The two-step zip pattern:
+            # step 1 zips paired SIMD vectors, step 2 zips the 64-bit lanes
+            # of the result. Mojo's `shuffle[*mask]` lowers to NEON's
+            # `vzip1`/`vzip2` (and the AVX equivalent on x86) directly.
+            var u0 = s0.shuffle[0, 4, 1, 5](s1)
+            var u1 = s0.shuffle[2, 6, 3, 7](s1)
+            var u2 = s2.shuffle[0, 4, 1, 5](s3)
+            var u3 = s2.shuffle[2, 6, 3, 7](s3)
+            var t0 = u0.shuffle[0, 1, 4, 5](u2)
+            var t1 = u0.shuffle[2, 3, 6, 7](u2)
+            var t2 = u1.shuffle[0, 1, 4, 5](u3)
+            var t3 = u1.shuffle[2, 3, 6, 7](u3)
+            (result_data + i * result_row_stride + j).store(0, t0)
+            (result_data + (i + 1) * result_row_stride + j).store(0, t1)
+            (result_data + (i + 2) * result_row_stride + j).store(0, t2)
+            (result_data + (i + 3) * result_row_stride + j).store(0, t3)
+            j += tile
+        # column tail: scalar walk for residual cols within the main rows
+        while j < cols:
+            comptime for k in range(tile):
+                var lv = lhs_data[i + k + j * lhs_col_stride]
+                var rv = rhs_data[i + k + j * rhs_col_stride]
+                result_data[(i + k) * result_row_stride + j] = Float32(
+                    apply_binary_f64(Float64(lv), Float64(rv), op)
+                )
+            j += 1
+        i += tile
+    # row tail: scalar walk for residual rows
+    while i < rows:
+        var j = 0
+        while j < cols:
+            var lv = lhs_data[i + j * lhs_col_stride]
+            var rv = rhs_data[i + j * rhs_col_stride]
+            result_data[i * result_row_stride + j] = Float32(
+                apply_binary_f64(Float64(lv), Float64(rv), op)
+            )
+            j += 1
+        i += 1
+    return True
+
+
 def maybe_binary_same_shape_strided(
     lhs: Array, rhs: Array, mut result: Array, op: Int
 ) raises -> Bool:
@@ -938,6 +1050,8 @@ def maybe_binary_contiguous(
     if maybe_binary_row_broadcast_contiguous(lhs, rhs, result, op, False):
         return True
     if maybe_binary_row_broadcast_contiguous(rhs, lhs, result, op, True):
+        return True
+    if maybe_binary_rank2_transposed_tile_f32(lhs, rhs, result, op):
         return True
     if maybe_binary_same_shape_strided(lhs, rhs, result, op):
         return True
