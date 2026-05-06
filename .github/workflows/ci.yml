@@ -1,0 +1,79 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    concurrency:
+      group: ci-${{ github.ref }}-${{ matrix.os }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-latest]
+    env:
+      MOHAUS_MOJO: ${{ github.workspace }}/.venv/bin/mojo
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: install Linux BLAS / LAPACK
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            libopenblas-dev \
+            liblapack-dev
+
+      - name: set up python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: install uv
+        run: python -m pip install --upgrade uv
+
+      - name: install nightly mojo and monpy
+        run: |
+          set -euo pipefail
+
+          python -m uv venv --python 3.11 --clear "$GITHUB_WORKSPACE/.venv"
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+          venv_python="$GITHUB_WORKSPACE/.venv/bin/python"
+
+          python -m uv pip install \
+            --python "$venv_python" \
+            mojo \
+            --index https://whl.modular.com/nightly/simple/ \
+            --prerelease allow
+
+          "$GITHUB_WORKSPACE/.venv/bin/mojo" --version
+
+          python -m uv pip install \
+            --python "$venv_python" \
+            mohaus \
+            --index-url https://aarnphm.github.io/mohaus/simple \
+            --extra-index-url https://pypi.org/simple
+
+          python -m uv pip install \
+            --python "$venv_python" \
+            --reinstall-package monpy \
+            --no-build-isolation \
+            --index https://whl.modular.com/nightly/simple/ \
+            --extra-index-url https://aarnphm.github.io/mohaus/simple \
+            --prerelease allow \
+            -e ".[dev]"
+
+      - name: run python tests
+        run: .venv/bin/python -m pytest tests/python -q

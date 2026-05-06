@@ -96,13 +96,13 @@ jobs:
       - name: smoke test (loads BLAS dylib)
         run: |
           set -euo pipefail
-          # Cheap import-time check that catches missing OpenBLAS / Accelerate
-          # before the long-running benchmark spends ten minutes failing.
+          # Cheap import-time check that catches missing OpenBLAS / Accelerate before the long-running benchmark.
           .venv/bin/python -c "
           import numpy as np, monumpy as mnp
           a = mnp.asarray(np.eye(8, dtype=np.float32).tolist(), dtype=mnp.float32)
           b = mnp.asarray(np.arange(8, dtype=np.float32).tolist(), dtype=mnp.float32)
-          mat = a @ a
+          mat_a = mnp.asarray(np.eye(32, dtype=np.float32).tolist(), dtype=mnp.float32)
+          mat = mat_a @ mat_a
           inv = mnp.linalg.inv(a)
           sol = mnp.linalg.solve(a, b)
           print('matmul.used_accelerate:', mat._native.used_accelerate())
