@@ -74,38 +74,6 @@ def apply_unary_f64(value: Float64, op: Int) raises -> Float64:
     raise Error("unknown unary op")
 
 
-def apply_binary_f32_vec[
-    width: Int
-](
-    lhs: SIMD[DType.float32, width], rhs: SIMD[DType.float32, width], op: Int
-) raises -> SIMD[DType.float32, width]:
-    if op == OP_ADD:
-        return lhs + rhs
-    if op == OP_SUB:
-        return lhs - rhs
-    if op == OP_MUL:
-        return lhs * rhs
-    if op == OP_DIV:
-        return lhs / rhs
-    raise Error("unknown binary op")
-
-
-def apply_binary_f64_vec[
-    width: Int
-](
-    lhs: SIMD[DType.float64, width], rhs: SIMD[DType.float64, width], op: Int
-) raises -> SIMD[DType.float64, width]:
-    if op == OP_ADD:
-        return lhs + rhs
-    if op == OP_SUB:
-        return lhs - rhs
-    if op == OP_MUL:
-        return lhs * rhs
-    if op == OP_DIV:
-        return lhs / rhs
-    raise Error("unknown binary op")
-
-
 def apply_binary_typed_vec[
     dtype: DType, width: Int
 ](
@@ -200,38 +168,6 @@ def binary_scalar_contig_typed[
         i += 1
 
 
-def apply_unary_f32_vec[
-    width: Int
-](value: SIMD[DType.float32, width], op: Int) raises -> SIMD[
-    DType.float32, width
-]:
-    if op == UNARY_SIN:
-        return sin(value)
-    if op == UNARY_COS:
-        return cos(value)
-    if op == UNARY_EXP:
-        return exp(value)
-    if op == UNARY_LOG:
-        return log(value)
-    raise Error("unknown unary op")
-
-
-def apply_unary_f64_vec[
-    width: Int
-](value: SIMD[DType.float64, width], op: Int) raises -> SIMD[
-    DType.float64, width
-]:
-    if op == UNARY_SIN:
-        return sin(value)
-    if op == UNARY_COS:
-        return cos(value)
-    if op == UNARY_EXP:
-        return exp(value)
-    if op == UNARY_LOG:
-        return log(value)
-    raise Error("unknown unary op")
-
-
 def apply_unary_typed_vec[
     dtype: DType, width: Int
 ](value: SIMD[dtype, width], op: Int) raises -> SIMD[dtype, width] where dtype.is_floating_point():
@@ -246,6 +182,239 @@ def apply_unary_typed_vec[
     if op == UNARY_LOG:
         return log(value)
     raise Error("unknown unary op")
+
+
+def strided_binary_walk_typed[
+    dtype: DType
+](
+    lhs: Array,
+    rhs: Array,
+    mut result: Array,
+    inner_kind: Int,
+    inner_size: Int,
+    inner_lhs_stride: Int,
+    inner_rhs_stride: Int,
+    inner_result_stride: Int,
+    outer_shape: List[Int],
+    outer_lhs_stride: List[Int],
+    outer_rhs_stride: List[Int],
+    outer_result_stride: List[Int],
+    outer_lhs_carry: List[Int],
+    outer_rhs_carry: List[Int],
+    outer_result_carry: List[Int],
+    op: Int,
+) raises:
+    # Comptime-typed body for `maybe_binary_same_shape_strided`. Combines the
+    # outer coord-stack walker (axis-iteration with no divmod) with the four
+    # inner-loop kinds picked by `pick_inner_axis_for_strided_binary`.
+    # Caller must verify dtype_code matches `dtype`.
+    var lhs_data = lhs.data.bitcast[Scalar[dtype]]()
+    var rhs_data = rhs.data.bitcast[Scalar[dtype]]()
+    var result_data = result.data.bitcast[Scalar[dtype]]()
+    comptime width = simd_width_of[dtype]()
+    var outer_ndim = len(outer_shape)
+    var coords = List[Int]()
+    for _ in range(outer_ndim):
+        coords.append(0)
+    var lhs_offset = lhs.offset_elems
+    var rhs_offset = rhs.offset_elems
+    var result_offset = result.offset_elems
+    while True:
+        if inner_kind == 1:
+            var lp = lhs_data + lhs_offset
+            var rp = rhs_data + rhs_offset
+            var op_ = result_data + result_offset
+            var i = 0
+            while i + width <= inner_size:
+                op_.store(
+                    i,
+                    apply_binary_typed_vec[dtype, width](
+                        lp.load[width=width](i),
+                        rp.load[width=width](i),
+                        op,
+                    ),
+                )
+                i += width
+            while i < inner_size:
+                op_[i] = apply_binary_typed_vec[dtype, 1](
+                    SIMD[dtype, 1](lp[i]), SIMD[dtype, 1](rp[i]), op
+                )[0]
+                i += 1
+        elif inner_kind == 2:
+            var lp = lhs_data + lhs_offset
+            var rp = rhs_data + rhs_offset
+            var i = 0
+            while i + width <= inner_size:
+                var ovec = apply_binary_typed_vec[dtype, width](
+                    lp.load[width=width](i),
+                    rp.load[width=width](i),
+                    op,
+                )
+                comptime for k in range(width):
+                    result_data[
+                        result_offset + (i + k) * inner_result_stride
+                    ] = ovec[k]
+                i += width
+            while i < inner_size:
+                result_data[
+                    result_offset + i * inner_result_stride
+                ] = apply_binary_typed_vec[dtype, 1](
+                    SIMD[dtype, 1](lp[i]), SIMD[dtype, 1](rp[i]), op
+                )[0]
+                i += 1
+        elif inner_kind == 3:
+            # lhs/rhs stride -1, result stride +/-1. Logical position i
+            # maps to physical (offset - i). Loading [W] at physical
+            # (offset - i - W + 1) gives us elements at logical positions
+            # [i+W-1, i+W-2, ..., i] — reverse the SIMD vector to put
+            # them back in logical order, then store contiguously (or
+            # reversed, matching result's stride sign).
+            var i = 0
+            while i + width <= inner_size:
+                var lvec = (
+                    (lhs_data + lhs_offset - i - width + 1)
+                    .load[width=width](0)
+                    .reversed()
+                )
+                var rvec = (
+                    (rhs_data + rhs_offset - i - width + 1)
+                    .load[width=width](0)
+                    .reversed()
+                )
+                var ovec = apply_binary_typed_vec[dtype, width](lvec, rvec, op)
+                if inner_result_stride == 1:
+                    (result_data + result_offset + i).store(0, ovec)
+                else:
+                    (result_data + result_offset - i - width + 1).store(
+                        0, ovec.reversed()
+                    )
+                i += width
+            while i < inner_size:
+                result_data[
+                    result_offset + i * inner_result_stride
+                ] = apply_binary_typed_vec[dtype, 1](
+                    SIMD[dtype, 1](lhs_data[lhs_offset - i]),
+                    SIMD[dtype, 1](rhs_data[rhs_offset - i]),
+                    op,
+                )[0]
+                i += 1
+        else:
+            for i in range(inner_size):
+                result_data[
+                    result_offset + i * inner_result_stride
+                ] = apply_binary_typed_vec[dtype, 1](
+                    SIMD[dtype, 1](
+                        lhs_data[lhs_offset + i * inner_lhs_stride]
+                    ),
+                    SIMD[dtype, 1](
+                        rhs_data[rhs_offset + i * inner_rhs_stride]
+                    ),
+                    op,
+                )[0]
+        if outer_ndim == 0:
+            break
+        var idx = outer_ndim - 1
+        var done = False
+        while idx >= 0:
+            coords[idx] += 1
+            if coords[idx] < outer_shape[idx]:
+                lhs_offset += outer_lhs_stride[idx]
+                rhs_offset += outer_rhs_stride[idx]
+                result_offset += outer_result_stride[idx]
+                break
+            coords[idx] = 0
+            lhs_offset -= outer_lhs_carry[idx]
+            rhs_offset -= outer_rhs_carry[idx]
+            result_offset -= outer_result_carry[idx]
+            idx -= 1
+            if idx < 0:
+                done = True
+        if done:
+            break
+
+
+def binary_row_broadcast_contig_typed[
+    dtype: DType
+](
+    matrix_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    row_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    rows: Int,
+    cols: Int,
+    op: Int,
+    row_on_left: Bool,
+) raises:
+    # Comptime-typed kernel for matrix⊕row (and row⊕matrix). Broadcasts
+    # `row` across each row of `matrix`. SIMD width derives from dtype.
+    comptime width = simd_width_of[dtype]()
+    for i in range(rows):
+        var j = 0
+        while j + width <= cols:
+            var matrix_index = i * cols + j
+            var matrix_vec = matrix_ptr.load[width=width](matrix_index)
+            var row_vec = row_ptr.load[width=width](j)
+            if row_on_left:
+                out_ptr.store(
+                    matrix_index,
+                    apply_binary_typed_vec[dtype, width](
+                        row_vec, matrix_vec, op
+                    ),
+                )
+            else:
+                out_ptr.store(
+                    matrix_index,
+                    apply_binary_typed_vec[dtype, width](
+                        matrix_vec, row_vec, op
+                    ),
+                )
+            j += width
+        while j < cols:
+            var matrix_index = i * cols + j
+            var lhs_v = SIMD[dtype, 1](matrix_ptr[matrix_index])
+            var rhs_v = SIMD[dtype, 1](row_ptr[j])
+            if row_on_left:
+                out_ptr[matrix_index] = apply_binary_typed_vec[dtype, 1](
+                    rhs_v, lhs_v, op
+                )[0]
+            else:
+                out_ptr[matrix_index] = apply_binary_typed_vec[dtype, 1](
+                    lhs_v, rhs_v, op
+                )[0]
+            j += 1
+
+
+def reduce_sum_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
+) raises -> Float64 where dtype.is_floating_point():
+    # Comptime-typed sum kernel using 4 parallel SIMD accumulators to break
+    # the FADD latency dependency chain. With one accumulator the loop is
+    # bound by FADD latency (~3 cycles on M1); four accumulators let the
+    # pipeline issue ~4 FADDs per cycle, which roughly halves time at 1M+
+    # elements vs a single-accumulator loop.
+    comptime width = simd_width_of[dtype]()
+    comptime block = width * 4
+    var acc0 = SIMD[dtype, width](0)
+    var acc1 = SIMD[dtype, width](0)
+    var acc2 = SIMD[dtype, width](0)
+    var acc3 = SIMD[dtype, width](0)
+    var i = 0
+    while i + block <= size:
+        acc0 += src_ptr.load[width=width](i)
+        acc1 += src_ptr.load[width=width](i + width)
+        acc2 += src_ptr.load[width=width](i + 2 * width)
+        acc3 += src_ptr.load[width=width](i + 3 * width)
+        i += block
+    var acc_vec = (acc0 + acc1) + (acc2 + acc3)
+    while i + width <= size:
+        acc_vec += src_ptr.load[width=width](i)
+        i += width
+    var acc = Float64(acc_vec.reduce_add()[0])
+    while i < size:
+        acc += Float64(src_ptr[i])
+        i += 1
+    return acc
 
 
 def unary_contig_typed[
@@ -497,56 +666,24 @@ def maybe_binary_scalar_value_contiguous(
     ):
         return False
     if array.dtype_code == DTYPE_FLOAT32 and result.dtype_code == DTYPE_FLOAT32:
-        var array_ptr = contiguous_f32_ptr(array)
-        var out_ptr = contiguous_f32_ptr(result)
-        comptime width = simd_width_of[DType.float32]()
-        var scalar_vec = SIMD[DType.float32, width](Float32(scalar_value))
-        var i = 0
-        while i + width <= result.size_value:
-            var array_vec = array_ptr.load[width=width](i)
-            if scalar_on_left:
-                out_ptr.store(
-                    i, apply_binary_f32_vec[width](scalar_vec, array_vec, op)
-                )
-            else:
-                out_ptr.store(
-                    i, apply_binary_f32_vec[width](array_vec, scalar_vec, op)
-                )
-            i += width
-        while i < result.size_value:
-            var lhs = Float64(array_ptr[i])
-            var rhs = scalar_value
-            if scalar_on_left:
-                lhs = scalar_value
-                rhs = Float64(array_ptr[i])
-            out_ptr[i] = Float32(apply_binary_f64(lhs, rhs, op))
-            i += 1
+        binary_scalar_contig_typed[DType.float32](
+            contiguous_f32_ptr(array),
+            Float32(scalar_value),
+            contiguous_f32_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
         return True
     if array.dtype_code == DTYPE_FLOAT64 and result.dtype_code == DTYPE_FLOAT64:
-        var array_ptr = contiguous_f64_ptr(array)
-        var out_ptr = contiguous_f64_ptr(result)
-        comptime width = simd_width_of[DType.float64]()
-        var scalar_vec = SIMD[DType.float64, width](scalar_value)
-        var i = 0
-        while i + width <= result.size_value:
-            var array_vec = array_ptr.load[width=width](i)
-            if scalar_on_left:
-                out_ptr.store(
-                    i, apply_binary_f64_vec[width](scalar_vec, array_vec, op)
-                )
-            else:
-                out_ptr.store(
-                    i, apply_binary_f64_vec[width](array_vec, scalar_vec, op)
-                )
-            i += width
-        while i < result.size_value:
-            var lhs = array_ptr[i]
-            var rhs = scalar_value
-            if scalar_on_left:
-                lhs = scalar_value
-                rhs = array_ptr[i]
-            out_ptr[i] = apply_binary_f64(lhs, rhs, op)
-            i += 1
+        binary_scalar_contig_typed[DType.float64](
+            contiguous_f64_ptr(array),
+            scalar_value,
+            contiguous_f64_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
         return True
     for i in range(result.size_value):
         var lhs = contiguous_as_f64(array, i)
@@ -582,72 +719,30 @@ def maybe_binary_row_broadcast_contiguous(
         and row.dtype_code == DTYPE_FLOAT32
         and result.dtype_code == DTYPE_FLOAT32
     ):
-        var matrix_ptr = contiguous_f32_ptr(matrix)
-        var row_ptr = contiguous_f32_ptr(row)
-        var out_ptr = contiguous_f32_ptr(result)
-        comptime width = simd_width_of[DType.float32]()
-        for i in range(rows):
-            var j = 0
-            while j + width <= cols:
-                var matrix_index = i * cols + j
-                var matrix_vec = matrix_ptr.load[width=width](matrix_index)
-                var row_vec = row_ptr.load[width=width](j)
-                if row_on_left:
-                    out_ptr.store(
-                        matrix_index,
-                        apply_binary_f32_vec[width](row_vec, matrix_vec, op),
-                    )
-                else:
-                    out_ptr.store(
-                        matrix_index,
-                        apply_binary_f32_vec[width](matrix_vec, row_vec, op),
-                    )
-                j += width
-            while j < cols:
-                var matrix_index = i * cols + j
-                var lhs = Float64(matrix_ptr[matrix_index])
-                var rhs = Float64(row_ptr[j])
-                if row_on_left:
-                    lhs = Float64(row_ptr[j])
-                    rhs = Float64(matrix_ptr[matrix_index])
-                out_ptr[matrix_index] = Float32(apply_binary_f64(lhs, rhs, op))
-                j += 1
+        binary_row_broadcast_contig_typed[DType.float32](
+            contiguous_f32_ptr(matrix),
+            contiguous_f32_ptr(row),
+            contiguous_f32_ptr(result),
+            rows,
+            cols,
+            op,
+            row_on_left,
+        )
         return True
     if (
         matrix.dtype_code == DTYPE_FLOAT64
         and row.dtype_code == DTYPE_FLOAT64
         and result.dtype_code == DTYPE_FLOAT64
     ):
-        var matrix_ptr = contiguous_f64_ptr(matrix)
-        var row_ptr = contiguous_f64_ptr(row)
-        var out_ptr = contiguous_f64_ptr(result)
-        comptime width = simd_width_of[DType.float64]()
-        for i in range(rows):
-            var j = 0
-            while j + width <= cols:
-                var matrix_index = i * cols + j
-                var matrix_vec = matrix_ptr.load[width=width](matrix_index)
-                var row_vec = row_ptr.load[width=width](j)
-                if row_on_left:
-                    out_ptr.store(
-                        matrix_index,
-                        apply_binary_f64_vec[width](row_vec, matrix_vec, op),
-                    )
-                else:
-                    out_ptr.store(
-                        matrix_index,
-                        apply_binary_f64_vec[width](matrix_vec, row_vec, op),
-                    )
-                j += width
-            while j < cols:
-                var matrix_index = i * cols + j
-                var lhs = matrix_ptr[matrix_index]
-                var rhs = row_ptr[j]
-                if row_on_left:
-                    lhs = row_ptr[j]
-                    rhs = matrix_ptr[matrix_index]
-                out_ptr[matrix_index] = apply_binary_f64(lhs, rhs, op)
-                j += 1
+        binary_row_broadcast_contig_typed[DType.float64](
+            contiguous_f64_ptr(matrix),
+            contiguous_f64_ptr(row),
+            contiguous_f64_ptr(result),
+            rows,
+            cols,
+            op,
+            row_on_left,
+        )
         return True
     for i in range(rows):
         for j in range(cols):
@@ -703,9 +798,9 @@ def pick_inner_axis_for_strided_binary(
     return StridedInnerChoice(inner_axis, inner_kind)
 
 
-def maybe_binary_rank2_transposed_tile_f32(
-    lhs: Array, rhs: Array, mut result: Array, op: Int
-) raises -> Bool:
+def maybe_binary_rank2_transposed_tile[
+    dtype: DType
+](lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool where dtype.is_floating_point():
     # Tile-transpose fast path for rank-2 binary ops where both inputs have
     # stride-1 axis 0 (the F-contig pattern that `arr.T` produces from a
     # c-contig `arr`) and the result is c-contig. Without this, the generic
@@ -717,16 +812,15 @@ def maybe_binary_rank2_transposed_tile_f32(
     # the binary op, transpose the resulting 4 SIMD vectors in registers,
     # and emit four contiguous SIMD stores to result. Both load and store
     # streams are contiguous; only the in-register shuffle costs.
+    #
+    # Caller must verify lhs/rhs/result dtype_code matches `dtype` before
+    # calling. tile=4 works for any float dtype: f32 fits the natural NEON
+    # width directly; f64 uses two NEON registers per "vector", trading
+    # some throughput for the same scatter-avoiding pattern.
     if len(lhs.shape) != 2:
         return False
     if not same_shape(lhs.shape, rhs.shape) or not same_shape(
         lhs.shape, result.shape
-    ):
-        return False
-    if (
-        lhs.dtype_code != DTYPE_FLOAT32
-        or rhs.dtype_code != DTYPE_FLOAT32
-        or result.dtype_code != DTYPE_FLOAT32
     ):
         return False
     if lhs.strides[0] != 1 or rhs.strides[0] != 1:
@@ -740,9 +834,9 @@ def maybe_binary_rank2_transposed_tile_f32(
     var lhs_col_stride = lhs.strides[1]
     var rhs_col_stride = rhs.strides[1]
     var result_row_stride = result.strides[0]
-    var lhs_data = lhs.data.bitcast[Float32]() + lhs.offset_elems
-    var rhs_data = rhs.data.bitcast[Float32]() + rhs.offset_elems
-    var result_data = result.data.bitcast[Float32]() + result.offset_elems
+    var lhs_data = lhs.data.bitcast[Scalar[dtype]]() + lhs.offset_elems
+    var rhs_data = rhs.data.bitcast[Scalar[dtype]]() + rhs.offset_elems
+    var result_data = result.data.bitcast[Scalar[dtype]]() + result.offset_elems
     comptime tile = 4
     var main_rows = rows - (rows % tile)
     var main_cols = cols - (cols % tile)
@@ -770,10 +864,10 @@ def maybe_binary_rank2_transposed_tile_f32(
             var r3 = (rhs_data + i + (j + 3) * rhs_col_stride).load[width=tile](
                 0
             )
-            var s0 = apply_binary_f32_vec[tile](l0, r0, op)
-            var s1 = apply_binary_f32_vec[tile](l1, r1, op)
-            var s2 = apply_binary_f32_vec[tile](l2, r2, op)
-            var s3 = apply_binary_f32_vec[tile](l3, r3, op)
+            var s0 = apply_binary_typed_vec[dtype, tile](l0, r0, op)
+            var s1 = apply_binary_typed_vec[dtype, tile](l1, r1, op)
+            var s2 = apply_binary_typed_vec[dtype, tile](l2, r2, op)
+            var s3 = apply_binary_typed_vec[dtype, tile](l3, r3, op)
             # 4x4 in-register transpose. The two-step zip pattern:
             # step 1 zips paired SIMD vectors, step 2 zips the 64-bit lanes
             # of the result. Mojo's `shuffle[*mask]` lowers to NEON's
@@ -796,8 +890,10 @@ def maybe_binary_rank2_transposed_tile_f32(
             comptime for k in range(tile):
                 var lv = lhs_data[i + k + j * lhs_col_stride]
                 var rv = rhs_data[i + k + j * rhs_col_stride]
-                result_data[(i + k) * result_row_stride + j] = Float32(
-                    apply_binary_f64(Float64(lv), Float64(rv), op)
+                result_data[(i + k) * result_row_stride + j] = (
+                    apply_binary_typed_vec[dtype, 1](
+                        SIMD[dtype, 1](lv), SIMD[dtype, 1](rv), op
+                    )[0]
                 )
             j += 1
         i += tile
@@ -807,9 +903,9 @@ def maybe_binary_rank2_transposed_tile_f32(
         while j < cols:
             var lv = lhs_data[i + j * lhs_col_stride]
             var rv = rhs_data[i + j * rhs_col_stride]
-            result_data[i * result_row_stride + j] = Float32(
-                apply_binary_f64(Float64(lv), Float64(rv), op)
-            )
+            result_data[i * result_row_stride + j] = apply_binary_typed_vec[
+                dtype, 1
+            ](SIMD[dtype, 1](lv), SIMD[dtype, 1](rv), op)[0]
             j += 1
         i += 1
     return True
@@ -868,239 +964,47 @@ def maybe_binary_same_shape_strided(
         outer_lhs_carry.append(lhs.strides[axis] * span)
         outer_rhs_carry.append(rhs.strides[axis] * span)
         outer_result_carry.append(result.strides[axis] * span)
-    var outer_ndim = len(outer_axes)
-    var coords = List[Int]()
-    for _ in range(outer_ndim):
-        coords.append(0)
-    var lhs_offset = lhs.offset_elems
-    var rhs_offset = rhs.offset_elems
-    var result_offset = result.offset_elems
     if lhs.dtype_code == DTYPE_FLOAT32:
-        var lhs_data = lhs.data.bitcast[Float32]()
-        var rhs_data = rhs.data.bitcast[Float32]()
-        var result_data = result.data.bitcast[Float32]()
-        comptime width = simd_width_of[DType.float32]()
-        while True:
-            if inner_kind == 1:
-                var lp = lhs_data + lhs_offset
-                var rp = rhs_data + rhs_offset
-                var op_ = result_data + result_offset
-                var i = 0
-                while i + width <= inner_size:
-                    op_.store(
-                        i,
-                        apply_binary_f32_vec[width](
-                            lp.load[width=width](i),
-                            rp.load[width=width](i),
-                            op,
-                        ),
-                    )
-                    i += width
-                while i < inner_size:
-                    op_[i] = Float32(
-                        apply_binary_f64(Float64(lp[i]), Float64(rp[i]), op)
-                    )
-                    i += 1
-            elif inner_kind == 2:
-                var lp = lhs_data + lhs_offset
-                var rp = rhs_data + rhs_offset
-                var i = 0
-                while i + width <= inner_size:
-                    var ovec = apply_binary_f32_vec[width](
-                        lp.load[width=width](i),
-                        rp.load[width=width](i),
-                        op,
-                    )
-                    comptime for k in range(width):
-                        result_data[
-                            result_offset + (i + k) * inner_result_stride
-                        ] = ovec[k]
-                    i += width
-                while i < inner_size:
-                    result_data[
-                        result_offset + i * inner_result_stride
-                    ] = Float32(
-                        apply_binary_f64(Float64(lp[i]), Float64(rp[i]), op)
-                    )
-                    i += 1
-            elif inner_kind == 3:
-                # lhs/rhs stride -1, result stride +/-1. Logical position i
-                # maps to physical (offset - i). Loading [W] at physical
-                # (offset - i - W + 1) gives us elements at logical positions
-                # [i+W-1, i+W-2, ..., i] — reverse the SIMD vector to put
-                # them back in logical order, then store contiguously (or
-                # reversed, matching result's stride sign).
-                var i = 0
-                while i + width <= inner_size:
-                    var lvec = (
-                        (lhs_data + lhs_offset - i - width + 1)
-                        .load[width=width](0)
-                        .reversed()
-                    )
-                    var rvec = (
-                        (rhs_data + rhs_offset - i - width + 1)
-                        .load[width=width](0)
-                        .reversed()
-                    )
-                    var ovec = apply_binary_f32_vec[width](lvec, rvec, op)
-                    if inner_result_stride == 1:
-                        (result_data + result_offset + i).store(0, ovec)
-                    else:
-                        # result stride -1: store reversed at (offset - i - W + 1)
-                        (result_data + result_offset - i - width + 1).store(
-                            0, ovec.reversed()
-                        )
-                    i += width
-                while i < inner_size:
-                    result_data[
-                        result_offset + i * inner_result_stride
-                    ] = Float32(
-                        apply_binary_f64(
-                            Float64(lhs_data[lhs_offset - i]),
-                            Float64(rhs_data[rhs_offset - i]),
-                            op,
-                        )
-                    )
-                    i += 1
-            else:
-                for i in range(inner_size):
-                    result_data[
-                        result_offset + i * inner_result_stride
-                    ] = Float32(
-                        apply_binary_f64(
-                            Float64(
-                                lhs_data[lhs_offset + i * inner_lhs_stride]
-                            ),
-                            Float64(
-                                rhs_data[rhs_offset + i * inner_rhs_stride]
-                            ),
-                            op,
-                        )
-                    )
-            if outer_ndim == 0:
-                break
-            var idx = outer_ndim - 1
-            var done = False
-            while idx >= 0:
-                coords[idx] += 1
-                if coords[idx] < outer_shape[idx]:
-                    lhs_offset += outer_lhs_stride[idx]
-                    rhs_offset += outer_rhs_stride[idx]
-                    result_offset += outer_result_stride[idx]
-                    break
-                coords[idx] = 0
-                lhs_offset -= outer_lhs_carry[idx]
-                rhs_offset -= outer_rhs_carry[idx]
-                result_offset -= outer_result_carry[idx]
-                idx -= 1
-                if idx < 0:
-                    done = True
-            if done:
-                break
+        strided_binary_walk_typed[DType.float32](
+            lhs,
+            rhs,
+            result,
+            inner_kind,
+            inner_size,
+            inner_lhs_stride,
+            inner_rhs_stride,
+            inner_result_stride,
+            outer_shape,
+            outer_lhs_stride,
+            outer_rhs_stride,
+            outer_result_stride,
+            outer_lhs_carry,
+            outer_rhs_carry,
+            outer_result_carry,
+            op,
+        )
         return True
-    var lhs_data = lhs.data.bitcast[Float64]()
-    var rhs_data = rhs.data.bitcast[Float64]()
-    var result_data = result.data.bitcast[Float64]()
-    comptime width = simd_width_of[DType.float64]()
-    while True:
-        if inner_kind == 1:
-            var lp = lhs_data + lhs_offset
-            var rp = rhs_data + rhs_offset
-            var op_ = result_data + result_offset
-            var i = 0
-            while i + width <= inner_size:
-                op_.store(
-                    i,
-                    apply_binary_f64_vec[width](
-                        lp.load[width=width](i),
-                        rp.load[width=width](i),
-                        op,
-                    ),
-                )
-                i += width
-            while i < inner_size:
-                op_[i] = apply_binary_f64(lp[i], rp[i], op)
-                i += 1
-        elif inner_kind == 2:
-            var lp = lhs_data + lhs_offset
-            var rp = rhs_data + rhs_offset
-            var i = 0
-            while i + width <= inner_size:
-                var ovec = apply_binary_f64_vec[width](
-                    lp.load[width=width](i),
-                    rp.load[width=width](i),
-                    op,
-                )
-                comptime for k in range(width):
-                    result_data[
-                        result_offset + (i + k) * inner_result_stride
-                    ] = ovec[k]
-                i += width
-            while i < inner_size:
-                result_data[
-                    result_offset + i * inner_result_stride
-                ] = apply_binary_f64(lp[i], rp[i], op)
-                i += 1
-        elif inner_kind == 3:
-            var i = 0
-            while i + width <= inner_size:
-                var lvec = (
-                    (lhs_data + lhs_offset - i - width + 1)
-                    .load[width=width](0)
-                    .reversed()
-                )
-                var rvec = (
-                    (rhs_data + rhs_offset - i - width + 1)
-                    .load[width=width](0)
-                    .reversed()
-                )
-                var ovec = apply_binary_f64_vec[width](lvec, rvec, op)
-                if inner_result_stride == 1:
-                    (result_data + result_offset + i).store(0, ovec)
-                else:
-                    (result_data + result_offset - i - width + 1).store(
-                        0, ovec.reversed()
-                    )
-                i += width
-            while i < inner_size:
-                result_data[
-                    result_offset + i * inner_result_stride
-                ] = apply_binary_f64(
-                    lhs_data[lhs_offset - i],
-                    rhs_data[rhs_offset - i],
-                    op,
-                )
-                i += 1
-        else:
-            for i in range(inner_size):
-                result_data[
-                    result_offset + i * inner_result_stride
-                ] = apply_binary_f64(
-                    lhs_data[lhs_offset + i * inner_lhs_stride],
-                    rhs_data[rhs_offset + i * inner_rhs_stride],
-                    op,
-                )
-        if outer_ndim == 0:
-            break
-        var idx = outer_ndim - 1
-        var done = False
-        while idx >= 0:
-            coords[idx] += 1
-            if coords[idx] < outer_shape[idx]:
-                lhs_offset += outer_lhs_stride[idx]
-                rhs_offset += outer_rhs_stride[idx]
-                result_offset += outer_result_stride[idx]
-                break
-            coords[idx] = 0
-            lhs_offset -= outer_lhs_carry[idx]
-            rhs_offset -= outer_rhs_carry[idx]
-            result_offset -= outer_result_carry[idx]
-            idx -= 1
-            if idx < 0:
-                done = True
-        if done:
-            break
-    return True
+    if lhs.dtype_code == DTYPE_FLOAT64:
+        strided_binary_walk_typed[DType.float64](
+            lhs,
+            rhs,
+            result,
+            inner_kind,
+            inner_size,
+            inner_lhs_stride,
+            inner_rhs_stride,
+            inner_result_stride,
+            outer_shape,
+            outer_lhs_stride,
+            outer_rhs_stride,
+            outer_result_stride,
+            outer_lhs_carry,
+            outer_rhs_carry,
+            outer_result_carry,
+            op,
+        )
+        return True
+    return False
 
 
 def maybe_binary_contiguous(
@@ -1119,8 +1023,24 @@ def maybe_binary_contiguous(
         return True
     if maybe_binary_row_broadcast_contiguous(rhs, lhs, result, op, True):
         return True
-    if maybe_binary_rank2_transposed_tile_f32(lhs, rhs, result, op):
-        return True
+    if (
+        lhs.dtype_code == DTYPE_FLOAT32
+        and rhs.dtype_code == DTYPE_FLOAT32
+        and result.dtype_code == DTYPE_FLOAT32
+    ):
+        if maybe_binary_rank2_transposed_tile[DType.float32](
+            lhs, rhs, result, op
+        ):
+            return True
+    elif (
+        lhs.dtype_code == DTYPE_FLOAT64
+        and rhs.dtype_code == DTYPE_FLOAT64
+        and result.dtype_code == DTYPE_FLOAT64
+    ):
+        if maybe_binary_rank2_transposed_tile[DType.float64](
+            lhs, rhs, result, op
+        ):
+            return True
     if maybe_binary_same_shape_strided(lhs, rhs, result, op):
         return True
     return False
@@ -1212,64 +1132,21 @@ def maybe_reduce_contiguous(
     if not is_contiguous_float_array(src):
         return False
     if op == REDUCE_SUM or op == REDUCE_MEAN:
-        # Sum reductions use 4 parallel SIMD accumulators to break the FADD latency dependency chain.
-        # With one accumulator the loop is bound by FADD latency (~3 cycles on M1).
-        # Four accumulators let the pipeline issue ~4 FADDs per cycle, which matters at large N (1M elements roughly halves vs a single-acc loop).
-        # See also: https://stackoverflow.com/questions/63172287/how-to-convert-3-addition-and-1-multiply-into-vectorized-simd-using-intrinsic-fu
+        var acc: Float64
         if src.dtype_code == DTYPE_FLOAT32:
-            var src_ptr = contiguous_f32_ptr(src)
-            comptime width = simd_width_of[DType.float32]()
-            comptime block = width * 4
-            var acc0 = SIMD[DType.float32, width](0)
-            var acc1 = SIMD[DType.float32, width](0)
-            var acc2 = SIMD[DType.float32, width](0)
-            var acc3 = SIMD[DType.float32, width](0)
-            var i = 0
-            while i + block <= src.size_value:
-                acc0 += src_ptr.load[width=width](i)
-                acc1 += src_ptr.load[width=width](i + width)
-                acc2 += src_ptr.load[width=width](i + 2 * width)
-                acc3 += src_ptr.load[width=width](i + 3 * width)
-                i += block
-            var acc_vec = (acc0 + acc1) + (acc2 + acc3)
-            while i + width <= src.size_value:
-                acc_vec += src_ptr.load[width=width](i)
-                i += width
-            var acc = Float64(acc_vec.reduce_add()[0])
-            while i < src.size_value:
-                acc += Float64(src_ptr[i])
-                i += 1
-            if op == REDUCE_MEAN:
-                acc = acc / Float64(src.size_value)
-            set_logical_from_f64(result, 0, acc)
-            return True
-        if src.dtype_code == DTYPE_FLOAT64:
-            var src_ptr = contiguous_f64_ptr(src)
-            comptime width = simd_width_of[DType.float64]()
-            comptime block = width * 4
-            var acc0 = SIMD[DType.float64, width](0)
-            var acc1 = SIMD[DType.float64, width](0)
-            var acc2 = SIMD[DType.float64, width](0)
-            var acc3 = SIMD[DType.float64, width](0)
-            var i = 0
-            while i + block <= src.size_value:
-                acc0 += src_ptr.load[width=width](i)
-                acc1 += src_ptr.load[width=width](i + width)
-                acc2 += src_ptr.load[width=width](i + 2 * width)
-                acc3 += src_ptr.load[width=width](i + 3 * width)
-                i += block
-            var acc_vec = (acc0 + acc1) + (acc2 + acc3)
-            while i + width <= src.size_value:
-                acc_vec += src_ptr.load[width=width](i)
-                i += width
-            var acc = acc_vec.reduce_add()[0]
-            while i < src.size_value:
-                acc += src_ptr[i]
-                i += 1
-            if op == REDUCE_MEAN:
-                acc = acc / Float64(src.size_value)
-            set_logical_from_f64(result, 0, acc)
-            return True
+            acc = reduce_sum_typed[DType.float32](
+                contiguous_f32_ptr(src), src.size_value
+            )
+        elif src.dtype_code == DTYPE_FLOAT64:
+            acc = reduce_sum_typed[DType.float64](
+                contiguous_f64_ptr(src), src.size_value
+            )
+        else:
+            return False
+        if op == REDUCE_MEAN:
+            acc = acc / Float64(src.size_value)
+        set_logical_from_f64(result, 0, acc)
+        return True
     var acc = contiguous_as_f64(src, 0)
     if op == REDUCE_SUM or op == REDUCE_MEAN:
         acc = 0.0
@@ -1496,6 +1373,38 @@ def maybe_matmul_vector_accelerate(
     return False
 
 
+def matmul_small_typed[
+    dtype: DType
+](
+    lhs_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    rhs_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    m: Int,
+    n: Int,
+    k_lhs: Int,
+) raises where dtype.is_floating_point():
+    # Comptime-typed small-N matmul. Splat each lhs scalar to a SIMD vector
+    # then fma against a contiguous rhs row chunk; this beats cblas_sgemm /
+    # cblas_dgemm dispatch overhead at N≤16 by skipping the BLAS frame.
+    comptime width = simd_width_of[dtype]()
+    for i in range(m):
+        var j = 0
+        while j + width <= n:
+            var acc = SIMD[dtype, width](0)
+            for k in range(k_lhs):
+                acc += SIMD[dtype, width](
+                    lhs_ptr[i * k_lhs + k]
+                ) * rhs_ptr.load[width=width](k * n + j)
+            out_ptr.store(i * n + j, acc)
+            j += width
+        while j < n:
+            var total = Scalar[dtype](0)
+            for k in range(k_lhs):
+                total += lhs_ptr[i * k_lhs + k] * rhs_ptr[k * n + j]
+            out_ptr[i * n + j] = total
+            j += 1
+
+
 def maybe_matmul_f32_small(
     lhs: Array,
     rhs: Array,
@@ -1504,28 +1413,21 @@ def maybe_matmul_f32_small(
     n: Int,
     k_lhs: Int,
 ) raises -> Bool:
+    # Thin dispatcher that delegates to the typed kernel. Caller has already
+    # verified dtype f32; the typed instantiation is fully specialized at
+    # compile time. Kept under the f32 name so existing callers don't need
+    # to change; an `_f64` sibling can be added when matmul small-N for f64
+    # becomes a hot path.
     if m > 16 or n > 16 or k_lhs > 16:
         return False
-    var lhs_ptr = contiguous_f32_ptr(lhs)
-    var rhs_ptr = contiguous_f32_ptr(rhs)
-    var out_ptr = contiguous_f32_ptr(result)
-    comptime width = simd_width_of[DType.float32]()
-    for i in range(m):
-        var j = 0
-        while j + width <= n:
-            var acc = SIMD[DType.float32, width](0)
-            for k in range(k_lhs):
-                acc += SIMD[DType.float32, width](
-                    lhs_ptr[i * k_lhs + k]
-                ) * rhs_ptr.load[width=width](k * n + j)
-            out_ptr.store(i * n + j, acc)
-            j += width
-        while j < n:
-            var total = Float32(0)
-            for k in range(k_lhs):
-                total += lhs_ptr[i * k_lhs + k] * rhs_ptr[k * n + j]
-            out_ptr[i * n + j] = total
-            j += 1
+    matmul_small_typed[DType.float32](
+        contiguous_f32_ptr(lhs),
+        contiguous_f32_ptr(rhs),
+        contiguous_f32_ptr(result),
+        m,
+        n,
+        k_lhs,
+    )
     return True
 
 

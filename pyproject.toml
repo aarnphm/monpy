@@ -20,3 +20,8 @@ mojo-flags = []
 [tool.ruff.lint]
 ignore = ["E111", "E114"]
 select = ["E", "I", "UP", "B", "ANN"]
+
+[tool.ty]
+
+[tool.ty.rules]
+all = "error"
