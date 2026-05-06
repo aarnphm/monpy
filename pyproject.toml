@@ -17,12 +17,6 @@ module-name = "monpy._native"
 strip = true
 mojo-flags = []
 
-[tool.ruff]
-indent-width = 2
-line-length = 119
-preview = true
-target-version = "py311"
-
 [tool.ruff.lint]
 ignore = ["E111", "E114"]
-select = ["E", "F", "I", "UP", "B", "ANN"]
+select = ["E", "I", "UP", "B", "ANN"]

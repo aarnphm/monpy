@@ -1,0 +1,95 @@
+name: Core Benchmark
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: array-core-benchmark-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  arrays:
+    name: bench array core
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      BENCH_LOOPS: "200"
+      BENCH_REPEATS: "5"
+      BENCH_ROUNDS: "3"
+      MOHAUS_MOJO: ${{ github.workspace }}/.venv/bin/mojo
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: set up python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: install uv
+        run: python -m pip install --upgrade uv
+
+      - name: install nightly mojo and monpy
+        run: |
+          set -euo pipefail
+
+          python -m uv venv --python 3.11 --clear
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+
+          python -m uv pip install \
+            mojo \
+            --index https://whl.modular.com/nightly/simple/ \
+            --prerelease allow
+
+          .venv/bin/mojo --version
+
+          python -m uv pip install \
+            mohaus \
+            --index-url https://aarnphm.github.io/mohaus/simple \
+            --extra-index-url https://pypi.org/simple
+
+          python -m uv pip install \
+            --reinstall-package monpy \
+            --no-build-isolation \
+            --index https://whl.modular.com/nightly/simple/ \
+            --extra-index-url https://aarnphm.github.io/mohaus/simple \
+            --prerelease allow \
+            -e ".[dev]"
+
+      - name: run array core benchmark
+        run: |
+          set -euo pipefail
+
+          .venv/bin/python benchmarks/bench_array_core.py \
+            --format json \
+            --no-progress \
+            --loops "$BENCH_LOOPS" \
+            --repeats "$BENCH_REPEATS" \
+            --rounds "$BENCH_ROUNDS" \
+            > benchmark-results.json
+
+      - name: post commit comment
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          .venv/bin/python benchmarks/post_array_core_benchmark.py \
+            benchmark-results.json \
+            --comment-output benchmark-comment.md \
+            --post
+
+      - name: upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: array-core-benchmark-${{ github.sha }}
+          path: |
+            benchmark-results.json
+            benchmark-comment.md
+          if-no-files-found: ignore

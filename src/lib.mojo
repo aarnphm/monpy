@@ -4,6 +4,11 @@ from std.python.bindings import PythonModuleBuilder
 
 from create import (
     arange,
+    array_add_method,
+    array_div_method,
+    array_matmul_method,
+    array_mul_method,
+    array_sub_method,
     binary,
     binary_into,
     det,
@@ -13,6 +18,7 @@ from create import (
     full,
     inv,
     linspace,
+    asarray_from_numpy,
     binary_scalar,
     copy_from_external,
     result_dtype_for_binary_py,
@@ -67,12 +73,20 @@ def PyInit__native() -> PythonObject:
             .def_method[Array.used_fused_py]("used_fused")
             .def_method[Array.backend_code_py]("backend_code")
             .def_method[Array.get_scalar_py]("get_scalar")
+            .def_method[array_add_method]("add")
+            .def_method[array_sub_method]("sub")
+            .def_method[array_mul_method]("mul")
+            .def_method[array_div_method]("div")
+            .def_method[array_matmul_method]("matmul")
+            .def_method[slice_1d]("slice_1d_method")
+            .def_method[transpose_full_reverse]("transpose_full_reverse_method")
         )
         module.def_function[empty]("empty")
         module.def_function[full]("full")
         module.def_function[from_flat]("from_flat")
         module.def_function[from_external]("from_external")
         module.def_function[copy_from_external]("copy_from_external")
+        module.def_function[asarray_from_numpy]("asarray_from_numpy")
         module.def_function[arange]("arange")
         module.def_function[linspace]("linspace")
         module.def_function[reshape]("reshape")

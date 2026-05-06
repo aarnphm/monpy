@@ -6,6 +6,7 @@ from domain import (
     BACKEND_FUSED,
     DTYPE_BOOL,
     DTYPE_FLOAT32,
+    DTYPE_FLOAT64,
     DTYPE_INT64,
     OP_ADD,
     OP_DIV,
@@ -50,6 +51,7 @@ from array import (
     get_logical_as_f64,
     int_list_from_py,
     is_c_contiguous,
+    item_size,
     make_c_strides,
     make_empty_array,
     make_external_array,
@@ -148,6 +150,118 @@ def copy_from_external(
         Int(py=dtype_obj), shape^, strides^, 0, data, Int(py=byte_len_obj)
     )
     var result = copy_c_contiguous(external)
+    return PythonObject(alloc=result^)
+
+
+def dtype_code_from_typestr_string(typestr: String) raises -> Int:
+    # Recognize numpy `__array_interface__` typestr values for our supported
+    # dtypes. Endian-marker `<`, `>`, `=`, `|` all map identically. Native
+    # endian on darwin-arm64 is `<` so that's the common case.
+    if (
+        typestr == "<f4"
+        or typestr == ">f4"
+        or typestr == "=f4"
+        or typestr == "|f4"
+    ):
+        return DTYPE_FLOAT32
+    if (
+        typestr == "<f8"
+        or typestr == ">f8"
+        or typestr == "=f8"
+        or typestr == "|f8"
+    ):
+        return DTYPE_FLOAT64
+    if (
+        typestr == "<i8"
+        or typestr == ">i8"
+        or typestr == "=i8"
+        or typestr == "|i8"
+    ):
+        return DTYPE_INT64
+    if typestr == "|b1":
+        return DTYPE_BOOL
+    raise Error("unsupported array interface typestr")
+
+
+def asarray_from_numpy(
+    obj: PythonObject,
+    requested_dtype_obj: PythonObject,
+    copy_obj: PythonObject,
+) raises -> PythonObject:
+    # Single-FFI numpy-to-monpy bridge. Reads `__array_interface__` once,
+    # then either returns an external view (zero-copy) or a c-contig copy.
+    # `requested_dtype_obj` is the target dtype code or -1 for "use source".
+    # `copy_obj` is 0 (False), 1 (True), or -1 (None / default).
+    var iface = obj.__array_interface__
+    var typestr = String(py=iface["typestr"])
+    var source_dtype_code = dtype_code_from_typestr_string(typestr)
+    var requested_code = Int(py=requested_dtype_obj)
+    var copy_flag = Int(py=copy_obj)
+    if requested_code >= 0 and requested_code != source_dtype_code:
+        # dtype conversion needed; punt to the python wrapper which already
+        # knows how to handle astype + copy_from_numpy_array.
+        raise Error("asarray_from_numpy: dtype conversion handled in python")
+    var shape_obj = iface["shape"]
+    var raw_strides_obj = iface["strides"]
+    var data_obj = iface["data"]
+    var address = Int(py=data_obj[0])
+    var readonly = Bool(py=data_obj[1])
+    if address == 0:
+        raise Error("array interface data pointer is null")
+    if copy_flag == 0 and readonly:
+        raise Error("readonly array requires copy=True")
+    var ndim = len(shape_obj)
+    var item_bytes = item_size(source_dtype_code)
+    var shape = List[Int]()
+    var element_size = 1
+    for i in range(ndim):
+        var dim = Int(py=shape_obj[i])
+        shape.append(dim)
+        element_size *= dim
+    var element_strides = List[Int]()
+    if Bool(py=(raw_strides_obj is None)):
+        var stride = 1
+        for _ in range(ndim):
+            element_strides.append(0)
+        for axis in range(ndim - 1, -1, -1):
+            element_strides[axis] = stride
+            stride *= shape[axis]
+    else:
+        for i in range(ndim):
+            var bs = Int(py=raw_strides_obj[i])
+            if bs % item_bytes != 0:
+                raise Error(
+                    "array interface strides must align to dtype itemsize"
+                )
+            element_strides.append(bs // item_bytes)
+    var byte_len = element_size * item_bytes
+    var must_copy = (copy_flag == 1) or readonly
+    if must_copy:
+        var view_strides = List[Int]()
+        for i in range(len(element_strides)):
+            view_strides.append(element_strides[i])
+        var data = UnsafePointer[UInt8, MutExternalOrigin](
+            unsafe_from_address=address
+        )
+        var view_shape = List[Int]()
+        for i in range(len(shape)):
+            view_shape.append(shape[i])
+        var external = make_external_array(
+            source_dtype_code,
+            view_shape^,
+            view_strides^,
+            0,
+            data,
+            byte_len,
+        )
+        var result = copy_c_contiguous(external)
+        return PythonObject(alloc=result^)
+    var data = UnsafePointer[UInt8, MutExternalOrigin](
+        unsafe_from_address=address
+    )
+    var result = make_external_array(
+        source_dtype_code, shape^, element_strides^, 0, data, byte_len
+    )
     return PythonObject(alloc=result^)
 
 
@@ -486,31 +600,30 @@ def unary(
     return PythonObject(alloc=result^)
 
 
-def binary(
-    lhs_obj: PythonObject, rhs_obj: PythonObject, op_obj: PythonObject
-) raises -> PythonObject:
-    var lhs = lhs_obj.downcast_value_ptr[Array]()
-    var rhs = rhs_obj.downcast_value_ptr[Array]()
-    var op = Int(py=op_obj)
+def binary_dispatch(
+    lhs: Array, rhs: Array, op: Int
+) raises -> Array:
+    # Internal binary dispatch core. Allocates the result and runs the
+    # contiguous / strided fast paths; if all fail, falls back to the
+    # broadcast-divmod walker. Used by both the Python `binary` function and
+    # the Array.add/sub/mul/div method shortcuts.
     var dtype_code = result_dtype_for_binary(
-        lhs[].dtype_code, rhs[].dtype_code, op
+        lhs.dtype_code, rhs.dtype_code, op
     )
-    # One allocation: prefer the same-shape path (which is the common case)
-    # and only fall back to broadcast_shape when the inputs disagree on shape.
-    var same = same_shape(lhs[].shape, rhs[].shape)
+    var same = same_shape(lhs.shape, rhs.shape)
     var shape: List[Int]
     if same:
-        shape = clone_int_list(lhs[].shape)
+        shape = clone_int_list(lhs.shape)
     else:
-        shape = broadcast_shape(lhs[], rhs[])
+        shape = broadcast_shape(lhs, rhs)
     var result = make_empty_array(dtype_code, shape^)
-    if same and maybe_binary_same_shape_contiguous(lhs[], rhs[], result, op):
-        return PythonObject(alloc=result^)
-    if maybe_binary_contiguous(lhs[], rhs[], result, op):
-        return PythonObject(alloc=result^)
+    if same and maybe_binary_same_shape_contiguous(lhs, rhs, result, op):
+        return result^
+    if maybe_binary_contiguous(lhs, rhs, result, op):
+        return result^
     for i in range(result.size_value):
-        var lval = get_broadcast_as_f64(lhs[], i, result.shape)
-        var rval = get_broadcast_as_f64(rhs[], i, result.shape)
+        var lval = get_broadcast_as_f64(lhs, i, result.shape)
+        var rval = get_broadcast_as_f64(rhs, i, result.shape)
         var out: Float64
         if op == OP_ADD:
             out = lval + rval
@@ -523,6 +636,119 @@ def binary(
         else:
             raise Error("unknown binary op")
         set_logical_from_f64(result, i, out)
+    return result^
+
+
+def binary_op_method(
+    py_self: PythonObject, other_obj: PythonObject, op: Int
+) raises -> PythonObject:
+    # Method-style entrypoint shared by Array.add/sub/mul/div. The Mojo
+    # PythonObject method dispatch is measurably tighter than def_function
+    # for arg-marshal-bound calls; per-op trampolines (add_method_py etc.)
+    # bake `op` into the dispatch so Python doesn't need to pass it.
+    var self_ptr = py_self.downcast_value_ptr[Array]()
+    var other_ptr = other_obj.downcast_value_ptr[Array]()
+    var result = binary_dispatch(self_ptr[], other_ptr[], op)
+    return PythonObject(alloc=result^)
+
+
+def array_add_method(
+    py_self: PythonObject, other_obj: PythonObject
+) raises -> PythonObject:
+    return binary_op_method(py_self, other_obj, OP_ADD)
+
+
+def array_sub_method(
+    py_self: PythonObject, other_obj: PythonObject
+) raises -> PythonObject:
+    return binary_op_method(py_self, other_obj, OP_SUB)
+
+
+def array_mul_method(
+    py_self: PythonObject, other_obj: PythonObject
+) raises -> PythonObject:
+    return binary_op_method(py_self, other_obj, OP_MUL)
+
+
+def array_div_method(
+    py_self: PythonObject, other_obj: PythonObject
+) raises -> PythonObject:
+    return binary_op_method(py_self, other_obj, OP_DIV)
+
+
+def array_matmul_method(
+    py_self: PythonObject, other_obj: PythonObject
+) raises -> PythonObject:
+    var self_ptr = py_self.downcast_value_ptr[Array]()
+    var other_ptr = other_obj.downcast_value_ptr[Array]()
+    var lhs_ndim = len(self_ptr[].shape)
+    var rhs_ndim = len(other_ptr[].shape)
+    if lhs_ndim < 1 or lhs_ndim > 2 or rhs_ndim < 1 or rhs_ndim > 2:
+        raise Error("matmul() only supports 1d and 2d arrays")
+    var m = 1
+    var k_lhs = self_ptr[].shape[0]
+    if lhs_ndim == 2:
+        m = self_ptr[].shape[0]
+        k_lhs = self_ptr[].shape[1]
+    var k_rhs = other_ptr[].shape[0]
+    var n = 1
+    if rhs_ndim == 2:
+        n = other_ptr[].shape[1]
+    if k_lhs != k_rhs:
+        raise Error("matmul() dimension mismatch")
+    var out_shape = List[Int]()
+    if lhs_ndim == 2 and rhs_ndim == 2:
+        out_shape.append(m)
+        out_shape.append(n)
+    elif lhs_ndim == 2 and rhs_ndim == 1:
+        out_shape.append(m)
+    elif lhs_ndim == 1 and rhs_ndim == 2:
+        out_shape.append(n)
+    var result = make_empty_array(
+        result_dtype_for_binary(
+            self_ptr[].dtype_code, other_ptr[].dtype_code, OP_MUL
+        ),
+        out_shape^,
+    )
+    if lhs_ndim == 1 and rhs_ndim == 1:
+        var total = 0.0
+        for k in range(k_lhs):
+            total += get_logical_as_f64(
+                self_ptr[], k
+            ) * get_logical_as_f64(other_ptr[], k)
+        set_logical_from_f64(result, 0, total)
+        return PythonObject(alloc=result^)
+    if maybe_matmul_contiguous(
+        self_ptr[], other_ptr[], result, m, n, k_lhs
+    ):
+        return PythonObject(alloc=result^)
+    for i in range(m):
+        for j in range(n):
+            var total = 0.0
+            for k in range(k_lhs):
+                var lhs_index = k
+                if lhs_ndim == 2:
+                    lhs_index = i * k_lhs + k
+                var rhs_index = k
+                if rhs_ndim == 2:
+                    rhs_index = k * n + j
+                total += get_logical_as_f64(
+                    self_ptr[], lhs_index
+                ) * get_logical_as_f64(other_ptr[], rhs_index)
+            var out_index = j
+            if lhs_ndim == 2:
+                out_index = i * n + j
+            set_logical_from_f64(result, out_index, total)
+    return PythonObject(alloc=result^)
+
+
+def binary(
+    lhs_obj: PythonObject, rhs_obj: PythonObject, op_obj: PythonObject
+) raises -> PythonObject:
+    var lhs = lhs_obj.downcast_value_ptr[Array]()
+    var rhs = rhs_obj.downcast_value_ptr[Array]()
+    var op = Int(py=op_obj)
+    var result = binary_dispatch(lhs[], rhs[], op)
     return PythonObject(alloc=result^)
 
 
