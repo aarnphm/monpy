@@ -3,11 +3,27 @@ from std.ffi import _Global, OwnedDLHandle
 from std.sys import CompilationTarget
 
 
-# Apple backend plumbing stays isolated from ndarray semantics. Kernels import
-# these two call helpers when a macOS-only fast path proves itself in benchmarks.
+# BLAS / LAPACK backend plumbing kept isolated from ndarray semantics. The
+# resolved dylib differs per OS: on macOS we hit Apple's Accelerate
+# framework; on Linux we try OpenBLAS first (most common, fastest), then
+# fall back to the netlib reference libraries. cblas_* and *gesv_/*getrf_
+# function names are identical across both, so the call helpers below are
+# platform-agnostic — only the dylib resolution branches.
 comptime LIB_ACC_PATH = (
     "/System/Library/Frameworks/Accelerate.framework/Accelerate"
 )
+
+# Linux dylib candidates, tried in order in `init_*_dylib`. OpenBLAS is the
+# de-facto standard on Linux distros (Ubuntu, Debian, Fedora, Arch all ship
+# it as the default BLAS provider when scipy/numpy are installed). The
+# unversioned `.so` links are dev packages; the versioned `.so.0` / `.so.3`
+# symlinks ship with the runtime package and are what numpy/scipy load too.
+comptime LIB_OPENBLAS_PATH_0 = "libopenblas.so.0"
+comptime LIB_OPENBLAS_PATH = "libopenblas.so"
+comptime LIB_BLAS_PATH_3 = "libblas.so.3"
+comptime LIB_BLAS_PATH = "libblas.so"
+comptime LIB_LAPACK_PATH_3 = "liblapack.so.3"
+comptime LIB_LAPACK_PATH = "liblapack.so"
 
 
 comptime cblas_dgemm_type = def(
@@ -140,36 +156,149 @@ struct _CBLASTranspose(TrivialRegisterPassable):
     comptime TRANSPOSE = _CBLASTranspose(112)
 
 
-comptime MONPY_APPLE_ACCELERATE = _Global[
-    "MONPY_APPLE_ACCELERATE",
-    init_accelerate_dylib,
-    on_error_msg=accelerate_error_msg,
+comptime MONPY_BLAS_DYLIB = _Global[
+    "MONPY_BLAS_DYLIB",
+    init_blas_dylib,
+    on_error_msg=blas_error_msg,
+]
+
+comptime MONPY_LAPACK_DYLIB = _Global[
+    "MONPY_LAPACK_DYLIB",
+    init_lapack_dylib,
+    on_error_msg=lapack_error_msg,
 ]
 
 
-def accelerate_error_msg() -> Error:
-    return Error("cannot find Apple Accelerate at ", LIB_ACC_PATH)
+def blas_error_msg() -> Error:
+    comptime if CompilationTarget.is_macos():
+        return Error("cannot find Apple Accelerate at ", LIB_ACC_PATH)
+    elif CompilationTarget.is_linux():
+        return Error(
+            "cannot find OpenBLAS / libblas on Linux. install with `apt"
+            " install libopenblas-dev` or equivalent."
+        )
+    return Error("BLAS backend not configured for this platform")
 
 
-def init_accelerate_dylib() -> OwnedDLHandle:
-    try:
-        return OwnedDLHandle(LIB_ACC_PATH)
-    except:
-        return OwnedDLHandle(unsafe_uninitialized=True)
+def lapack_error_msg() -> Error:
+    comptime if CompilationTarget.is_macos():
+        return Error("cannot find Apple Accelerate at ", LIB_ACC_PATH)
+    elif CompilationTarget.is_linux():
+        return Error(
+            "cannot find LAPACK on Linux. install with `apt install"
+            " liblapack-dev` or use OpenBLAS (which bundles LAPACK)."
+        )
+    return Error("LAPACK backend not configured for this platform")
 
 
+def init_blas_dylib() -> OwnedDLHandle:
+    # macOS: Accelerate.framework. Linux: try OpenBLAS first (bundles
+    # cblas + lapack and is what numpy/scipy use), then fall back to the
+    # netlib reference libblas. Each `try` short-circuits on first success.
+    comptime if CompilationTarget.is_macos():
+        try:
+            return OwnedDLHandle(LIB_ACC_PATH)
+        except:
+            return OwnedDLHandle(unsafe_uninitialized=True)
+    elif CompilationTarget.is_linux():
+        try:
+            return OwnedDLHandle(LIB_OPENBLAS_PATH_0)
+        except:
+            pass
+        try:
+            return OwnedDLHandle(LIB_OPENBLAS_PATH)
+        except:
+            pass
+        try:
+            return OwnedDLHandle(LIB_BLAS_PATH_3)
+        except:
+            pass
+        try:
+            return OwnedDLHandle(LIB_BLAS_PATH)
+        except:
+            pass
+    return OwnedDLHandle(unsafe_uninitialized=True)
+
+
+def init_lapack_dylib() -> OwnedDLHandle:
+    # macOS Accelerate exposes both BLAS and LAPACK from the same dylib.
+    # Linux: prefer netlib liblapack if installed, then fall back to
+    # OpenBLAS which also ships LAPACK symbols.
+    comptime if CompilationTarget.is_macos():
+        try:
+            return OwnedDLHandle(LIB_ACC_PATH)
+        except:
+            return OwnedDLHandle(unsafe_uninitialized=True)
+    elif CompilationTarget.is_linux():
+        try:
+            return OwnedDLHandle(LIB_LAPACK_PATH_3)
+        except:
+            pass
+        try:
+            return OwnedDLHandle(LIB_LAPACK_PATH)
+        except:
+            pass
+        try:
+            return OwnedDLHandle(LIB_OPENBLAS_PATH_0)
+        except:
+            pass
+        try:
+            return OwnedDLHandle(LIB_OPENBLAS_PATH)
+        except:
+            pass
+    return OwnedDLHandle(unsafe_uninitialized=True)
+
+
+@always_inline
+def is_blas_available() -> Bool:
+    # True when we have a path to call into BLAS / LAPACK from this build.
+    # Currently macOS (Accelerate) and Linux (OpenBLAS / netlib) are
+    # supported; other platforms fall back to the SIMD / scalar kernels.
+    comptime if CompilationTarget.is_macos():
+        return True
+    elif CompilationTarget.is_linux():
+        return True
+    return False
+
+
+@always_inline
+def get_blas_function[
+    func_name: StaticString, result_type: TrivialRegisterPassable
+]() raises -> result_type:
+    comptime assert (
+        CompilationTarget.is_macos() or CompilationTarget.is_linux()
+    ), "BLAS backend requires macOS or Linux"
+    return _ffi_get_dylib_function[
+        MONPY_BLAS_DYLIB(),
+        func_name,
+        result_type,
+    ]()
+
+
+@always_inline
+def get_lapack_function[
+    func_name: StaticString, result_type: TrivialRegisterPassable
+]() raises -> result_type:
+    comptime assert (
+        CompilationTarget.is_macos() or CompilationTarget.is_linux()
+    ), "LAPACK backend requires macOS or Linux"
+    return _ffi_get_dylib_function[
+        MONPY_LAPACK_DYLIB(),
+        func_name,
+        result_type,
+    ]()
+
+
+# Backward-compat alias: existing call sites use `get_accelerate_function`
+# generically for both BLAS and LAPACK names. macOS keeps both in one
+# dylib (Accelerate), so this routes to BLAS_DYLIB which is identical
+# there. On Linux, callers should prefer the explicit BLAS / LAPACK
+# helpers below; this alias preserves source compatibility.
 @always_inline
 def get_accelerate_function[
     func_name: StaticString, result_type: TrivialRegisterPassable
 ]() raises -> result_type:
-    comptime assert (
-        CompilationTarget.is_macos()
-    ), "Apple Accelerate requires macOS"
-    return _ffi_get_dylib_function[
-        MONPY_APPLE_ACCELERATE(),
-        func_name,
-        result_type,
-    ]()
+    return get_blas_function[func_name, result_type]()
 
 
 @always_inline
@@ -194,22 +323,22 @@ def get_cblas_gemv_f32_function() raises -> cblas_sgemv_type:
 
 @always_inline
 def get_lapack_sgesv_function() raises -> lapack_sgesv_type:
-    return get_accelerate_function["sgesv_", lapack_sgesv_type]()
+    return get_lapack_function["sgesv_", lapack_sgesv_type]()
 
 
 @always_inline
 def get_lapack_dgesv_function() raises -> lapack_dgesv_type:
-    return get_accelerate_function["dgesv_", lapack_dgesv_type]()
+    return get_lapack_function["dgesv_", lapack_dgesv_type]()
 
 
 @always_inline
 def get_lapack_sgetrf_function() raises -> lapack_sgetrf_type:
-    return get_accelerate_function["sgetrf_", lapack_sgetrf_type]()
+    return get_lapack_function["sgetrf_", lapack_sgetrf_type]()
 
 
 @always_inline
 def get_lapack_dgetrf_function() raises -> lapack_dgetrf_type:
-    return get_accelerate_function["dgetrf_", lapack_dgetrf_type]()
+    return get_lapack_function["dgetrf_", lapack_dgetrf_type]()
 
 
 @always_inline

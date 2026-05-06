@@ -168,7 +168,7 @@ def test_matmul_dense_transpose_rhs_matches_numpy_and_uses_fast_path_on_macos() 
   assert rhs.T.strides == (8, 96)
   assert_same_shape_dtype(out, oracle_lhs @ oracle_rhs.T)
   assert_same_values(out, oracle_lhs @ oracle_rhs.T, rtol=1e-12, atol=1e-12)
-  if sys.platform == "darwin":
+  if sys.platform == "darwin" or sys.platform.startswith("linux"):
     assert out._native.used_accelerate()
 
 
@@ -201,7 +201,7 @@ def test_matmul_rank1_shapes_match_numpy_and_use_gemv_on_macos(
   assert_same_values(matvec, mat_oracle @ vec_oracle, rtol=rtol, atol=rtol)
   assert_same_shape_dtype(vecmat, vec_oracle @ rhs_oracle.T)
   assert_same_values(vecmat, vec_oracle @ rhs_oracle.T, rtol=rtol, atol=rtol)
-  if sys.platform == "darwin":
+  if sys.platform == "darwin" or sys.platform.startswith("linux"):
     assert matvec._native.used_accelerate()
     assert vecmat._native.used_accelerate()
 

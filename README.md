@@ -37,9 +37,28 @@ NumPy is used by the tests as an oracle and by `ndarray.__array__` as an explici
 
 There is a small [layout.mojo](src/layout.mojo) where it applies some heuristics and algebra.
 
-majority of logics can be found inside [create.mojo](src/create.mojo), and an accelerate backend for MacOS can be found under [accelerate.mojo](src/accelerate.mojo)
+majority of logics can be found inside [create.mojo](src/create.mojo), and the BLAS/LAPACK backend lives in [accelerate.mojo](src/accelerate.mojo) (it routes to Apple Accelerate on macOS and OpenBLAS / netlib on Linux based on the comptime target)
 
 Some of the major elementwise ops can be found under [elementwise.mojo](src/elementwise.mojo)
+
+## supported platforms
+
+| platform        | BLAS / LAPACK     | vector math (sin/cos/exp/log) |
+| --------------- | ----------------- | ----------------------------- |
+| macOS (arm64)   | Apple Accelerate  | Apple vForce (vvsinf etc.)    |
+| Linux (x86_64)  | OpenBLAS / netlib | SIMD via std.math (libm)      |
+| Linux (aarch64) | OpenBLAS / netlib | SIMD via std.math (libm)      |
+
+On Linux, install OpenBLAS and LAPACK before building:
+
+```bash
+# Ubuntu / Debian
+sudo apt install libopenblas-dev liblapack-dev
+# Fedora / RHEL
+sudo dnf install openblas-devel lapack-devel
+# Arch
+sudo pacman -S openblas lapack
+```
 
 ## local development
 

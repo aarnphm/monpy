@@ -8,14 +8,22 @@ permissions:
   contents: write
 
 concurrency:
-  group: array-core-benchmark-${{ github.ref }}
+  group: array-core-benchmark-${{ github.ref }}-${{ matrix.os }}
   cancel-in-progress: false
 
 jobs:
   arrays:
-    name: bench array core
-    runs-on: macos-15
+    name: bench array core (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Two host OSes so the benchmark validates both Apple Accelerate
+        # (macos-15) and OpenBLAS / LAPACK (ubuntu-latest) BLAS backends.
+        # Same source, same kernels — only the dylib path differs at link
+        # time (resolved by `accelerate.mojo`'s comptime branches).
+        os: [macos-15, ubuntu-latest]
     env:
       BENCH_LOOPS: "200"
       BENCH_REPEATS: "5"
@@ -25,6 +33,19 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v4
+
+      - name: install Linux BLAS / LAPACK
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          # OpenBLAS provides cblas + lapack in a single dylib at
+          # libopenblas.so.0; the dev package adds the unversioned symlink.
+          # liblapack-dev is kept as a fallback path tried by accelerate.mojo
+          # so distros that ship netlib LAPACK separately still work.
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            libopenblas-dev \
+            liblapack-dev
 
       - name: set up python
         uses: actions/setup-python@v5
@@ -70,6 +91,26 @@ jobs:
             --prerelease allow \
             -e ".[dev]"
 
+      - name: smoke test (loads BLAS dylib)
+        run: |
+          set -euo pipefail
+          # Cheap import-time check that catches missing OpenBLAS / Accelerate
+          # before the long-running benchmark spends ten minutes failing.
+          .venv/bin/python -c "
+          import numpy as np, monumpy as mnp
+          a = mnp.asarray(np.eye(8, dtype=np.float32).tolist(), dtype=mnp.float32)
+          b = mnp.asarray(np.arange(8, dtype=np.float32).tolist(), dtype=mnp.float32)
+          mat = a @ a
+          inv = mnp.linalg.inv(a)
+          sol = mnp.linalg.solve(a, b)
+          print('matmul.used_accelerate:', mat._native.used_accelerate())
+          print('inv.used_accelerate:   ', inv._native.used_accelerate())
+          print('solve.used_accelerate: ', sol._native.used_accelerate())
+          assert mat._native.used_accelerate(), 'BLAS sgemm path did not fire'
+          assert inv._native.used_accelerate(), 'LAPACK sgesv (inv) path did not fire'
+          assert sol._native.used_accelerate(), 'LAPACK sgesv (solve) path did not fire'
+          "
+
       - name: run array core benchmark
         run: |
           set -euo pipefail
@@ -83,6 +124,7 @@ jobs:
             > benchmark-results.json
 
       - name: post commit comment
+        if: runner.os == 'macOS'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -97,7 +139,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: array-core-benchmark-${{ github.sha }}
+          name: array-core-benchmark-${{ matrix.os }}-${{ github.sha }}
           path: |
             benchmark-results.json
             benchmark-comment.md

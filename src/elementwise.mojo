@@ -1141,7 +1141,7 @@ def maybe_matmul_contiguous(
     n: Int,
     k_lhs: Int,
 ) raises -> Bool:
-    comptime if CompilationTarget.is_macos():
+    comptime if CompilationTarget.is_macos() or CompilationTarget.is_linux():
         if maybe_matmul_vector_accelerate(lhs, rhs, result, m, n, k_lhs):
             return True
     if (
@@ -1163,7 +1163,7 @@ def maybe_matmul_contiguous(
             and maybe_matmul_f32_small(lhs, rhs, result, m, n, k_lhs)
         ):
             return True
-        comptime if CompilationTarget.is_macos():
+        comptime if CompilationTarget.is_macos() or CompilationTarget.is_linux():
             if lhs_layout.can_use and rhs_layout.can_use:
                 cblas_sgemm_row_major_ld(
                     m,
@@ -1185,7 +1185,7 @@ def maybe_matmul_contiguous(
         and rhs.dtype_code == DTYPE_FLOAT64
         and result.dtype_code == DTYPE_FLOAT64
     ):
-        comptime if CompilationTarget.is_macos():
+        comptime if CompilationTarget.is_macos() or CompilationTarget.is_linux():
             if lhs_layout.can_use and rhs_layout.can_use:
                 cblas_dgemm_row_major_ld(
                     m,
@@ -1870,7 +1870,7 @@ def lu_solve_into(a: Array, b: Array, mut result: Array) raises:
         vector_result = False
     else:
         raise Error("linalg.solve() right-hand side must be rank 1 or rank 2")
-    comptime if CompilationTarget.is_macos():
+    comptime if CompilationTarget.is_macos() or CompilationTarget.is_linux():
         if maybe_lapack_solve_f32(a, b, result):
             return
         if maybe_lapack_solve_f64(a, b, result):
@@ -1894,7 +1894,7 @@ def lu_solve_into(a: Array, b: Array, mut result: Array) raises:
 def lu_inverse_into(a: Array, mut result: Array) raises:
     if len(a.shape) != 2 or a.shape[0] != a.shape[1]:
         raise Error("linalg.inv() requires a square rank-2 matrix")
-    comptime if CompilationTarget.is_macos():
+    comptime if CompilationTarget.is_macos() or CompilationTarget.is_linux():
         if maybe_lapack_inverse_f32(a, result):
             return
         if maybe_lapack_inverse_f64(a, result):
@@ -1930,7 +1930,7 @@ def lu_det(a: Array) raises -> Float64:
 
 
 def lu_det_into(a: Array, mut result: Array) raises:
-    comptime if CompilationTarget.is_macos():
+    comptime if CompilationTarget.is_macos() or CompilationTarget.is_linux():
         if maybe_lapack_det_f32(a, result):
             return
         if maybe_lapack_det_f64(a, result):

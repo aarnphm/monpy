@@ -4,7 +4,7 @@ import builtins,importlib,itertools,math,typing
 from collections.abc import Iterable,Sequence
 from dataclasses import dataclass
 from types import ModuleType,SimpleNamespace
-from . import _native
+from . import _native as _native
 if typing.TYPE_CHECKING: import numpy as np
 
 # dtype codes mirror the Mojo side; identical layout there.
@@ -80,10 +80,10 @@ class ndarray:
   def __array_interface__(self)->dict[str,object]:
     s,st,i=self.shape,self.strides,self.itemsize
     return{"version":3,"shape":s,"typestr":self.dtype.typestr,"data":(int(self._native.data_address()),False),"strides":None if _is_c_contig(s,st,i) else st}
-  def __array__(self,dtype:object=None,copy:builtins.bool|None=None)->object:
+  def __array__(self,dtype:object=None,copy:builtins.bool|None=None)->np.ndarray:
     class _O:
       def __init__(o,a:ndarray)->None:o._owner=a;o.__array_interface__=a.__array_interface__
-    a=_npmod().asarray(_O(self))
+    a:np.ndarray=_npmod().asarray(_O(self))
     if dtype is not None:return a.astype(dtype,copy=copy is not False)
     return a.copy() if copy is True else a
   def __array_namespace__(self,*,api_version:str|None=None)->ModuleType:
@@ -100,7 +100,7 @@ class ndarray:
   def __iter__(self)->Iterable[object]:
     for i in range(len(self)):yield self[i]
   def __repr__(self)->str:return f"monpy.asarray({self.tolist()!r}, dtype={self.dtype!r})"
-  def __getitem__(self,k:object)->object:
+  def __getitem__(self,k:typing.Any)->object:
     if isinstance(k,slice) and self.ndim==1:                                                                                  # fast 1-D slice path: skip generic _view_for_key
       d=self.shape[0];step=1 if k.step is None else builtins.int(k.step)
       if step==0:raise ValueError("slice step cannot be zero")
@@ -463,9 +463,9 @@ def _diag_fallback(arr:ndarray,offset:int,axis1:int,axis2:int)->ndarray:
   if arr.ndim<2:raise ValueError("diag requires an array of at least two dimensions")
   axis1=_norm_axis(axis1,arr.ndim);axis2=_norm_axis(axis2,arr.ndim)
   if axis1==axis2:raise ValueError("axis1 and axis2 cannot be the same")
-  rs=builtins.max(-offset,0);cs=builtins.max(offset,0)                                                                         # row/col start: positive offset slides diagonal up
-  dl=builtins.max(0,builtins.min(arr.shape[axis1]-rs,arr.shape[axis2]-cs))                                                     # diagonal length
-  ra=tuple(a for a in range(arr.ndim) if a not in(axis1,axis2))                                                                # remaining axes (kept as outer loop)
+  rs=builtins.max(-offset,0);cs=builtins.max(offset,0)                      # row/col start: positive offset slides diagonal up
+  dl=builtins.max(0,builtins.min(arr.shape[axis1]-rs,arr.shape[axis2]-cs))  # diagonal length
+  ra=tuple(a for a in range(arr.ndim) if a not in(axis1,axis2))             # remaining axes (kept as outer loop)
   rsh=tuple(arr.shape[a] for a in ra);out_shape=rsh+(dl,);flat:list[object]=[]
   for prefix in _iter_idx(rsh):
     key:list[object]=[0]*arr.ndim
@@ -476,13 +476,13 @@ def _diag_fallback(arr:ndarray,offset:int,axis1:int,axis2:int)->ndarray:
 def _trace_fallback(arr:ndarray,offset:int,axis1:int,axis2:int,dt:object)->object:
   # python-side trace when native is missing — reduces along the diagonal.
   d=diagonal(arr,offset=offset,axis1=axis1,axis2=axis2)
-  t=_resolve_dtype(dt) if dt is not None else (int64 if d.dtype==bool else d.dtype)                                            # bool inputs accumulate as int64 to match numpy
+  t=_resolve_dtype(dt) if dt is not None else (int64 if d.dtype==bool else d.dtype)  # bool inputs accumulate as int64 to match numpy
   if d.dtype!=t:d=d.astype(t)
   if d.ndim==1:return sum(d)
   out_shape=d.shape[:-1];flat:list[object]=[]
   for prefix in _iter_idx(out_shape):
     total:object=0.0 if t in(float32,float64) else 0
-    for di in range(d.shape[-1]):total+=d[prefix+(di,)]                                                                         # type: ignore[operator]
+    for di in range(d.shape[-1]):total+=d[prefix+(di,)]  # type: ignore[operator]
     flat.append(total)
   return ndarray(_native.from_flat(flat,out_shape,t.code),dtype=t,shape=out_shape,strides=_csb(out_shape,t.itemsize))
 
@@ -531,7 +531,7 @@ def _np_dtype_for(d:DType)->object:return _npmod().dtype(d.typestr)
 
 def _dtype_from_np(v:object)->DType:
   n=_npmod();nd=n.dtype(v)
-  if nd.fields is not None or nd.subdtype is not None:raise NotImplementedError(f"unsupported dtype: {nd}")                    # structured/sub-dtypes are out of scope
+  if nd.fields is not None or nd.subdtype is not None:raise NotImplementedError(f"unsupported dtype: {nd}")                   # structured/sub-dtypes are out of scope
   if not nd.isnative:raise NotImplementedError(f"unsupported dtype: {nd}")
   try:return _DTNK[(nd.kind,nd.itemsize)]
   except KeyError as exc:raise NotImplementedError(f"unsupported dtype: {nd}") from exc

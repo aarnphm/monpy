@@ -76,7 +76,10 @@ def test_linalg_solve_inv_and_det_match_numpy() -> None:
   assert_same_shape_dtype(inv_out, numpy.linalg.inv(oracle_a))
   assert_same_values(inv_out, numpy.linalg.inv(oracle_a))
   assert det_out == pytest.approx(float(numpy.linalg.det(oracle_a)))
-  if sys.platform == "darwin":
+  # Both macOS (Accelerate) and Linux (OpenBLAS / netlib LAPACK) take the
+  # native lapack path; only platforms without a system BLAS land on the
+  # pure-Mojo LU fallback (backend_code == 0).
+  if sys.platform == "darwin" or sys.platform.startswith("linux"):
     assert solve_out._native.used_accelerate()
     assert inv_out._native.used_accelerate()
   else:
