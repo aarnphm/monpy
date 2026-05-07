@@ -63,3 +63,4 @@ monpy should be a mojo array library with numpy-shaped python APIs.
 - backend markers on native arrays let tests and benchmarks assert that specialized kernels actually ran.
 
 see [apple-backends.md](apple-backends.md) for the apple silicon backend split.
+see [ffi-marshaling.md](ffi-marshaling.md) for why the residual `asarray` / `from_dlpack` / `strided_view` / `array_copy` ratios are marshaling tax rather than kernel cost, and the two paths out (cpython buffer protocol or numpy c api).

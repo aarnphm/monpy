@@ -2,6 +2,11 @@
 
 monpy is aiming at a cpu-only, numpy-shaped v1 before broader device work.
 
+see [numpy-port-gaps.md](numpy-port-gaps.md) for the missing numpy library map:
+dtype/scalar machinery, coercion, strided iteration, ufunc dispatch, indexing,
+reductions, linalg/tensor operations, random, fft, strings, masked arrays, io,
+and compatibility modules.
+
 ## roadmap-minus-7
 
 roadmap-minus-7 moves array interchange and linear algebra from explicit gaps to

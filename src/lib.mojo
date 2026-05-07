@@ -2,6 +2,7 @@ from std.os import abort
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
 
+from buffer import asarray_from_buffer_ops
 from create import (
     arange_ops,
     array_add_method_ops,
@@ -9,7 +10,6 @@ from create import (
     array_matmul_method_ops,
     array_mul_method_ops,
     array_sub_method_ops,
-    asarray_from_numpy_ops,
     astype_ops,
     binary_into_ops,
     binary_ops,
@@ -83,7 +83,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[from_flat_ops]("from_flat")
         module.def_function[from_external_ops]("from_external")
         module.def_function[copy_from_external_ops]("copy_from_external")
-        module.def_function[asarray_from_numpy_ops]("asarray_from_numpy")
+        module.def_function[asarray_from_buffer_ops]("asarray_from_buffer")
         module.def_function[arange_ops]("arange")
         module.def_function[linspace_ops]("linspace")
         module.def_function[reshape_ops]("reshape")
