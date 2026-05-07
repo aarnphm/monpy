@@ -113,15 +113,36 @@ def test_expand_dims_matches_numpy_for_supported_axes() -> None:
 
 
 @pytest.mark.parametrize(
-  "index",
+  ("index", "expected"),
   [
-    [True, False, True],
-    np.asarray([True, False, True], dtype=np.bool),
-    np.asarray([0, 2], dtype=np.int64),
+    (np.asarray([True, False, True], dtype=np.bool), [1, 3]),
+    (np.asarray([0, 2], dtype=np.int64), [1, 3]),
+    ([0, 2], [1, 3]),
   ],
 )
-def test_boolean_and_integer_array_indexing_are_explicit_v1_gaps(index: object) -> None:
+def test_boolean_and_integer_array_indexing_returns_gathered_values(
+  index: object, expected: list[int]
+) -> None:
   arr = np.asarray([1, 2, 3])
+  out = arr[index]
+  assert out.tolist() == expected
 
-  with pytest.raises(NotImplementedError, match="integer and slice indexing"):
-    _ = arr[index]
+
+def test_boolean_indexing_2d_matches_numpy() -> None:
+  arr = np.asarray([[1, 2, 3], [4, 5, 6]], dtype=np.int64)
+  oracle = numpy.asarray([[1, 2, 3], [4, 5, 6]], dtype=numpy.int64)
+  mask = np.asarray([[True, False, True], [False, True, False]], dtype=np.bool)
+  oracle_mask = numpy.asarray([[True, False, True], [False, True, False]])
+  numpy.testing.assert_array_equal(numpy.asarray(arr[mask]), oracle[oracle_mask])
+
+
+def test_fancy_index_assignment_writes_back() -> None:
+  arr = np.asarray([0, 0, 0, 0, 0], dtype=np.int64)
+  arr[np.asarray([0, 2, 4], dtype=np.int64)] = np.asarray([10, 20, 30], dtype=np.int64)
+  assert arr.tolist() == [10, 0, 20, 0, 30]
+
+
+def test_boolean_assignment_writes_back() -> None:
+  arr = np.asarray([1, 2, 3, 4, 5], dtype=np.int64)
+  arr[np.asarray([True, False, True, False, True], dtype=np.bool)] = 0
+  assert arr.tolist() == [0, 2, 0, 4, 0]

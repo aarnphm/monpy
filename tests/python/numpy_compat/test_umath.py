@@ -52,9 +52,17 @@ def test_log_negative_infinity_matches_numpy(monpy_dtype: np.DType) -> None:
   assert numpy.isnan(numpy.asarray(out)[0])
 
 
-def test_unary_math_is_not_exposed_as_full_numpy_ufunc_yet() -> None:
+def test_unary_math_is_a_full_numpy_ufunc() -> None:
   arr = np.asarray([1.0, 2.0], dtype=np.float64)
 
-  with pytest.raises(TypeError, match="unexpected keyword"):
-    np.sin(arr, out=arr)
-  assert not hasattr(np.sin, "reduce")
+  assert isinstance(np.sin, np.ufunc)
+  assert hasattr(np.sin, "reduce")
+  assert hasattr(np.sin, "outer")
+  assert np.sin.nin == 1
+  assert np.sin.nout == 1
+
+  out_buf = np.empty_like(arr)
+  np.sin(arr, out=out_buf)
+  numpy.testing.assert_allclose(
+    numpy.asarray(out_buf), numpy.sin(numpy.asarray([1.0, 2.0])), rtol=1e-12
+  )

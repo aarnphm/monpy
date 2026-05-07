@@ -168,17 +168,14 @@ def test_reductions_match_numpy_for_axis_none() -> None:
   assert np.mean(arr) == pytest.approx(float(numpy.mean(oracle)))
 
 
-def test_axis_reductions_are_explicit_v1_gap() -> None:
+def test_axis_reductions_match_numpy() -> None:
   arr = np.asarray([[1, 2], [3, 4]])
+  oracle = numpy.asarray([[1, 2], [3, 4]])
 
-  with pytest.raises(NotImplementedError, match="axis"):
-    arr.sum(axis=0)
-  with pytest.raises(NotImplementedError, match="axis"):
-    np.sum(arr, axis=0)
-  with pytest.raises(TypeError, match="unexpected keyword"):
-    np.sum(arr, keepdims=True)
-  with pytest.raises(TypeError, match="unexpected keyword"):
-    np.sum(arr, out=arr)
+  numpy.testing.assert_array_equal(numpy.asarray(arr.sum(axis=0)), oracle.sum(axis=0))
+  numpy.testing.assert_array_equal(numpy.asarray(np.sum(arr, axis=0)), oracle.sum(axis=0))
+  numpy.testing.assert_array_equal(numpy.asarray(np.sum(arr, axis=1)), oracle.sum(axis=1))
+  numpy.testing.assert_array_equal(numpy.asarray(np.sum(arr, keepdims=True)), oracle.sum(keepdims=True))
 
 
 def test_matmul_matches_numpy_for_1d_and_2d() -> None:

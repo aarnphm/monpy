@@ -416,6 +416,36 @@ def build_cases(
       lambda: mnp.expand_dims(helper_mp, axis=(0, -1)),
       lambda: np.expand_dims(helper_np, axis=(0, -1)),
     ),
+    BenchCase(
+      "views",
+      "flip_axis0_f32",
+      lambda: mnp.flip(helper_mp, axis=0),
+      lambda: np.flip(helper_np, axis=0),
+    ),
+    BenchCase(
+      "views",
+      "flip_all_f32",
+      lambda: mnp.flip(helper_mp),
+      lambda: np.flip(helper_np),
+    ),
+    BenchCase(
+      "views",
+      "fliplr_f32",
+      lambda: mnp.fliplr(helper_mp),
+      lambda: np.fliplr(helper_np),
+    ),
+    BenchCase(
+      "views",
+      "rot90_k1_f32",
+      lambda: mnp.rot90(helper_mp, k=1),
+      lambda: np.rot90(helper_np, k=1),
+    ),
+    BenchCase(
+      "views",
+      "rot90_k2_f32",
+      lambda: mnp.rot90(helper_mp, k=2),
+      lambda: np.rot90(helper_np, k=2),
+    ),
   ])
 
   diag_np = np.arange(64 * 64, dtype=np.float64).reshape(64, 64)
@@ -423,6 +453,33 @@ def build_cases(
   cases.extend([
     BenchCase("views", "diagonal_64_f64", lambda: mnp.diagonal(diag_mp), lambda: np.diagonal(diag_np)),
     BenchCase("reductions", "trace_64_f64", lambda: mnp.trace(diag_mp), lambda: np.trace(diag_np)),
+  ])
+
+  # Phase-6a / 6b additions: shape manipulation + creation helpers.
+  s_np = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+  s_mp = mnp.asarray(s_np)
+  vec_a_np = np.arange(8, dtype=np.float32)
+  vec_a_mp = mnp.asarray(vec_a_np)
+  vec_b_np = np.arange(8, 16, dtype=np.float32)
+  vec_b_mp = mnp.asarray(vec_b_np)
+  cases.extend([
+    BenchCase("views", "squeeze_axis0_f32", lambda: mnp.squeeze(mnp.asarray(np.zeros((1, 4, 1, 5), dtype=np.float32)), axis=0), lambda: np.squeeze(np.zeros((1, 4, 1, 5), dtype=np.float32), axis=0)),
+    BenchCase("views", "moveaxis_f32", lambda: mnp.moveaxis(s_mp, 0, -1), lambda: np.moveaxis(s_np, 0, -1)),
+    BenchCase("views", "swapaxes_f32", lambda: mnp.swapaxes(s_mp, 0, 2), lambda: np.swapaxes(s_np, 0, 2)),
+    BenchCase("views", "ravel_f32", lambda: mnp.ravel(s_mp), lambda: np.ravel(s_np)),
+    BenchCase("views", "flatten_f32", lambda: mnp.flatten(s_mp) if hasattr(mnp, "flatten") else mnp.ravel(s_mp), lambda: s_np.flatten()),
+    BenchCase("views", "concatenate_axis0_f32", lambda: mnp.concatenate([vec_a_mp, vec_b_mp]), lambda: np.concatenate([vec_a_np, vec_b_np])),
+    BenchCase("views", "stack_axis0_f32", lambda: mnp.stack([vec_a_mp, vec_b_mp]), lambda: np.stack([vec_a_np, vec_b_np])),
+    BenchCase("views", "hstack_f32", lambda: mnp.hstack([vec_a_mp, vec_b_mp]), lambda: np.hstack([vec_a_np, vec_b_np])),
+    BenchCase("views", "vstack_f32", lambda: mnp.vstack([vec_a_mp, vec_b_mp]), lambda: np.vstack([vec_a_np, vec_b_np])),
+    BenchCase("creation", "eye_64_f32", lambda: mnp.eye(64, dtype=mnp.float32), lambda: np.eye(64, dtype=np.float32)),
+    BenchCase("creation", "identity_64_f32", lambda: mnp.identity(64, dtype=mnp.float32), lambda: np.identity(64, dtype=np.float32)),
+    BenchCase("creation", "tri_64_f32", lambda: mnp.tri(64, dtype=mnp.float32), lambda: np.tri(64, dtype=np.float32)),
+    BenchCase("creation", "logspace_50", lambda: mnp.logspace(0.0, 1.0, num=50), lambda: np.logspace(0.0, 1.0, num=50)),
+    BenchCase("creation", "geomspace_50", lambda: mnp.geomspace(1.0, 1000.0, num=50), lambda: np.geomspace(1.0, 1000.0, num=50)),
+    BenchCase("creation", "meshgrid_xy_f32", lambda: mnp.meshgrid(vec_a_mp, vec_b_mp, indexing="xy"), lambda: np.meshgrid(vec_a_np, vec_b_np, indexing="xy")),
+    BenchCase("creation", "atleast_2d_f32", lambda: mnp.atleast_2d(vec_a_mp), lambda: np.atleast_2d(vec_a_np)),
+    BenchCase("creation", "indices_4x4", lambda: mnp.indices((4, 4)), lambda: np.indices((4, 4))),
   ])
 
   for size in matrix_sizes:

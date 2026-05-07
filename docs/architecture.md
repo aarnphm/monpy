@@ -12,13 +12,31 @@ monpy should be a mojo array library with numpy-shaped python APIs.
   rules.
 - `src/storage.mojo` owns the storage record, refcounting, managed allocation,
   and external non-owning allocation records.
-- `src/layout.mojo` owns the narrow static layout vocabulary: `Shape[rank]`,
-  `Layout[rank]`, `Layout.__call__`, tile helpers, vector-width helpers, and the
-  array-to-layout tensor lift used by future static kernels.
+- `src/cute/` is the vendored CuTe-style layout algebra package
+  (CPU-only subset of NVIDIA CUTLASS's `cute/`). split into:
+  - `int_tuple.mojo` — recursive `IntTuple` ADT (leaf or list of
+    IntTuples), traversal helpers (`flatten`, `product`,
+    `prefix_product`, `inner_product`), `crd2idx`/`idx2crd`.
+  - `layout.mojo` — `Layout = (shape, stride)` struct, ctors
+    (`row_major`, `col_major`, `strided`, `ordered`), basic queries
+    (`__call__`, `idx2crd`, `size`, `cosize`, `__getitem__`).
+  - `functional.mojo` — algebra (`coalesce`, `select`, `transpose`,
+    `composition`, `complement`, `logical_divide`).
+  - `iter.mojo` — `LayoutIter` (single layout) and `MultiLayoutIter`
+    (N broadcasted operands), with both byte-cursor and
+    `element_index()` accessors.
+  the package is named `cute` (not `algorithm`/`layout`) to avoid
+  collisions with `std.algorithm` and `max/kernels/src/layout` on
+  Mojo's import path. detailed design notes in
+  [cute-layout.md](cute-layout.md).
 - `src/array.mojo` owns the `Array` record, scalar access, metadata methods,
-  shape/stride helpers, native cast-copy dispatch for supported dtype pairs, and
-  dynamic-rank fallback addressing. dtype metadata and promotion rules delegate
-  back to `domain.mojo`.
+  shape/stride helpers, native cast-copy dispatch for supported dtype pairs,
+  dynamic-rank fallback addressing, and the `Array ↔ Layout` adapter
+  (`as_layout`, `array_with_layout`) that bridges `Array` to the `cute`
+  package's primitives. dtype metadata and promotion rules delegate
+  back to `domain.mojo`. the `Layout` is linear (no constant offset);
+  the offset rides on `Array.offset_elems`, mirroring CuTe's `Layout`
+  vs `Tensor` split.
 - `src/create.mojo` owns creation entrypoints and the remaining python-callable
   operation glue that has not yet moved into narrower modules.
 - `src/views.mojo`, `src/reductions.mojo`, and `src/matmul.mojo` are the flat
@@ -69,3 +87,5 @@ monpy should be a mojo array library with numpy-shaped python APIs.
 
 see [apple-backends.md](apple-backends.md) for the apple silicon backend split.
 see [ffi-marshaling.md](ffi-marshaling.md) for why the residual `asarray` / `from_dlpack` / `strided_view` / `array_copy` ratios are marshaling tax rather than kernel cost, and the two paths out (cpython buffer protocol or numpy c api).
+see [cute-layout.md](cute-layout.md) for the `src/cute/` package — vendored CuTe-style layout algebra used by view operations and (eventually) by tiled-kernel migrations off `physical_offset`.
+see [layout.md](layout.md) for the original (now-superseded) static-layout proposal, kept as historical context.

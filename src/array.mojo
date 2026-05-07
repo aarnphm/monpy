@@ -10,7 +10,10 @@ from domain import (
     DTYPE_BOOL,
     DTYPE_FLOAT32,
     DTYPE_FLOAT64,
+    DTYPE_INT16,
+    DTYPE_INT32,
     DTYPE_INT64,
+    DTYPE_INT8,
     dtype_item_size,
     dtype_result_for_binary,
     dtype_result_for_linalg,
@@ -25,6 +28,9 @@ from storage import (
     release_storage,
     retain_storage,
 )
+
+from cute.int_tuple import IntTuple, flatten_to_int_list
+from cute.layout import Layout
 
 
 @fieldwise_init
@@ -137,6 +143,12 @@ struct Array(Movable, Writable):
             return PythonObject(get_physical_bool(self_ptr[], physical_offset(self_ptr[], index)))
         if self_ptr[].dtype_code == DTYPE_INT64:
             return PythonObject(get_physical_i64(self_ptr[], physical_offset(self_ptr[], index)))
+        if self_ptr[].dtype_code == DTYPE_INT32:
+            return PythonObject(Int(get_physical_i32(self_ptr[], physical_offset(self_ptr[], index))))
+        if self_ptr[].dtype_code == DTYPE_INT16:
+            return PythonObject(Int(get_physical_i16(self_ptr[], physical_offset(self_ptr[], index))))
+        if self_ptr[].dtype_code == DTYPE_INT8:
+            return PythonObject(Int(get_physical_i8(self_ptr[], physical_offset(self_ptr[], index))))
         if self_ptr[].dtype_code == DTYPE_FLOAT32:
             return PythonObject(get_physical_f32(self_ptr[], physical_offset(self_ptr[], index)))
         return PythonObject(get_physical_f64(self_ptr[], physical_offset(self_ptr[], index)))
@@ -254,6 +266,53 @@ def clone_int_list(values: List[Int]) -> List[Int]:
     return out^
 
 
+# ============================================================
+# Array ↔ Layout adapter (phase 2 entry point).
+#
+# `as_layout` builds a flat-rank Layout from an Array's shape/strides.
+# `array_with_layout` produces a view whose shape/strides come from a
+# Layout and whose offset accumulates onto the source's offset_elems.
+#
+# Both stay here (rather than in a separate adapter file) because they
+# need access to make_view_array's signature and Array internals; the
+# coupling is tight enough that one extra file would just create churn.
+# ============================================================
+
+
+def as_layout(array: Array) raises -> Layout:
+    """Flat-rank Layout matching `array.shape` and `array.strides`. The
+    Layout is "linear" (no constant term); the offset rides on the
+    Array. Caller is responsible for adding `array.offset_elems` when
+    computing absolute byte offsets."""
+    var shape_children = List[IntTuple]()
+    var stride_children = List[IntTuple]()
+    for axis in range(len(array.shape)):
+        shape_children.append(IntTuple.leaf(array.shape[axis]))
+        stride_children.append(IntTuple.leaf(array.strides[axis]))
+    return Layout(IntTuple.nested(shape_children^), IntTuple.nested(stride_children^))
+
+
+def array_with_layout(
+    source: Array, new_layout: Layout, offset_delta: Int = 0
+) raises -> Array:
+    """Build a view of `source` whose shape/strides come from
+    `new_layout` and whose `offset_elems` is `source.offset_elems +
+    offset_delta`. The Layout is flattened to monpy's flat shape/stride
+    list convention before constructing the view; nested-mode layouts
+    from `composition` / `logical_divide` get implicitly flattened."""
+    var flat_shape = flatten_to_int_list(new_layout.shape)
+    var flat_stride = flatten_to_int_list(new_layout.stride)
+    if len(flat_shape) != len(flat_stride):
+        raise Error("array_with_layout: shape/stride structural mismatch")
+    var size_value = 1
+    for i in range(len(flat_shape)):
+        size_value *= flat_shape[i]
+    var new_offset = source.offset_elems + offset_delta
+    return make_view_array(
+        source, flat_shape^, flat_stride^, size_value, new_offset
+    )
+
+
 def int_list_from_py(obj: PythonObject) raises -> List[Int]:
     var out = List[Int]()
     for i in range(len(obj)):
@@ -360,6 +419,18 @@ def get_physical_i64(array: Array, physical: Int) raises -> Int64:
     return array.data.bitcast[Int64]()[physical]
 
 
+def get_physical_i32(array: Array, physical: Int) raises -> Int32:
+    return array.data.bitcast[Int32]()[physical]
+
+
+def get_physical_i16(array: Array, physical: Int) raises -> Int16:
+    return array.data.bitcast[Int16]()[physical]
+
+
+def get_physical_i8(array: Array, physical: Int) raises -> Int8:
+    return array.data.bitcast[Int8]()[physical]
+
+
 def get_physical_f32(array: Array, physical: Int) raises -> Float32:
     return array.data.bitcast[Float32]()[physical]
 
@@ -375,6 +446,12 @@ def get_physical_as_f64(array: Array, physical: Int) raises -> Float64:
         return 0.0
     if array.dtype_code == DTYPE_INT64:
         return Float64(get_physical_i64(array, physical))
+    if array.dtype_code == DTYPE_INT32:
+        return Float64(Int(get_physical_i32(array, physical)))
+    if array.dtype_code == DTYPE_INT16:
+        return Float64(Int(get_physical_i16(array, physical)))
+    if array.dtype_code == DTYPE_INT8:
+        return Float64(Int(get_physical_i8(array, physical)))
     if array.dtype_code == DTYPE_FLOAT32:
         return Float64(get_physical_f32(array, physical))
     return get_physical_f64(array, physical)
@@ -403,6 +480,12 @@ def set_physical_from_f64(mut array: Array, physical: Int, value: Float64) raise
             array.data[physical] = UInt8(0)
     elif array.dtype_code == DTYPE_INT64:
         array.data.bitcast[Int64]()[physical] = Int64(value)
+    elif array.dtype_code == DTYPE_INT32:
+        array.data.bitcast[Int32]()[physical] = Int32(Int(value))
+    elif array.dtype_code == DTYPE_INT16:
+        array.data.bitcast[Int16]()[physical] = Int16(Int(value))
+    elif array.dtype_code == DTYPE_INT8:
+        array.data.bitcast[Int8]()[physical] = Int8(Int(value))
     elif array.dtype_code == DTYPE_FLOAT32:
         array.data.bitcast[Float32]()[physical] = Float32(value)
     else:
@@ -416,6 +499,12 @@ def set_logical_from_f64(mut array: Array, logical: Int, value: Float64) raises:
 def set_logical_from_i64(mut array: Array, logical: Int, value: Int64) raises:
     if array.dtype_code == DTYPE_INT64:
         array.data.bitcast[Int64]()[physical_offset(array, logical)] = value
+    elif array.dtype_code == DTYPE_INT32:
+        array.data.bitcast[Int32]()[physical_offset(array, logical)] = Int32(Int(value))
+    elif array.dtype_code == DTYPE_INT16:
+        array.data.bitcast[Int16]()[physical_offset(array, logical)] = Int16(Int(value))
+    elif array.dtype_code == DTYPE_INT8:
+        array.data.bitcast[Int8]()[physical_offset(array, logical)] = Int8(Int(value))
     else:
         set_logical_from_f64(array, logical, Float64(value))
 
@@ -429,6 +518,12 @@ def set_logical_from_py(mut array: Array, logical: Int, value_obj: PythonObject)
             array.data[physical] = UInt8(0)
     elif array.dtype_code == DTYPE_INT64:
         array.data.bitcast[Int64]()[physical] = Int64(Int(py=value_obj))
+    elif array.dtype_code == DTYPE_INT32:
+        array.data.bitcast[Int32]()[physical] = Int32(Int(py=value_obj))
+    elif array.dtype_code == DTYPE_INT16:
+        array.data.bitcast[Int16]()[physical] = Int16(Int(py=value_obj))
+    elif array.dtype_code == DTYPE_INT8:
+        array.data.bitcast[Int8]()[physical] = Int8(Int(py=value_obj))
     elif array.dtype_code == DTYPE_FLOAT32:
         array.data.bitcast[Float32]()[physical] = Float32(Float64(py=value_obj))
     else:
@@ -440,7 +535,12 @@ def scalar_py_as_f64(value_obj: PythonObject, dtype_code: Int) raises -> Float64
         if Bool(py=value_obj):
             return 1.0
         return 0.0
-    if dtype_code == DTYPE_INT64:
+    if (
+        dtype_code == DTYPE_INT64
+        or dtype_code == DTYPE_INT32
+        or dtype_code == DTYPE_INT16
+        or dtype_code == DTYPE_INT8
+    ):
         return Float64(Int(py=value_obj))
     return Float64(py=value_obj)
 
@@ -522,6 +622,12 @@ def cast_copy_array(src: Array, dtype_code: Int) raises -> Array:
                 set_logical_from_i64(result, i, 0)
         elif src.dtype_code == DTYPE_INT64:
             set_logical_from_i64(result, i, get_physical_i64(src, physical))
+        elif src.dtype_code == DTYPE_INT32:
+            set_logical_from_i64(result, i, Int64(Int(get_physical_i32(src, physical))))
+        elif src.dtype_code == DTYPE_INT16:
+            set_logical_from_i64(result, i, Int64(Int(get_physical_i16(src, physical))))
+        elif src.dtype_code == DTYPE_INT8:
+            set_logical_from_i64(result, i, Int64(Int(get_physical_i8(src, physical))))
         elif src.dtype_code == DTYPE_FLOAT32:
             set_logical_from_f64(result, i, Float64(get_physical_f32(src, physical)))
         elif src.dtype_code == DTYPE_FLOAT64:
@@ -533,6 +639,12 @@ def cast_copy_array(src: Array, dtype_code: Int) raises -> Array:
 
 def result_dtype_for_unary(dtype_code: Int) -> Int:
     return dtype_result_for_unary(dtype_code)
+
+
+def result_dtype_for_unary_preserve(dtype_code: Int) -> Int:
+    if dtype_code == DTYPE_BOOL:
+        return DTYPE_INT64
+    return dtype_code
 
 
 def result_dtype_for_binary(lhs_dtype: Int, rhs_dtype: Int, op: Int) -> Int:

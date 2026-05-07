@@ -1,4 +1,34 @@
-from std.math import cos, exp, isinf, isnan, log, nan, sin
+from std.math import (
+    abs as math_abs,
+    acos,
+    asin,
+    atan,
+    atan2,
+    cbrt,
+    ceil as math_ceil,
+    copysign,
+    cos,
+    cosh,
+    exp,
+    exp2,
+    expm1,
+    floor as math_floor,
+    hypot,
+    isinf,
+    isnan,
+    log,
+    log10,
+    log1p,
+    log2,
+    nan,
+    round as math_round,
+    sin,
+    sinh,
+    sqrt,
+    tan,
+    tanh,
+    trunc as math_trunc,
+)
 from std.memory.unsafe_pointer import alloc
 from std.sys import CompilationTarget, simd_width_of
 
@@ -20,17 +50,58 @@ from domain import (
     DTYPE_FLOAT32,
     DTYPE_FLOAT64,
     OP_ADD,
+    OP_ARCTAN2,
+    OP_COPYSIGN,
     OP_DIV,
+    OP_FLOOR_DIV,
+    OP_FMAX,
+    OP_FMIN,
+    OP_HYPOT,
+    OP_MAXIMUM,
+    OP_MINIMUM,
+    OP_MOD,
     OP_MUL,
+    OP_POWER,
     OP_SUB,
+    REDUCE_ALL,
+    REDUCE_ANY,
+    REDUCE_ARGMIN,
     REDUCE_MEAN,
     REDUCE_MAX,
     REDUCE_MIN,
+    REDUCE_PROD,
     REDUCE_SUM,
+    UNARY_ABS,
+    UNARY_ARCCOS,
+    UNARY_ARCSIN,
+    UNARY_ARCTAN,
+    UNARY_CBRT,
+    UNARY_CEIL,
     UNARY_COS,
+    UNARY_COSH,
+    UNARY_DEG2RAD,
     UNARY_EXP,
+    UNARY_EXP2,
+    UNARY_EXPM1,
+    UNARY_FLOOR,
     UNARY_LOG,
+    UNARY_LOG10,
+    UNARY_LOG1P,
+    UNARY_LOG2,
+    UNARY_LOGICAL_NOT,
+    UNARY_NEGATE,
+    UNARY_POSITIVE,
+    UNARY_RAD2DEG,
+    UNARY_RECIPROCAL,
+    UNARY_RINT,
+    UNARY_SIGN,
     UNARY_SIN,
+    UNARY_SINH,
+    UNARY_SQRT,
+    UNARY_SQUARE,
+    UNARY_TAN,
+    UNARY_TANH,
+    UNARY_TRUNC,
 )
 from array import (
     Array,
@@ -57,6 +128,46 @@ def apply_binary_f64(lhs: Float64, rhs: Float64, op: Int) raises -> Float64:
         return lhs * rhs
     if op == OP_DIV:
         return lhs / rhs
+    if op == OP_FLOOR_DIV:
+        # numpy floor_divide on float: floor(a / b); on int it's // .
+        # We always operate in f64 here, so floor(quotient).
+        return math_floor(lhs / rhs)
+    if op == OP_MOD:
+        # numpy `mod` (a - floor(a/b)*b); matches python `%` for floats.
+        var q = math_floor(lhs / rhs)
+        return lhs - q * rhs
+    if op == OP_POWER:
+        # f64 round-trip: pow via SIMD<f64, 1>.
+        var v = SIMD[DType.float64, 1](lhs).__pow__(SIMD[DType.float64, 1](rhs))
+        return v[0]
+    if op == OP_MAXIMUM:
+        # numpy `maximum` propagates NaN: if either is NaN, result is NaN.
+        if isnan(lhs) or isnan(rhs):
+            return nan[DType.float64]()
+        return lhs if lhs > rhs else rhs
+    if op == OP_MINIMUM:
+        if isnan(lhs) or isnan(rhs):
+            return nan[DType.float64]()
+        return lhs if lhs < rhs else rhs
+    if op == OP_FMAX:
+        # NaN-aware: NaN treated as missing.
+        if isnan(lhs):
+            return rhs
+        if isnan(rhs):
+            return lhs
+        return lhs if lhs > rhs else rhs
+    if op == OP_FMIN:
+        if isnan(lhs):
+            return rhs
+        if isnan(rhs):
+            return lhs
+        return lhs if lhs < rhs else rhs
+    if op == OP_ARCTAN2:
+        return atan2(SIMD[DType.float64, 1](lhs), SIMD[DType.float64, 1](rhs))[0]
+    if op == OP_HYPOT:
+        return hypot(SIMD[DType.float64, 1](lhs), SIMD[DType.float64, 1](rhs))[0]
+    if op == OP_COPYSIGN:
+        return copysign(SIMD[DType.float64, 1](lhs), SIMD[DType.float64, 1](rhs))[0]
     raise Error("unknown binary op")
 
 
@@ -75,6 +186,66 @@ def apply_unary_f64(value: Float64, op: Int) raises -> Float64:
                 return nan[DType.float64]()
             return value
         return log(value)
+    if op == UNARY_TAN:
+        return tan(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_ARCSIN:
+        return asin(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_ARCCOS:
+        return acos(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_ARCTAN:
+        return atan(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_SINH:
+        return sinh(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_COSH:
+        return cosh(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_TANH:
+        return tanh(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_LOG1P:
+        return log1p(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_LOG2:
+        return log2(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_LOG10:
+        return log10(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_EXP2:
+        return exp2(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_EXPM1:
+        return expm1(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_SQRT:
+        return sqrt(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_CBRT:
+        return cbrt(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_DEG2RAD:
+        return value * 0.017453292519943295  # pi/180
+    if op == UNARY_RAD2DEG:
+        return value * 57.29577951308232  # 180/pi
+    if op == UNARY_RECIPROCAL:
+        return 1.0 / value
+    if op == UNARY_NEGATE:
+        return -value
+    if op == UNARY_POSITIVE:
+        return value
+    if op == UNARY_ABS:
+        return -value if value < 0.0 else value
+    if op == UNARY_SQUARE:
+        return value * value
+    if op == UNARY_SIGN:
+        if isnan(value):
+            return nan[DType.float64]()
+        if value > 0.0:
+            return 1.0
+        if value < 0.0:
+            return -1.0
+        return 0.0
+    if op == UNARY_FLOOR:
+        return math_floor(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_CEIL:
+        return math_ceil(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_TRUNC:
+        return math_trunc(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_RINT:
+        return math_round(SIMD[DType.float64, 1](value))[0]
+    if op == UNARY_LOGICAL_NOT:
+        return 1.0 if value == 0.0 else 0.0
     raise Error("unknown unary op")
 
 
@@ -87,6 +258,8 @@ def apply_binary_typed_vec[
     # has dispatched on dtype at the runtime boundary, all subsequent SIMD
     # work is dtype-monomorphic — this function lets us write each kernel
     # body once instead of duplicating the f32 / f64 paths.
+    # Float-only ops (FLOOR_DIV-with-floor, ARCTAN2, HYPOT, COPYSIGN, NaN-
+    # propagation in MAXIMUM/MINIMUM/FMIN/FMAX) gate via `comptime if`.
     if op == OP_ADD:
         return lhs + rhs
     if op == OP_SUB:
@@ -95,6 +268,71 @@ def apply_binary_typed_vec[
         return lhs * rhs
     if op == OP_DIV:
         return lhs / rhs
+    if op == OP_FLOOR_DIV:
+        comptime if dtype.is_floating_point():
+            return math_floor(lhs / rhs)
+        else:
+            return lhs // rhs
+    if op == OP_MOD:
+        return lhs % rhs
+    if op == OP_POWER:
+        return lhs.__pow__(rhs)
+    if op == OP_MAXIMUM:
+        comptime if dtype.is_floating_point():
+            # numpy `maximum` propagates NaN. Mojo's MLIR-typed `pop.cmp` is
+            # ordered (returns False when either operand is NaN), so we detect
+            # NaN explicitly via std.utils.numerics.isnan.
+            var lhs_nan = isnan(lhs)
+            var rhs_nan = isnan(rhs)
+            var any_nan = lhs_nan | rhs_nan
+            var bigger = lhs.gt(rhs).select(lhs, rhs)
+            return any_nan.select(SIMD[dtype, width](nan[dtype]()), bigger)
+        else:
+            return lhs.gt(rhs).select(lhs, rhs)
+    if op == OP_MINIMUM:
+        comptime if dtype.is_floating_point():
+            var lhs_nan = isnan(lhs)
+            var rhs_nan = isnan(rhs)
+            var any_nan = lhs_nan | rhs_nan
+            var smaller = lhs.lt(rhs).select(lhs, rhs)
+            return any_nan.select(SIMD[dtype, width](nan[dtype]()), smaller)
+        else:
+            return lhs.lt(rhs).select(lhs, rhs)
+    if op == OP_FMAX:
+        comptime if dtype.is_floating_point():
+            var lhs_nan = isnan(lhs)
+            var rhs_nan = isnan(rhs)
+            var bigger = lhs.gt(rhs).select(lhs, rhs)
+            var picked = lhs_nan.select(rhs, bigger)
+            picked = rhs_nan.select(lhs, picked)
+            return picked
+        else:
+            return lhs.gt(rhs).select(lhs, rhs)
+    if op == OP_FMIN:
+        comptime if dtype.is_floating_point():
+            var lhs_nan = isnan(lhs)
+            var rhs_nan = isnan(rhs)
+            var smaller = lhs.lt(rhs).select(lhs, rhs)
+            var picked = lhs_nan.select(rhs, smaller)
+            picked = rhs_nan.select(lhs, picked)
+            return picked
+        else:
+            return lhs.lt(rhs).select(lhs, rhs)
+    if op == OP_ARCTAN2:
+        comptime if dtype.is_floating_point():
+            return atan2(lhs, rhs)
+        else:
+            raise Error("arctan2 requires floating-point dtype")
+    if op == OP_HYPOT:
+        comptime if dtype.is_floating_point():
+            return hypot(lhs, rhs)
+        else:
+            raise Error("hypot requires floating-point dtype")
+    if op == OP_COPYSIGN:
+        comptime if dtype.is_floating_point():
+            return copysign(lhs, rhs)
+        else:
+            raise Error("copysign requires floating-point dtype")
     raise Error("unknown binary op")
 
 
@@ -185,6 +423,68 @@ def apply_unary_typed_vec[
         return exp(value)
     if op == UNARY_LOG:
         return log(value)
+    if op == UNARY_TAN:
+        return tan(value)
+    if op == UNARY_ARCSIN:
+        return asin(value)
+    if op == UNARY_ARCCOS:
+        return acos(value)
+    if op == UNARY_ARCTAN:
+        return atan(value)
+    if op == UNARY_SINH:
+        return sinh(value)
+    if op == UNARY_COSH:
+        return cosh(value)
+    if op == UNARY_TANH:
+        return tanh(value)
+    if op == UNARY_LOG1P:
+        return log1p(value)
+    if op == UNARY_LOG2:
+        return log2(value)
+    if op == UNARY_LOG10:
+        return log10(value)
+    if op == UNARY_EXP2:
+        return exp2(value)
+    if op == UNARY_EXPM1:
+        return expm1(value)
+    if op == UNARY_SQRT:
+        return sqrt(value)
+    if op == UNARY_CBRT:
+        return cbrt(value)
+    if op == UNARY_DEG2RAD:
+        return value * SIMD[dtype, width](0.017453292519943295)
+    if op == UNARY_RAD2DEG:
+        return value * SIMD[dtype, width](57.29577951308232)
+    if op == UNARY_RECIPROCAL:
+        return SIMD[dtype, width](1.0) / value
+    if op == UNARY_NEGATE:
+        return -value
+    if op == UNARY_POSITIVE:
+        return value
+    if op == UNARY_ABS:
+        var neg = -value
+        return value.lt(SIMD[dtype, width](0)).select(neg, value)
+    if op == UNARY_SQUARE:
+        return value * value
+    if op == UNARY_SIGN:
+        var pos = value.gt(SIMD[dtype, width](0))
+        var neg = value.lt(SIMD[dtype, width](0))
+        var nan_mask = isnan(value)
+        var s = pos.select(SIMD[dtype, width](1), SIMD[dtype, width](0))
+        s = neg.select(SIMD[dtype, width](-1), s)
+        return nan_mask.select(SIMD[dtype, width](nan[dtype]()), s)
+    if op == UNARY_FLOOR:
+        return math_floor(value)
+    if op == UNARY_CEIL:
+        return math_ceil(value)
+    if op == UNARY_TRUNC:
+        return math_trunc(value)
+    if op == UNARY_RINT:
+        return math_round(value)
+    if op == UNARY_LOGICAL_NOT:
+        return value.eq(SIMD[dtype, width](0)).select(
+            SIMD[dtype, width](1), SIMD[dtype, width](0)
+        )
     raise Error("unknown unary op")
 
 

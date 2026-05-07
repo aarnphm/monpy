@@ -45,16 +45,27 @@ covered or partially covered today:
 
 - array construction from python scalars, lists, tuples, supported numpy arrays,
   array-interface objects, and cpu dlpack producers.
-- dtype set: `bool`, `int64`, `float32`, `float64`.
+- dtype set with full kernel support: `bool`, `int64`, `float32`, `float64`.
+- dtype set with metadata only (allocation raises `NotImplementedError`
+  with `"phase-5a kernel work"` until kernels land): `int32`, `int16`,
+  `int8`, plus `intp` alias.
 - storage ownership for managed arrays, borrowed external arrays, and views.
 - shape and stride metadata, c/f-contiguous checks, negative strides, zero
   strides, basic view safety.
 - indexing for integers, slices, reverse slices, ellipsis, and zero-dimensional
   scalar access, plus `newaxis` / `None` insertion.
 - creation: `empty`, `zeros`, `ones`, `full`, `empty_like`, `zeros_like`,
-  `ones_like`, `full_like`, `copy`, `ascontiguousarray`, `arange`, `linspace`.
-- shape/view operations: `reshape`, `transpose`, `matrix_transpose`,
-  `broadcast_to`, `expand_dims`, `diagonal`, `trace`.
+  `ones_like`, `full_like`, `copy`, `ascontiguousarray`, `arange`, `linspace`,
+  `eye`, `identity`, `tri`, `atleast_1d`/`atleast_2d`/`atleast_3d`,
+  `logspace`, `geomspace`, `meshgrid`, `indices`, `ix_`.
+- shape/view operations:
+  - layout-only views: `reshape`, `transpose`, `matrix_transpose`,
+    `broadcast_to`, `expand_dims`, `flip`, `fliplr`, `flipud`, `rot90`,
+    `squeeze`, `moveaxis`, `swapaxes`, `diagonal`, `trace`.
+  - copy-out: `ravel`, `flatten`, `concatenate`, `stack`, `hstack`,
+    `vstack`, `dstack`, `column_stack` (current implementation goes
+    through python-level per-element flat-write; native LayoutIter
+    kernel is the recorded perf follow-up).
 - elementwise functions: `add`, `subtract`, `multiply`, `divide`, `sin`, `cos`,
   `exp`, `log`, `where`, and the explicit `sin_add_mul` fused kernel.
 - reductions with `axis=None`: `sum`, `mean`, `min`, `max`, `argmax`.
@@ -62,11 +73,20 @@ covered or partially covered today:
   cases.
 - linalg namespace: `matmul`, `matrix_transpose`, `solve`, `inv`, `det`,
   `LinAlgError`.
+- internal infrastructure (no public surface): vendored CuTe-style
+  layout algebra at `src/cute/` — `IntTuple`, `Layout`, `composition`,
+  `coalesce`, `complement`, `select`/`transpose`, `logical_divide`,
+  `LayoutIter`, `MultiLayoutIter`. used by the proof-of-concept
+  unary-strided migration; available for future kernel rewrites.
 
 major local blockers already called out in compatibility coverage:
 
 - unsupported dtype families: complex, object, string, structured, unsigned,
-  datetime, and narrow integer arrays.
+  datetime.
+- phase-5a "registered but unallocatable" dtypes: int32/int16/int8 raise
+  `NotImplementedError` on allocation; metadata layer (kind, itemsize,
+  alignment, byteorder, format-char, iinfo, can_cast, result_type,
+  promote_types, isdtype) is fully wired.
 - boolean indexing and integer-array fancy indexing.
 - axis-aware reductions and reduction keyword controls.
 - higher-rank matmul.
@@ -237,16 +257,36 @@ monpy implementation note:
 many missing functions can become python-level wrappers after core view and
 iterator semantics are correct.
 
-missing pieces:
+shipped (phase 6a / 6b):
 
 - creation helpers: `eye`, `identity`, `tri`, `meshgrid`, `logspace`,
-  `geomspace`, `frombuffer`, `fromiter`, `asfortranarray`, `atleast_1d`,
-  `atleast_2d`, `atleast_3d`.
-- manipulation helpers: `concatenate`, `stack`, `block`, `split`,
-  `array_split`, `hsplit`, `vsplit`, `dsplit`, `squeeze`, `ravel`, `moveaxis`,
-  `swapaxes`, `flip`, `fliplr`, `flipud`, `rot90`, `roll`, `repeat`, `tile`,
-  `pad`, `append`, `insert`, `delete`, `trim_zeros`.
+  `geomspace`, `atleast_1d`, `atleast_2d`, `atleast_3d`, `indices`, `ix_`.
+- manipulation helpers: `flip`, `fliplr`, `flipud`, `rot90`,
+  `squeeze`, `moveaxis`, `swapaxes`, `ravel`, `flatten`,
+  `concatenate`, `stack`, `hstack`, `vstack`, `dstack`,
+  `column_stack`.
+
+still missing:
+
+- creation helpers: `frombuffer`, `fromiter`, `asfortranarray`
+  (needs F-order support that monpy v1 doesn't have), `tril`, `triu`.
+- manipulation helpers: `block`, `split`, `array_split`, `hsplit`,
+  `vsplit`, `dsplit`, `roll`, `repeat`, `tile`, `pad`, `append`,
+  `insert`, `delete`, `trim_zeros`, `broadcast_arrays`.
 - memory checks: `shares_memory`, `may_share_memory`, contiguity helpers.
+
+implementation notes:
+
+- `flip`/`fliplr`/`flipud`/`rot90` are zero-cost layout views (stride
+  negation + offset bump). bench shows ~0.8–1.7× monpy/numpy with
+  python wrapper as the only overhead.
+- `concatenate`/`stack`/`hstack`/`vstack` currently go through a
+  python-level per-element flat-write into a fresh array. that's
+  correct for any rank/dtype but hits ~58000× monpy/numpy on N=256
+  inputs. the recorded perf follow-up is a native concatenate kernel
+  walking output positions via `LayoutIter`, copying source slices
+  with `memcpy` along the trailing axis when both sides are
+  c-contiguous along that axis.
 
 monpy implementation note:
 

@@ -15,6 +15,7 @@ from create import (
     binary_ops,
     binary_scalar_ops,
     broadcast_to_ops,
+    compare_ops,
     copy_from_external_ops,
     copyto_ops,
     det_ops,
@@ -27,13 +28,17 @@ from create import (
     empty_ops,
     expand_dims_ops,
     fill_ops,
+    flip_ops,
     from_external_ops,
     from_flat_ops,
     full_ops,
     inv_ops,
     linspace_ops,
+    logical_ops,
     materialize_c_contiguous_ops,
     matmul_ops,
+    predicate_ops,
+    reduce_axis_ops,
     reduce_ops,
     reshape_ops,
     result_dtype_for_binary_py_ops,
@@ -47,6 +52,7 @@ from create import (
     transpose_full_reverse_ops,
     transpose_ops,
     unary_ops,
+    unary_preserve_ops,
     where_ops,
 )
 from array import Array
@@ -98,17 +104,23 @@ def PyInit__native() -> PythonObject:
         module.def_function[slice_ops]("slice")
         module.def_function[broadcast_to_ops]("broadcast_to")
         module.def_function[expand_dims_ops]("expand_dims")
+        module.def_function[flip_ops]("flip")
         module.def_function[astype_ops]("astype")
         module.def_function[materialize_c_contiguous_ops]("materialize_c_contiguous")
         module.def_function[diagonal_ops]("diagonal")
         module.def_function[trace_ops]("trace")
         module.def_function[unary_ops]("unary")
+        module.def_function[unary_preserve_ops]("unary_preserve")
         module.def_function[binary_ops]("binary")
         module.def_function[binary_into_ops]("binary_into")
         module.def_function[binary_scalar_ops]("binary_scalar")
+        module.def_function[compare_ops]("compare")
+        module.def_function[logical_ops]("logical")
+        module.def_function[predicate_ops]("predicate")
         module.def_function[sin_add_mul_ops]("sin_add_mul")
         module.def_function[where_ops]("where")
         module.def_function[reduce_ops]("reduce")
+        module.def_function[reduce_axis_ops]("reduce_axis")
         module.def_function[result_dtype_for_unary_py_ops]("_result_dtype_for_unary")
         module.def_function[result_dtype_for_binary_py_ops]("_result_dtype_for_binary")
         module.def_function[result_dtype_for_reduction_py_ops]("_result_dtype_for_reduction")

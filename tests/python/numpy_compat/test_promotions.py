@@ -66,7 +66,9 @@ def test_python_scalars_are_weak_for_float32_arrays(
 
 @pytest.mark.parametrize(
   "dtype",
-  ["uint64", "complex128", "object", "str", "int8", "uint8", numpy.complex128, numpy.dtype("uint64")],
+  # int8 moved to phase-5a registry-without-kernels — see
+  # test_array_coercion.py::test_phase5a_unimplemented_allocation_blockers.
+  ["uint64", "complex128", "object", "str", "uint8", numpy.complex128, numpy.dtype("uint64")],
 )
 def test_unsupported_promotion_dtype_families_are_explicit_blockers(dtype: object) -> None:
   with pytest.raises(NotImplementedError, match="unsupported dtype"):

@@ -4,18 +4,35 @@ from std.python import PythonObject
 
 from domain import (
     BACKEND_FUSED,
+    CMP_EQ,
+    CMP_GE,
+    CMP_GT,
+    CMP_LE,
+    CMP_LT,
+    CMP_NE,
     DTYPE_BOOL,
     DTYPE_FLOAT32,
     DTYPE_FLOAT64,
     DTYPE_INT64,
+    LOGIC_AND,
+    LOGIC_OR,
+    LOGIC_XOR,
     OP_ADD,
     OP_DIV,
     OP_MUL,
     OP_SUB,
+    PRED_ISFINITE,
+    PRED_ISINF,
+    PRED_ISNAN,
+    PRED_SIGNBIT,
+    REDUCE_ALL,
+    REDUCE_ANY,
     REDUCE_ARGMAX,
+    REDUCE_ARGMIN,
     REDUCE_MEAN,
     REDUCE_MAX,
     REDUCE_MIN,
+    REDUCE_PROD,
     REDUCE_SUM,
     UNARY_COS,
     UNARY_EXP,
@@ -29,6 +46,7 @@ from domain import (
 )
 from elementwise import (
     apply_binary_f64,
+    apply_unary_f64,
     maybe_argmax_contiguous,
     maybe_binary_contiguous,
     maybe_binary_same_shape_contiguous,
@@ -44,6 +62,7 @@ from elementwise import (
 )
 from array import (
     Array,
+    as_layout,
     broadcast_shape,
     cast_copy_array,
     clone_int_list,
@@ -67,14 +86,17 @@ from array import (
     result_dtype_for_linalg_binary,
     result_dtype_for_reduction,
     result_dtype_for_unary,
+    result_dtype_for_unary_preserve,
     same_shape,
     scalar_py_as_f64,
     set_logical_from_f64,
     set_logical_from_i64,
     set_logical_from_py,
+    set_physical_from_f64,
     shape_size,
     slice_length,
 )
+from cute.iter import LayoutIter
 
 
 # Python-callable entrypoints.
@@ -230,6 +252,49 @@ def transpose_ops(array_obj: PythonObject, axes_obj: PythonObject) raises -> Pyt
         shape.append(src[].shape[axis])
         strides.append(src[].strides[axis])
     var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    return PythonObject(alloc=result^)
+
+
+def flip_ops(
+    array_obj: PythonObject,
+    axes_obj: PythonObject,
+) raises -> PythonObject:
+    # Flip the iteration order on each axis in `axes` by negating its
+    # stride and shifting `offset_elems`. Pure view; no data movement.
+    # An empty `axes` list flips every axis (numpy default).
+    var src = array_obj.downcast_value_ptr[Array]()
+    var ndim = len(src[].shape)
+    var shape = clone_int_list(src[].shape)
+    var strides = clone_int_list(src[].strides)
+    var offset = src[].offset_elems
+
+    var flip_all = len(axes_obj) == 0
+    var seen = List[Bool]()
+    for _ in range(ndim):
+        seen.append(False)
+
+    if flip_all:
+        for i in range(ndim):
+            seen[i] = True
+    else:
+        for k in range(len(axes_obj)):
+            var ax = Int(py=axes_obj[k])
+            if ax < 0:
+                ax += ndim
+            if ax < 0 or ax >= ndim:
+                raise Error("flip() axis out of bounds")
+            if seen[ax]:
+                raise Error("flip() repeated axis")
+            seen[ax] = True
+
+    for i in range(ndim):
+        if seen[i]:
+            offset += (shape[i] - 1) * strides[i]
+            strides[i] = -strides[i]
+
+    var result = make_view_array(
+        src[], shape^, strides^, src[].size_value, offset
+    )
     return PythonObject(alloc=result^)
 
 
@@ -445,25 +510,24 @@ def unary_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObj
     var result = make_empty_array(result_dtype_for_unary(src[].dtype_code), shape^)
     if maybe_unary_contiguous(src[], result, op):
         return PythonObject(alloc=result^)
-    for i in range(src[].size_value):
-        var value = get_logical_as_f64(src[], i)
-        if op == UNARY_SIN:
-            value = sin(value)
-        elif op == UNARY_COS:
-            value = cos(value)
-        elif op == UNARY_EXP:
-            value = exp(value)
-        elif op == UNARY_LOG:
-            if isnan(value):
-                pass
-            elif isinf(value):
-                if value < 0.0:
-                    value = nan[DType.float64]()
-            else:
-                value = log(value)
-        else:
-            raise Error("unknown unary op")
-        set_logical_from_f64(result, i, value)
+    # Strided fallback: walk via LayoutIter so the divmod amortizes
+    # across the iteration instead of paying physical_offset per element.
+    var src_layout = as_layout(src[])
+    var dst_layout = as_layout(result)
+    var src_item = item_size(src[].dtype_code)
+    var dst_item = item_size(result.dtype_code)
+    var src_iter = LayoutIter(
+        src_layout, src_item, src[].offset_elems * src_item
+    )
+    var dst_iter = LayoutIter(
+        dst_layout, dst_item, result.offset_elems * dst_item
+    )
+    while src_iter.has_next():
+        var value = get_physical_as_f64(src[], src_iter.element_index())
+        var out = apply_unary_f64(value, op)
+        set_physical_from_f64(result, dst_iter.element_index(), out)
+        src_iter.step()
+        dst_iter.step()
     return PythonObject(alloc=result^)
 
 
@@ -487,18 +551,7 @@ def binary_dispatch_ops(lhs: Array, rhs: Array, op: Int) raises -> Array:
     for i in range(result.size_value):
         var lval = get_broadcast_as_f64(lhs, i, result.shape)
         var rval = get_broadcast_as_f64(rhs, i, result.shape)
-        var out: Float64
-        if op == OP_ADD:
-            out = lval + rval
-        elif op == OP_SUB:
-            out = lval - rval
-        elif op == OP_MUL:
-            out = lval * rval
-        elif op == OP_DIV:
-            out = lval / rval
-        else:
-            raise Error("unknown binary op")
-        set_logical_from_f64(result, i, out)
+        set_logical_from_f64(result, i, apply_binary_f64(lval, rval, op))
     return result^
 
 
@@ -746,24 +799,57 @@ def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonOb
     var src = array_obj.downcast_value_ptr[Array]()
     var op = Int(py=op_obj)
     var shape = List[Int]()
-    if op == REDUCE_ARGMAX:
+    if op == REDUCE_ARGMAX or op == REDUCE_ARGMIN:
         var result = make_empty_array(DTYPE_INT64, shape^)
         if src[].size_value == 0:
-            raise Error("argmax() cannot reduce an empty array")
-        if maybe_argmax_contiguous(src[], result):
+            raise Error("argmax/argmin cannot reduce an empty array")
+        if op == REDUCE_ARGMAX and maybe_argmax_contiguous(src[], result):
             return PythonObject(alloc=result^)
         var best_index = 0
         var best_value = get_logical_as_f64(src[], 0)
         for i in range(1, src[].size_value):
             var value = get_logical_as_f64(src[], i)
-            if value > best_value:
-                best_value = value
-                best_index = i
+            if op == REDUCE_ARGMAX:
+                if value > best_value:
+                    best_value = value
+                    best_index = i
+            else:
+                if value < best_value:
+                    best_value = value
+                    best_index = i
         set_logical_from_i64(result, 0, Int64(best_index))
+        return PythonObject(alloc=result^)
+    if op == REDUCE_ALL or op == REDUCE_ANY:
+        var result = make_empty_array(DTYPE_BOOL, shape^)
+        if src[].size_value == 0:
+            # numpy: all() of empty → True; any() of empty → False.
+            var v: Float64 = 1.0 if op == REDUCE_ALL else 0.0
+            set_logical_from_f64(result, 0, v)
+            return PythonObject(alloc=result^)
+        if op == REDUCE_ALL:
+            for i in range(src[].size_value):
+                if get_logical_as_f64(src[], i) == 0.0:
+                    set_logical_from_f64(result, 0, 0.0)
+                    return PythonObject(alloc=result^)
+            set_logical_from_f64(result, 0, 1.0)
+            return PythonObject(alloc=result^)
+        # REDUCE_ANY
+        for i in range(src[].size_value):
+            if get_logical_as_f64(src[], i) != 0.0:
+                set_logical_from_f64(result, 0, 1.0)
+                return PythonObject(alloc=result^)
+        set_logical_from_f64(result, 0, 0.0)
         return PythonObject(alloc=result^)
     var result_dtype = result_dtype_for_reduction(src[].dtype_code, op)
     var result = make_empty_array(result_dtype, shape^)
     if src[].size_value == 0:
+        # numpy: sum of empty → 0; prod of empty → 1; min/max raise.
+        if op == REDUCE_SUM or op == REDUCE_MEAN:
+            set_logical_from_f64(result, 0, 0.0)
+            return PythonObject(alloc=result^)
+        if op == REDUCE_PROD:
+            set_logical_from_f64(result, 0, 1.0)
+            return PythonObject(alloc=result^)
         raise Error("cannot reduce an empty array")
     if maybe_reduce_contiguous(src[], result, op):
         return PythonObject(alloc=result^)
@@ -774,6 +860,10 @@ def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonOb
             acc += get_logical_as_f64(src[], i)
         if op == REDUCE_MEAN:
             acc = acc / Float64(src[].size_value)
+    elif op == REDUCE_PROD:
+        acc = 1.0
+        for i in range(src[].size_value):
+            acc *= get_logical_as_f64(src[], i)
     elif op == REDUCE_MIN:
         for i in range(1, src[].size_value):
             var value = get_logical_as_f64(src[], i)
@@ -787,6 +877,332 @@ def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonOb
     else:
         raise Error("unknown reduction op")
     set_logical_from_f64(result, 0, acc)
+    return PythonObject(alloc=result^)
+
+
+def unary_preserve_ops(
+    array_obj: PythonObject, op_obj: PythonObject
+) raises -> PythonObject:
+    """Preserve-dtype unary ops (negate/abs/square/positive/floor/ceil/
+    trunc/rint/logical_not). Output dtype = input dtype (with bool→int64
+    promotion for negate/abs etc.). Slow per-element f64 round-trip path
+    works for any dtype monpy supports; SIMD fast paths can layer in
+    later via maybe_unary_contiguous-style typed kernels.
+    """
+    var src = array_obj.downcast_value_ptr[Array]()
+    var op = Int(py=op_obj)
+    var shape = clone_int_list(src[].shape)
+    var dtype_code = result_dtype_for_unary_preserve(src[].dtype_code)
+    var result = make_empty_array(dtype_code, shape^)
+    for i in range(src[].size_value):
+        var value = get_logical_as_f64(src[], i)
+        var out = apply_unary_f64(value, op)
+        set_logical_from_f64(result, i, out)
+    return PythonObject(alloc=result^)
+
+
+def compare_ops(
+    lhs_obj: PythonObject,
+    rhs_obj: PythonObject,
+    op_obj: PythonObject,
+) raises -> PythonObject:
+    """Elementwise comparison; returns a bool array. Operands broadcast."""
+    var lhs = lhs_obj.downcast_value_ptr[Array]()
+    var rhs = rhs_obj.downcast_value_ptr[Array]()
+    var op = Int(py=op_obj)
+    var same = same_shape(lhs[].shape, rhs[].shape)
+    var shape: List[Int]
+    if same:
+        shape = clone_int_list(lhs[].shape)
+    else:
+        shape = broadcast_shape(lhs[], rhs[])
+    var result = make_empty_array(DTYPE_BOOL, shape^)
+    for i in range(result.size_value):
+        var lval = get_broadcast_as_f64(lhs[], i, result.shape)
+        var rval = get_broadcast_as_f64(rhs[], i, result.shape)
+        var out: Bool
+        if op == CMP_EQ:
+            out = lval == rval
+        elif op == CMP_NE:
+            out = lval != rval
+        elif op == CMP_LT:
+            out = lval < rval
+        elif op == CMP_LE:
+            out = lval <= rval
+        elif op == CMP_GT:
+            out = lval > rval
+        elif op == CMP_GE:
+            out = lval >= rval
+        else:
+            raise Error("unknown comparison op")
+        set_logical_from_f64(result, i, 1.0 if out else 0.0)
+    return PythonObject(alloc=result^)
+
+
+def logical_ops(
+    lhs_obj: PythonObject,
+    rhs_obj: PythonObject,
+    op_obj: PythonObject,
+) raises -> PythonObject:
+    """Elementwise logical_and / or / xor. Operates on truthiness of any
+    numeric input; result is bool."""
+    var lhs = lhs_obj.downcast_value_ptr[Array]()
+    var rhs = rhs_obj.downcast_value_ptr[Array]()
+    var op = Int(py=op_obj)
+    var same = same_shape(lhs[].shape, rhs[].shape)
+    var shape: List[Int]
+    if same:
+        shape = clone_int_list(lhs[].shape)
+    else:
+        shape = broadcast_shape(lhs[], rhs[])
+    var result = make_empty_array(DTYPE_BOOL, shape^)
+    for i in range(result.size_value):
+        var l_truthy = get_broadcast_as_f64(lhs[], i, result.shape) != 0.0
+        var r_truthy = get_broadcast_as_f64(rhs[], i, result.shape) != 0.0
+        var out: Bool
+        if op == LOGIC_AND:
+            out = l_truthy and r_truthy
+        elif op == LOGIC_OR:
+            out = l_truthy or r_truthy
+        elif op == LOGIC_XOR:
+            out = l_truthy != r_truthy
+        else:
+            raise Error("unknown logical op")
+        set_logical_from_f64(result, i, 1.0 if out else 0.0)
+    return PythonObject(alloc=result^)
+
+
+def predicate_ops(
+    array_obj: PythonObject, op_obj: PythonObject
+) raises -> PythonObject:
+    """Unary predicate (isnan / isinf / isfinite / signbit). Returns bool."""
+    var src = array_obj.downcast_value_ptr[Array]()
+    var op = Int(py=op_obj)
+    var shape = clone_int_list(src[].shape)
+    var result = make_empty_array(DTYPE_BOOL, shape^)
+    for i in range(src[].size_value):
+        var value = get_logical_as_f64(src[], i)
+        var out: Bool
+        if op == PRED_ISNAN:
+            out = isnan(value)
+        elif op == PRED_ISINF:
+            out = isinf(value)
+        elif op == PRED_ISFINITE:
+            out = not (isnan(value) or isinf(value))
+        elif op == PRED_SIGNBIT:
+            # numpy.signbit returns True for -0.0, so use bitcast.
+            out = value < 0.0
+            if value == 0.0:
+                # negative-zero → True via bitcast.
+                var bits = SIMD[DType.float64, 1](value).cast[DType.uint64]()[0]
+                out = (bits >> 63) != 0
+        else:
+            raise Error("unknown predicate op")
+        set_logical_from_f64(result, i, 1.0 if out else 0.0)
+    return PythonObject(alloc=result^)
+
+
+def reduce_axis_ops(
+    array_obj: PythonObject,
+    op_obj: PythonObject,
+    axis_obj: PythonObject,
+    keepdims_obj: PythonObject,
+) raises -> PythonObject:
+    """Axis-aware reduction. `axis_obj` is a Python tuple/list of ints;
+    `keepdims_obj` is a Python bool. Output shape collapses or keeps the
+    reduced axes. Strided per-element f64 round-trip path; SIMD-friendly
+    kernels can layer in via LayoutIter once the API stabilises."""
+    var src = array_obj.downcast_value_ptr[Array]()
+    var op = Int(py=op_obj)
+    var keepdims = Bool(py=keepdims_obj)
+    var ndim = len(src[].shape)
+    # Decode axes.
+    var axes = List[Int]()
+    for i in range(len(axis_obj)):
+        var ax = Int(py=axis_obj[i])
+        if ax < 0:
+            ax += ndim
+        if ax < 0 or ax >= ndim:
+            raise Error("reduce axis out of range")
+        axes.append(ax)
+    # Build result shape.
+    var keep_mask = List[Bool]()
+    for _ in range(ndim):
+        keep_mask.append(True)
+    for i in range(len(axes)):
+        keep_mask[axes[i]] = False
+    var out_shape = List[Int]()
+    var keep_axes = List[Int]()
+    for d in range(ndim):
+        if keep_mask[d]:
+            out_shape.append(src[].shape[d])
+            keep_axes.append(d)
+        elif keepdims:
+            out_shape.append(1)
+            keep_axes.append(d)
+    var result_dtype: Int
+    if op == REDUCE_ARGMAX or op == REDUCE_ARGMIN:
+        result_dtype = DTYPE_INT64
+    elif op == REDUCE_ALL or op == REDUCE_ANY:
+        result_dtype = DTYPE_BOOL
+    else:
+        result_dtype = result_dtype_for_reduction(src[].dtype_code, op)
+    var result = make_empty_array(result_dtype, clone_int_list(out_shape))
+    # Compute reduce-axis size + strides.
+    var reduce_axes = List[Int]()
+    for d in range(ndim):
+        if not keep_mask[d]:
+            reduce_axes.append(d)
+    var reduce_size = 1
+    for i in range(len(reduce_axes)):
+        reduce_size *= src[].shape[reduce_axes[i]]
+    if reduce_size == 0:
+        # Numpy semantics: sum/prod of empty → identity; min/max raise.
+        if op == REDUCE_SUM or op == REDUCE_MEAN:
+            for j in range(result.size_value):
+                set_logical_from_f64(result, j, 0.0)
+            return PythonObject(alloc=result^)
+        if op == REDUCE_PROD:
+            for j in range(result.size_value):
+                set_logical_from_f64(result, j, 1.0)
+            return PythonObject(alloc=result^)
+        if op == REDUCE_ALL:
+            for j in range(result.size_value):
+                set_logical_from_f64(result, j, 1.0)
+            return PythonObject(alloc=result^)
+        if op == REDUCE_ANY:
+            for j in range(result.size_value):
+                set_logical_from_f64(result, j, 0.0)
+            return PythonObject(alloc=result^)
+        raise Error("cannot reduce empty axis with this op")
+    # Iterate output positions; for each, walk the reduce axes.
+    var out_size = result.size_value
+    if out_size == 0:
+        return PythonObject(alloc=result^)
+    # Build coord helper for output index → src physical offset of the
+    # first element of the reduced subspace.
+    var keep_strides = List[Int]()
+    for i in range(len(keep_axes)):
+        keep_strides.append(src[].strides[keep_axes[i]])
+    var keep_dims = List[Int]()
+    for i in range(len(keep_axes)):
+        if keepdims:
+            keep_dims.append(out_shape[i])
+        else:
+            keep_dims.append(out_shape[i])
+    # If keepdims, the kept axes have size 1 if they were originally
+    # reduced, so striding through them must take 0 in that dim.
+    var iter_keep_dims = List[Int]()
+    var iter_keep_strides = List[Int]()
+    for d in range(len(keep_axes)):
+        var src_axis = keep_axes[d]
+        if keep_mask[src_axis]:
+            iter_keep_dims.append(src[].shape[src_axis])
+            iter_keep_strides.append(src[].strides[src_axis])
+        else:
+            iter_keep_dims.append(1)
+            iter_keep_strides.append(0)
+    # Build per-reduce-axis dim/stride.
+    var red_dims = List[Int]()
+    var red_strides = List[Int]()
+    for i in range(len(reduce_axes)):
+        red_dims.append(src[].shape[reduce_axes[i]])
+        red_strides.append(src[].strides[reduce_axes[i]])
+    # For each output index, decode the kept-axes coordinates, then
+    # iterate the reduce subspace.
+    var out_strides_logical = List[Int]()
+    var stride_logical = 1
+    for d in range(len(out_shape) - 1, -1, -1):
+        out_strides_logical.append(stride_logical)
+        stride_logical *= out_shape[d]
+    out_strides_logical.reverse()
+    for out_i in range(out_size):
+        var src_base = src[].offset_elems
+        var rem = out_i
+        for d in range(len(out_shape)):
+            var dim = out_shape[d]
+            var coord = 0
+            if dim != 0:
+                coord = rem // out_strides_logical[d]
+                rem = rem % out_strides_logical[d]
+            src_base += coord * iter_keep_strides[d]
+        # Walk reduce subspace.
+        var first_phys = src_base
+        for ai in range(len(reduce_axes)):
+            _ = ai
+        # Initialise accumulator.
+        var acc: Float64
+        var best_idx: Int = 0
+        if op == REDUCE_SUM or op == REDUCE_MEAN:
+            acc = 0.0
+        elif op == REDUCE_PROD:
+            acc = 1.0
+        elif op == REDUCE_ALL:
+            acc = 1.0
+        elif op == REDUCE_ANY:
+            acc = 0.0
+        else:
+            acc = get_physical_as_f64(src[], src_base)
+            best_idx = 0
+        # Walk reduce coords.
+        var rcoords = List[Int]()
+        for _ in range(len(reduce_axes)):
+            rcoords.append(0)
+        var k = 0
+        while True:
+            var phys = src_base
+            for j in range(len(reduce_axes)):
+                phys += rcoords[j] * red_strides[j]
+            var value = get_physical_as_f64(src[], phys)
+            if op == REDUCE_SUM or op == REDUCE_MEAN:
+                acc += value
+            elif op == REDUCE_PROD:
+                acc *= value
+            elif op == REDUCE_MIN:
+                if k == 0 or value < acc:
+                    acc = value
+            elif op == REDUCE_MAX:
+                if k == 0 or value > acc:
+                    acc = value
+            elif op == REDUCE_ALL:
+                if value == 0.0:
+                    acc = 0.0
+                    break
+            elif op == REDUCE_ANY:
+                if value != 0.0:
+                    acc = 1.0
+                    break
+            elif op == REDUCE_ARGMAX:
+                if k == 0 or value > acc:
+                    acc = value
+                    best_idx = k
+            elif op == REDUCE_ARGMIN:
+                if k == 0 or value < acc:
+                    acc = value
+                    best_idx = k
+            else:
+                raise Error("unknown reduction op")
+            k += 1
+            # Advance rcoords innermost first.
+            var idx = len(reduce_axes) - 1
+            var done = False
+            while idx >= 0:
+                rcoords[idx] += 1
+                if rcoords[idx] < red_dims[idx]:
+                    break
+                rcoords[idx] = 0
+                idx -= 1
+                if idx < 0:
+                    done = True
+            if done:
+                break
+        if op == REDUCE_MEAN:
+            acc = acc / Float64(reduce_size)
+        if op == REDUCE_ARGMAX or op == REDUCE_ARGMIN:
+            set_logical_from_i64(result, out_i, Int64(best_idx))
+        else:
+            set_logical_from_f64(result, out_i, acc)
+        _ = first_phys  # silence unused warning
     return PythonObject(alloc=result^)
 
 
