@@ -19,7 +19,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, ubuntu-latest]
+        include:
+          - os: macos-15
+            mojo_flags: ""
+          - os: ubuntu-latest
+            mojo_flags: "--target-cpu=x86-64"
     env:
       MOHAUS_MOJO: ${{ github.workspace }}/.venv/bin/mojo
 
@@ -64,6 +68,7 @@ jobs:
             | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /[0-9]/) { gsub(/^[^[:alnum:]]+|[^[:alnum:]]+$/, "", $i); sub(/^v/, "", $i); print $i; exit } }' \
             > .mojo-version
           test -s .mojo-version
+          "$venv_python" .github/scripts/set-mojo-flags.py -- ${{ matrix.mojo_flags }}
 
           python -m uv pip install \
             --python "$venv_python" \

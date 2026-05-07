@@ -25,7 +25,11 @@ jobs:
         # (macos-15) and OpenBLAS / LAPACK (ubuntu-latest) BLAS backends.
         # Same source, same kernels — only the dylib path differs at link
         # time (resolved by `accelerate.mojo`'s comptime branches).
-        os: [macos-15, ubuntu-latest]
+        include:
+          - os: macos-15
+            mojo_flags: ""
+          - os: ubuntu-latest
+            mojo_flags: "--target-cpu=x86-64"
     env:
       BENCH_LOOPS: "200"
       BENCH_REPEATS: "5"
@@ -77,6 +81,7 @@ jobs:
             | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /[0-9]/) { gsub(/^[^[:alnum:]]+|[^[:alnum:]]+$/, "", $i); sub(/^v/, "", $i); print $i; exit } }' \
             > .mojo-version
           test -s .mojo-version
+          "$venv_python" .github/scripts/set-mojo-flags.py -- ${{ matrix.mojo_flags }}
 
           python -m uv pip install \
             --python "$venv_python" \
