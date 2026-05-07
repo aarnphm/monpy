@@ -291,6 +291,13 @@ def test_add_reduce_integer_dtypes_match_numpy(mp_dtype: object, np_dtype: objec
   numpy.testing.assert_array_equal(numpy.asarray(out), expected)
 
 
+def test_add_reduce_float16_matches_numpy_value() -> None:
+  values = numpy.linspace(0.1, 2.0, 17, dtype=numpy.float16)
+  arr = mp.asarray(values, dtype=mp.float16)
+
+  numpy.testing.assert_array_equal(numpy.asarray(mp.add.reduce(arr, axis=None)), numpy.add.reduce(values, axis=None))
+
+
 def test_add_reduce_keepdims_matches_numpy() -> None:
   arr = mp.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=mp.float64)
   out = mp.add.reduce(arr, axis=0, keepdims=True)

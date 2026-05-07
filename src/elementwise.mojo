@@ -2610,6 +2610,16 @@ def maybe_reduce_contiguous(src: Array, mut result: Array, op: Int) raises -> Bo
             result.data.bitcast[UInt64]()[result.offset_elems] = acc
             result.backend_code = BACKEND_FUSED
             return True
+    if (op == REDUCE_SUM or op == REDUCE_MEAN) and src.dtype_code == DTYPE_FLOAT16 and is_c_contiguous(src):
+        var acc = 0.0
+        var ptr = contiguous_f16_ptr(src)
+        for i in range(src.size_value):
+            acc += Float64(ptr[i])
+        if op == REDUCE_MEAN:
+            acc = acc / Float64(src.size_value)
+        set_logical_from_f64(result, 0, acc)
+        result.backend_code = BACKEND_FUSED
+        return True
     if not is_contiguous_float_array(src):
         return False
     if op == REDUCE_SUM or op == REDUCE_MEAN:

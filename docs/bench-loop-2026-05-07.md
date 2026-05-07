@@ -432,3 +432,41 @@ rejected branch:
   native code, but Mojo `pow` differed from numpy/Python float64 results by
   about `7e-10` relative on the existing `rtol=1e-12` parity test. Backed out;
   this row needs an accuracy-first design, not a faster wrong `pow`.
+
+## float16 reduction leaf
+
+target:
+
+- finish the remaining ext-dtype full-sum row left by the integer reduction
+  pass.
+
+changed:
+
+- `src/elementwise.mojo`: added a contiguous float16 sum/mean path that reads
+  `Float16` values directly, accumulates in `Float64`, and writes through the
+  existing result dtype conversion.
+- `tests/python/numpy_compat/test_ufunc.py`: added float16 add-reduce value
+  parity coverage.
+
+verification:
+
+- `env MOHAUS_MOJO=... .venv/bin/mohaus develop`
+- `.venv/bin/python -m pytest tests/python/numpy_compat/test_ufunc.py -q`
+
+focused sweep artifact:
+
+- `results/local-sweep-20260507-f16-reduce-pass/results.json`
+
+movement from reduce pass to f16 reduce pass:
+
+- `array/ext_dtypes::reduce_sum_f16`: 9.467 us / 2.297x → 4.478 us / 1.097x.
+- array-suite best-ratio geomean on focused run: 1.094x → 1.086x.
+
+remaining top rows after f16 reduce pass:
+
+- `array/creation::logspace_50`: 21.667 us / 3.889x.
+- `array/views::squeeze_axis0_f32`: 8.012 us / 3.224x.
+- `array/views::newaxis_middle_f32`: 5.839 us / 2.790x.
+- `array/decomp::pinv_32_f64`: 153.396 us / 2.616x.
+- `array/views::vstack_f32`: 8.522 us / 2.613x.
+- `array/decomp::pinv_8_f64`: 55.824 us / 2.609x.
