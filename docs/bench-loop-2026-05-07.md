@@ -470,3 +470,76 @@ remaining top rows after f16 reduce pass:
 - `array/decomp::pinv_32_f64`: 153.396 us / 2.616x.
 - `array/views::vstack_f32`: 8.522 us / 2.613x.
 - `array/decomp::pinv_8_f64`: 55.824 us / 2.609x.
+
+## final all-suite sweep
+
+artifact:
+
+- `results/local-sweep-20260507-final2/results.json`
+
+overall movement:
+
+- initial baseline → final2:
+  - best-ratio geomean: 1.407x → 1.118x.
+  - median ratio: 1.236x → 1.137x.
+  - p90 median ratio: 4.948x → 1.959x.
+  - wins / ties / numpy wins: 51 / 22 / 166 → 62 / 20 / 157.
+- pass1 final → final2:
+  - best-ratio geomean: 1.116x → 1.118x. Essentially flat by this
+    aggregate, with small timing noise.
+  - median ratio: 1.172x → 1.137x.
+  - p90 median ratio: 2.360x → 1.959x.
+
+suite movement:
+
+- `array`: best-ratio geomean 1.300x → 1.093x, median ratio 1.183x → 1.125x,
+  p90 4.134x → 1.918x.
+- `strides`: best-ratio geomean 4.689x → 1.347x, median ratio 9.167x →
+  1.307x, p90 23.696x → 3.589x.
+- `complex`: best-ratio geomean 2.773x → 1.636x, median ratio 2.747x →
+  1.796x, p90 8.553x → 2.530x.
+
+largest final2 movements from the initial baseline:
+
+- `complex/views::reversed_add_complex64`: 25.489 us / 8.174x → 7.631 us / 2.502x.
+- `complex/elementwise::binary_add_complex64`: 11.196 us / 4.050x → 3.156 us / 1.253x.
+- `complex/elementwise::binary_add_complex128`: 11.991 us / 4.388x → 3.269 us / 1.205x.
+- `array/creation::zeros_like_transpose_f32`: 11.464 us / 4.213x → 3.134 us / 1.194x.
+- `array/creation::ones_like_transpose_f32`: 11.944 us / 4.157x → 3.120 us / 1.138x.
+- `array/creation::full_like_transpose_f32`: 11.131 us / 3.944x → 3.081 us / 1.155x.
+- `array/ext_dtypes::reduce_sum_u8`: 10.262 us / 2.723x → 3.874 us / 1.064x.
+- `array/ext_dtypes::reduce_sum_u16`: 10.425 us / 2.750x → 3.852 us / 1.071x.
+- `array/ext_dtypes::reduce_sum_u32`: 9.896 us / 2.721x → 3.881 us / 1.072x.
+- `array/ext_dtypes::reduce_sum_u64`: 10.347 us / 2.865x → 3.837 us / 1.168x.
+- `array/ext_dtypes::reduce_sum_i32`: 10.513 us / 2.870x → 3.966 us / 1.117x.
+- `array/ext_dtypes::reduce_sum_f16`: 9.928 us / 2.313x → 4.796 us / 1.206x.
+
+remaining highest-ratio rows in final2:
+
+- `array/creation::logspace_50`: 21.606 us / 3.972x. Accuracy-sensitive;
+  native `pow` failed existing float64 parity.
+- `strides/elementwise::rank3_transpose_add_f32`: 28.196 us / 3.677x.
+- `array/views::squeeze_axis0_f32`: 7.956 us / 3.276x. Benchmark still mixes
+  numpy allocation/import into the monpy timed lambda.
+- `array/views::newaxis_middle_f32`: 5.913 us / 2.809x.
+- `strides/elementwise::transpose_add_f32`: 30.147 us / 2.798x.
+- `array/decomp::pinv_8_f64`: 53.816 us / 2.694x.
+- `array/decomp::pinv_32_f64`: 153.165 us / 2.646x.
+- `array/views::vstack_f32`: 8.465 us / 2.584x.
+- `complex/views::reversed_add_complex64`: 7.631 us / 2.502x.
+- `array/native_kernels::concatenate_axis0_8x128_f64`: 7.407 us / 2.386x.
+
+recommended next passes:
+
+- measurement cleanup plus a native squeeze view op. The current row measures
+  `np.zeros` allocation and buffer import inside the monpy lambda.
+- rank-3 / transpose-add strided kernel generalization. The rank-2 transpose
+  pass worked; rank-3 still owns the stride p90 tail.
+- native same-dtype stack/vstack/concatenate entrypoint that takes originals
+  and handles validation/copy in one crossing. The python fast path helped, but
+  small joins still pay wrapper metadata overhead.
+- linalg scratch/workspace reuse or lower-overhead pseudo-inverse path. `pinv`
+  remains a real absolute-time row, especially 32x32.
+- accuracy-first `logspace`: either find the exact libm/numpy-compatible power
+  path or keep the python scalar route. Do not ship the native `pow` variant
+  that failed parity.

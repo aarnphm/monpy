@@ -5,8 +5,6 @@ date: 2026-05-05
 
 # complex-number arithmetic kernels
 
-_complex arithmetic is where IEEE 754 stops being a friendly abstraction and starts billing for every assumption you forgot you made._
-
 the four-line definition of $z_1 z_2$ becomes, in finite precision, a working theory of overflow, cancellation, signed zeros, and branch cuts — and getting those wrong silently corrupts eigenvalue solvers, FFT phases, and conformal maps that exist downstream of `np.exp`.
 
 monpy's complex types are interleaved 2-component layouts: `complex64` packs $2\times f32$ in 8 bytes, `complex128` packs $2\times f64$ in 16 bytes. alignment follows numpy's convention: align to the float component (4B and 8B), _not_ the complex whole. this matches the C99 `_Complex` ABI and PEP 3118, which means a `complex64*` can be reinterpreted as a `float32*` of length $2N$, and the BLAS vendor's `cblas_cgemm` / `cblas_zgemm` accept our buffers without copy. this document explains the kernels that operate on those buffers, the proofs that justify them, and the alignment proposal that follows from cache-line economics.
