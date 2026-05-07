@@ -197,11 +197,16 @@ def test_eig_real_eigenvalues() -> None:
   numpy.testing.assert_allclose(out, [2.0, 3.0], rtol=1e-12)
 
 
-def test_eig_raises_on_complex_eigenvalues() -> None:
+def test_eig_returns_complex_eigenvalues_when_present() -> None:
   # 2D rotation matrix has eigenvalues ±i (imaginary).
   a = mp.asarray([[0.0, -1.0], [1.0, 0.0]], dtype=mp.float64)
-  with pytest.raises(NotImplementedError):
-    mp.linalg.eig(a)
+  w, _ = mp.linalg.eig(a)
+  assert w.dtype == mp.complex128
+  numpy.testing.assert_allclose(
+    numpy.sort_complex(numpy.asarray(w)),
+    numpy.sort_complex(numpy.linalg.eigvals(numpy.asarray(a))),
+    rtol=1e-12,
+  )
 
 
 def test_svd_thin_reconstruction() -> None:

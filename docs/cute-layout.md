@@ -1,98 +1,48 @@
-# `src/cute/` — vendored CuTe-style layout algebra (CPU-only)
+# CuTe-style layout algebra
 
 date: 2026-05-06
-status: live; phase 2 of the numpy-parity roadmap.
 
-## what this is
-
-- a vendored subset of NVIDIA CUTLASS's CuTe layout algebra, living
-  at `src/cute/`. roughly 1,100 lines across four files.
-- mirrors CUTLASS's `cute/` directory naming so practitioners coming
-  from CUTLASS find familiar primitives without hunting.
-- **not** an import of Modular's `max/kernels/src/layout/` package.
-  that package is ~13.5 K lines of GPU-targeted machinery (TMA,
-  tensor cores, async copy, shared-memory swizzles, masked tensors,
-  thread layouts) that monpy does not need on day one. vendoring a
-  small subset keeps the dependency surface inside the public Mojo
-  stdlib while leaving the door open for the GPU primitives to be
-  added on top of the same foundation later.
+- a vendorred subset of NVIDIA CUTLASS's CuTe layout algebra, living at `src/cute/`. roughly 1,100 lines across four files. mirrors CUTLASS's `cute/` directory naming so practitioners coming from CUTLASS find familiar primitives without hunting.
+- **not** an import of Modular's `max/kernels/src/layout/` package. that package is ~13.5 K lines of GPU-targeted machinery (TMA, tensor cores, async copy, shared-memory swizzles, masked tensors, thread layouts) that monpy does not need on day one. vendoring a small subset keeps the dependency surface inside the public Mojo stdlib while leaving the door open for the GPU primitives to be added on top of the same foundation later.
 
 ## design intent: cpu first, gpu-portable foundation
 
-- the v1 ships **CPU-only kernels** but the algebra (`IntTuple`,
-  `Layout`, `composition`, `coalesce`, `complement`, `select`,
-  `logical_divide`) is **direction-agnostic by construction**.
-  same primitives, same kernel signatures, target multiple backends.
-- this matches how Modular's `max/kernels/` package works: one
-  `Layout` algebra at the bottom; CPU iterators, GPU thread layouts,
-  TMA descriptors, tensor-core fragments all sit on top as separate
-  layers rather than as a parallel hierarchy.
+- the v1 ships **CPU-only kernels** but the algebra (`IntTuple`, `Layout`, `composition`, `coalesce`, `complement`, `select`, `logical_divide`) is **direction-agnostic by construction**. same primitives, same kernel signatures, target multiple backends.
+- this matches how Modular's `max/kernels/` package works: one `Layout` algebra at the bottom; CPU iterators, GPU thread layouts, TMA descriptors, tensor-core fragments all sit on top as separate layers rather than as a parallel hierarchy.
 - practical implication for kernel authors:
-  - **write kernels parametric on `Layout` / `LayoutTensor`-shaped
-    operands**, not on raw `Array` byte offsets. the backend choice
-    becomes a parameter swap, not a rewrite.
-  - the typed strided kernels that should follow phase 2's iter-swap
-    proof of concept are a good test case: they take per-operand
-    `Layout` plus a dtype parameter; the CPU body uses SIMD
-    intrinsics; a future GPU body uses thread layouts and shared-
-    memory tiles, but the operand types are the same.
-- things deferred from CUTLASS that come back when we add GPU:
-  - `RuntimeLayout` (comptime shape skeleton + dynamic int storage).
-    needed once we want shape erasure across thousands of compile-
-    time-known GPU kernels.
+  - **write kernels parametric on `Layout` / `LayoutTensor`-shaped operands**, not on raw `Array` byte offsets. the backend choice becomes a parameter swap, not a rewrite.
+  - the typed strided kernels that should follow phase 2's iter-swap proof of concept are a good test case: they take per-operand `Layout` plus a dtype parameter; the CPU body uses SIMD intrinsics; a future GPU body uses thread layouts and shared- memory tiles, but the operand types are the same.
+- things deferred from CUTLASS that come back when we add GPU: `RuntimeLayout` (comptime shape skeleton + dynamic int storage). needed once we want shape erasure across thousands of compile- time-known GPU kernels.
   - `Swizzle<B, M, S>` for shared-memory bank conflict avoidance.
-  - `tiled_mma`, `tiled_copy`, `copy_dram_to_sram`, `cp_async_*`,
-    TMA primitives.
+  - `tiled_mma`, `tiled_copy`, `copy_dram_to_sram`, `cp_async_*`, TMA primitives.
   - Address spaces (`AddressSpace.SHARED`/`CONSTANT`/`LOCAL`).
   - Tensor core fragment layouts.
 - things designed-out and unlikely to come back:
-  - `ComposedLayout` (lazy composition). monpy materializes through
-    Python at every public boundary; lazy composition adds
-    complexity without the comptime payoff.
-  - `*args: Int` variadic factories. mohaus stub generation can't
-    emit Python type stubs for `*name`; we use `List[Int]` and the
-    rank-2/rank-3 convenience helpers (`flat2`, `flat3`).
-- bottom line: this package is the **first backend implementation**
-  of a multi-backend layout-algebra plan, not a CPU-final port.
-  resist sprinkling CPU-specific assumptions into the kernel
-  signatures. when in doubt, look at how CUTLASS structures the
-  equivalent kernel and stay close to that shape.
+  - `ComposedLayout` (lazy composition). monpy materializes through Python at every public boundary; lazy composition adds complexity without the comptime payoff.
+  - `*args: Int` variadic factories. mohaus stub generation can't emit Python type stubs for `*name`; we use `List[Int]` and the rank-2/rank-3 convenience helpers (`flat2`, `flat3`).
+- bottom line: this package is the **first backend implementation** of a multi-backend layout-algebra plan, not a CPU-final port. resist sprinkling CPU-specific assumptions into the kernel signatures. when in doubt, look at how CUTLASS structures the equivalent kernel and stay close to that shape.
 
 ## file map
 
-| file | purpose | size |
-|---|---|---|
-| `int_tuple.mojo` | recursive `IntTuple` value type and traversal helpers | ~408 lines |
-| `layout.mojo` | `Layout` struct, ctors, basic queries (`__call__`, `idx2crd`, `size`, `cosize`, `__getitem__`) | ~190 lines |
-| `functional.mojo` | algebra: `coalesce`, `select`, `transpose`, `composition`, `complement`, `logical_divide` | ~290 lines |
-| `iter.mojo` | `LayoutIter` and `MultiLayoutIter` — stride-cursor walkers | ~225 lines |
-| `__init__.mojo` | re-exports the public surface | ~32 lines |
+| file              | purpose                                                                                        | size       |
+| ----------------- | ---------------------------------------------------------------------------------------------- | ---------- |
+| `int_tuple.mojo`  | recursive `IntTuple` value type and traversal helpers                                          | ~408 lines |
+| `layout.mojo`     | `Layout` struct, ctors, basic queries (`__call__`, `idx2crd`, `size`, `cosize`, `__getitem__`) | ~190 lines |
+| `functional.mojo` | algebra: `coalesce`, `select`, `transpose`, `composition`, `complement`, `logical_divide`      | ~290 lines |
+| `iter.mojo`       | `LayoutIter` and `MultiLayoutIter` — stride-cursor walkers                                     | ~225 lines |
+| `__init__.mojo`   | re-exports the public surface                                                                  | ~32 lines  |
 
 ## naming choices worth recording
 
-- **package is `cute`, not `algorithm` or `layout`.**
-  - `algorithm` collides with `std.algorithm` on Mojo's import path.
-    the deprecation warning around implicit stdlib imports made the
-    collision surface as `unable to locate module 'int_tuple'`
-    because Mojo resolved `algorithm` to `std.algorithm` first.
-  - `layout` collides with Modular's `max/kernels/src/layout` on the
-    `MOHAUS_MOJO` toolchain import path.
-  - `cute` is collision-free on the search path and matches the
-    CUTLASS provenance.
+- **package is `cute`**
+  - `algorithm` collides with `std.algorithm` on Mojo's import path. the deprecation warning around implicit stdlib imports made the collision surface as `unable to locate module 'int_tuple'` because Mojo resolved `algorithm` to `std.algorithm` first. `layout` collides with Modular's `max/kernels/src/layout` on the `MOHAUS_MOJO` toolchain import path.
+  - `cute` is collision-free on the search path and matches the CUTLASS provenance.
 - **Mojo 1.0 `Copyable` convention.**
-  - `IntTuple` declares `Copyable` and provides
-    `def __init__(out self, *, copy: Self)`, **not** the older
-    `__copyinit__` form.
-  - the manual constructor breaks the synthesis cycle between
-    `IntTuple: Copyable` and `List[IntTuple]: Copyable`.
-  - we do **not** declare `ImplicitlyCopyable` because the compiler
-    refuses field-wise synthesis through `List[Self]` recursion.
-    consequence: every `_children[i]` read needs an explicit
-    `.copy()`.
+  - `IntTuple` declares `Copyable` and provides `def __init__(out self, *, copy: Self)`, **not** the older `__copyinit__` form.
+  - the manual constructor breaks the synthesis cycle between `IntTuple: Copyable` and `List[IntTuple]: Copyable`.
+  - we do **not** declare `ImplicitlyCopyable` because the compiler refuses field-wise synthesis through `List[Self]` recursion. consequence: every `_children[i]` read needs an explicit `.copy()`.
 - **`IntTuple.flat(values: List[Int])`**, not `*values: Int`.
-  - mohaus stub generation (`monpy._native.pyi`) refuses `*name`
-    Python identifiers when emitting type stubs. variadic factories
-    are instead `flat2(a, b)` / `flat3(a, b, c)` plus the list form.
+  - mohaus stub generation (`monpy._native.pyi`) refuses `*name` Python identifiers when emitting type stubs. variadic factories are instead `flat2(a, b)` / `flat3(a, b, c)` plus the list form.
 
 ## `IntTuple` — the data model
 
@@ -390,12 +340,13 @@ status: live; phase 2 of the numpy-parity roadmap.
 
 ## benchmarks
 
-- `benchmarks/bench_strided.py` — strided-fallback baseline. covers
+- `monpy._bench.types.strides` — strided-fallback baseline. covers
   cases that go through the divmod walker (sliced views, 3-D
   transposed inputs, broadcast). also covers Layout-only view ops
   (flip, rot90, squeeze, moveaxis) and creation helpers (eye,
   meshgrid).
-- `benchmarks/bench_array_core.py` — main contiguous bench.
+- `monpy._bench.types.array` — main contiguous bench, run through
+  `monpy-bench`.
   extended with `views` and `creation` cases for the phase-6 work
   (squeeze, moveaxis, swapaxes, ravel, flatten, concatenate, stack,
   hstack, vstack, eye, identity, tri, logspace, geomspace,

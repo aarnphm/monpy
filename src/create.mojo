@@ -11,6 +11,8 @@ from domain import (
     CMP_LT,
     CMP_NE,
     DTYPE_BOOL,
+    DTYPE_COMPLEX128,
+    DTYPE_COMPLEX64,
     DTYPE_FLOAT32,
     DTYPE_FLOAT64,
     DTYPE_INT64,
@@ -34,10 +36,22 @@ from domain import (
     REDUCE_MIN,
     REDUCE_PROD,
     REDUCE_SUM,
+    UNARY_CBRT,
     UNARY_COS,
+    UNARY_COSH,
     UNARY_EXP,
+    UNARY_EXP2,
+    UNARY_EXPM1,
     UNARY_LOG,
+    UNARY_LOG10,
+    UNARY_LOG1P,
+    UNARY_LOG2,
+    UNARY_RECIPROCAL,
     UNARY_SIN,
+    UNARY_SINH,
+    UNARY_SQRT,
+    UNARY_TAN,
+    UNARY_TANH,
     dtype_alignment,
     dtype_can_cast,
     dtype_item_size,
@@ -65,6 +79,7 @@ from elementwise import (
     maybe_binary_contiguous,
     maybe_binary_same_shape_contiguous,
     maybe_binary_scalar_value_contiguous,
+    maybe_unary_preserve_contiguous,
     is_contiguous_float_array,
     lu_det_into,
     lu_inverse_into,
@@ -86,6 +101,10 @@ from array import (
     get_broadcast_as_f64,
     get_physical_as_f64,
     get_physical_bool,
+    get_physical_c128_imag,
+    get_physical_c128_real,
+    get_physical_c64_imag,
+    get_physical_c64_real,
     get_physical_i64,
     get_logical_as_f64,
     int_list_from_py,
@@ -95,6 +114,7 @@ from array import (
     make_empty_array,
     make_external_array,
     make_view_array,
+    physical_offset,
     result_dtype_for_binary,
     result_dtype_for_linalg,
     result_dtype_for_linalg_binary,
@@ -106,6 +126,8 @@ from array import (
     set_logical_from_f64,
     set_logical_from_i64,
     set_logical_from_py,
+    set_physical_c128,
+    set_physical_c64,
     set_physical_from_f64,
     shape_size,
     slice_length,
@@ -306,9 +328,7 @@ def flip_ops(
             offset += (shape[i] - 1) * strides[i]
             strides[i] = -strides[i]
 
-    var result = make_view_array(
-        src[], shape^, strides^, src[].size_value, offset
-    )
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, offset)
     return PythonObject(alloc=result^)
 
 
@@ -522,6 +542,17 @@ def unary_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObj
     var op = Int(py=op_obj)
     var shape = clone_int_list(src[].shape)
     var result = make_empty_array(result_dtype_for_unary(src[].dtype_code), shape^)
+    # Complex transcendentals: sin/cos/exp/log/sqrt etc. via Euler identities.
+    # Output dtype = input dtype (preserved by result_dtype_for_unary).
+    if src[].dtype_code == DTYPE_COMPLEX64 or src[].dtype_code == DTYPE_COMPLEX128:
+        for i in range(src[].size_value):
+            var re = _complex_real(src[], i)
+            var im = _complex_imag(src[], i)
+            var out_re: Float64
+            var out_im: Float64
+            (out_re, out_im) = apply_unary_complex_f64(re, im, op)
+            _complex_store(result, i, out_re, out_im)
+        return PythonObject(alloc=result^)
     if maybe_unary_contiguous(src[], result, op):
         return PythonObject(alloc=result^)
     # Strided fallback: walk via LayoutIter so the divmod amortizes
@@ -530,12 +561,8 @@ def unary_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObj
     var dst_layout = as_layout(result)
     var src_item = item_size(src[].dtype_code)
     var dst_item = item_size(result.dtype_code)
-    var src_iter = LayoutIter(
-        src_layout, src_item, src[].offset_elems * src_item
-    )
-    var dst_iter = LayoutIter(
-        dst_layout, dst_item, result.offset_elems * dst_item
-    )
+    var src_iter = LayoutIter(src_layout, src_item, src[].offset_elems * src_item)
+    var dst_iter = LayoutIter(dst_layout, dst_item, result.offset_elems * dst_item)
     while src_iter.has_next():
         var value = get_physical_as_f64(src[], src_iter.element_index())
         var out = apply_unary_f64(value, op)
@@ -543,6 +570,102 @@ def unary_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObj
         src_iter.step()
         dst_iter.step()
     return PythonObject(alloc=result^)
+
+
+def apply_unary_complex_f64(re: Float64, im: Float64, op: Int) raises -> Tuple[Float64, Float64]:
+    """Complex unary transcendentals via Euler identities. Operates on
+    (re, im) Float64 pairs and returns the new pair. The python-level
+    `unary_ops` walks complex arrays element-by-element through this.
+    """
+    from std.math import (
+        atan2 as _atan2,
+        cos as _cos,
+        cosh as _cosh,
+        exp as _exp,
+        log as _log,
+        sin as _sin,
+        sinh as _sinh,
+        sqrt as _sqrt,
+    )
+
+    if op == UNARY_EXP:
+        # exp(a+bi) = exp(a) * (cos(b) + i sin(b))
+        var ea = _exp(re)
+        return (ea * _cos(im), ea * _sin(im))
+    if op == UNARY_LOG:
+        # log(z) = log|z| + i arg(z)
+        var modulus = _sqrt(re * re + im * im)
+        return (_log(modulus), _atan2(im, re))
+    if op == UNARY_SIN:
+        # sin(a+bi) = sin(a)cosh(b) + i cos(a)sinh(b)
+        return (_sin(re) * _cosh(im), _cos(re) * _sinh(im))
+    if op == UNARY_COS:
+        # cos(a+bi) = cos(a)cosh(b) - i sin(a)sinh(b)
+        return (_cos(re) * _cosh(im), -_sin(re) * _sinh(im))
+    if op == UNARY_SINH:
+        # sinh(a+bi) = sinh(a)cos(b) + i cosh(a)sin(b)
+        return (_sinh(re) * _cos(im), _cosh(re) * _sin(im))
+    if op == UNARY_COSH:
+        # cosh(a+bi) = cosh(a)cos(b) + i sinh(a)sin(b)
+        return (_cosh(re) * _cos(im), _sinh(re) * _sin(im))
+    if op == UNARY_TANH:
+        # tanh(z) = sinh(z) / cosh(z) — use Euler-form identities and divide.
+        var s_re = _sinh(re) * _cos(im)
+        var s_im = _cosh(re) * _sin(im)
+        var c_re = _cosh(re) * _cos(im)
+        var c_im = _sinh(re) * _sin(im)
+        var denom = c_re * c_re + c_im * c_im
+        return ((s_re * c_re + s_im * c_im) / denom, (s_im * c_re - s_re * c_im) / denom)
+    if op == UNARY_TAN:
+        # tan(z) = sin(z) / cos(z)
+        var s_re = _sin(re) * _cosh(im)
+        var s_im = _cos(re) * _sinh(im)
+        var c_re = _cos(re) * _cosh(im)
+        var c_im = -_sin(re) * _sinh(im)
+        var denom = c_re * c_re + c_im * c_im
+        return ((s_re * c_re + s_im * c_im) / denom, (s_im * c_re - s_re * c_im) / denom)
+    if op == UNARY_SQRT:
+        # sqrt(z): principal branch. z = r * exp(i*theta), sqrt(z) = sqrt(r) * exp(i*theta/2).
+        var modulus = _sqrt(re * re + im * im)
+        var arg = _atan2(im, re)
+        var s = _sqrt(modulus)
+        return (s * _cos(arg / 2.0), s * _sin(arg / 2.0))
+    if op == UNARY_LOG2:
+        # log2(z) = log(z) / log(2)
+        var modulus = _sqrt(re * re + im * im)
+        var ln2 = 0.6931471805599453
+        return (_log(modulus) / ln2, _atan2(im, re) / ln2)
+    if op == UNARY_LOG10:
+        var modulus = _sqrt(re * re + im * im)
+        var ln10 = 2.302585092994046
+        return (_log(modulus) / ln10, _atan2(im, re) / ln10)
+    if op == UNARY_LOG1P:
+        # log(1 + z)
+        var nre = 1.0 + re
+        var modulus = _sqrt(nre * nre + im * im)
+        return (_log(modulus), _atan2(im, nre))
+    if op == UNARY_EXPM1:
+        # exp(z) - 1 — use exp formula then subtract 1 from real part.
+        var ea = _exp(re)
+        return (ea * _cos(im) - 1.0, ea * _sin(im))
+    if op == UNARY_RECIPROCAL:
+        # 1 / (a + bi) = (a - bi) / (a² + b²)
+        var denom = re * re + im * im
+        return (re / denom, -im / denom)
+    if op == UNARY_EXP2:
+        # 2^z = exp(z * log(2))
+        var ln2 = 0.6931471805599453
+        var nre = re * ln2
+        var nim = im * ln2
+        var ea = _exp(nre)
+        return (ea * _cos(nim), ea * _sin(nim))
+    if op == UNARY_CBRT:
+        # cbrt(z) — principal branch.
+        var modulus = _sqrt(re * re + im * im)
+        var arg = _atan2(im, re)
+        var s = modulus.__pow__(1.0 / 3.0)
+        return (s * _cos(arg / 3.0), s * _sin(arg / 3.0))
+    raise Error("unary op not implemented for complex inputs")
 
 
 def binary_dispatch_ops(lhs: Array, rhs: Array, op: Int) raises -> Array:
@@ -894,20 +1017,19 @@ def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonOb
     return PythonObject(alloc=result^)
 
 
-def unary_preserve_ops(
-    array_obj: PythonObject, op_obj: PythonObject
-) raises -> PythonObject:
+def unary_preserve_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
     """Preserve-dtype unary ops (negate/abs/square/positive/floor/ceil/
     trunc/rint/logical_not). Output dtype = input dtype (with bool→int64
-    promotion for negate/abs etc.). Slow per-element f64 round-trip path
-    works for any dtype monpy supports; SIMD fast paths can layer in
-    later via maybe_unary_contiguous-style typed kernels.
+    promotion). Typed-vec contig fast path for f32/f64/i32/i64/u32/u64;
+    other paths fall through to the f64 round-trip.
     """
     var src = array_obj.downcast_value_ptr[Array]()
     var op = Int(py=op_obj)
     var shape = clone_int_list(src[].shape)
     var dtype_code = result_dtype_for_unary_preserve(src[].dtype_code)
     var result = make_empty_array(dtype_code, shape^)
+    if maybe_unary_preserve_contiguous(src[], result, op):
+        return PythonObject(alloc=result^)
     for i in range(src[].size_value):
         var value = get_logical_as_f64(src[], i)
         var out = apply_unary_f64(value, op)
@@ -934,22 +1056,22 @@ def compare_ops(
     for i in range(result.size_value):
         var lval = get_broadcast_as_f64(lhs[], i, result.shape)
         var rval = get_broadcast_as_f64(rhs[], i, result.shape)
-        var out: Bool
+        var output: Bool
         if op == CMP_EQ:
-            out = lval == rval
+            output = lval == rval
         elif op == CMP_NE:
-            out = lval != rval
+            output = lval != rval
         elif op == CMP_LT:
-            out = lval < rval
+            output = lval < rval
         elif op == CMP_LE:
-            out = lval <= rval
+            output = lval <= rval
         elif op == CMP_GT:
-            out = lval > rval
+            output = lval > rval
         elif op == CMP_GE:
-            out = lval >= rval
+            output = lval >= rval
         else:
             raise Error("unknown comparison op")
-        set_logical_from_f64(result, i, 1.0 if out else 0.0)
+        set_logical_from_f64(result, i, 1.0 if output else 0.0)
     return PythonObject(alloc=result^)
 
 
@@ -982,13 +1104,14 @@ def logical_ops(
             out = l_truthy != r_truthy
         else:
             raise Error("unknown logical op")
-        set_logical_from_f64(result, i, 1.0 if out else 0.0)
+        var el = 0.0
+        if out:
+            el = 1.0
+        set_logical_from_f64(result, i, el)
     return PythonObject(alloc=result^)
 
 
-def predicate_ops(
-    array_obj: PythonObject, op_obj: PythonObject
-) raises -> PythonObject:
+def predicate_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
     """Unary predicate (isnan / isinf / isfinite / signbit). Returns bool."""
     var src = array_obj.downcast_value_ptr[Array]()
     var op = Int(py=op_obj)
@@ -1012,7 +1135,10 @@ def predicate_ops(
                 out = (bits >> 63) != 0
         else:
             raise Error("unknown predicate op")
-        set_logical_from_f64(result, i, 1.0 if out else 0.0)
+        var el = 0.0
+        if out:
+            el = 1.0
+        set_logical_from_f64(result, i, el)
     return PythonObject(alloc=result^)
 
 
@@ -1246,17 +1372,51 @@ def matmul_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObj
         out_shape.append(m)
     elif lhs_ndim == 1 and rhs_ndim == 2:
         out_shape.append(n)
-    var result = make_empty_array(
-        result_dtype_for_binary(lhs[].dtype_code, rhs[].dtype_code, OP_MUL),
-        out_shape^,
-    )
+    var dtype_code = result_dtype_for_binary(lhs[].dtype_code, rhs[].dtype_code, OP_MUL)
+    var result = make_empty_array(dtype_code, out_shape^)
+    var is_complex = dtype_code == DTYPE_COMPLEX64 or dtype_code == DTYPE_COMPLEX128
     if lhs_ndim == 1 and rhs_ndim == 1:
-        var total = 0.0
-        for k in range(k_lhs):
-            total += get_logical_as_f64(lhs[], k) * get_logical_as_f64(rhs[], k)
-        set_logical_from_f64(result, 0, total)
+        if is_complex:
+            var lhs_re_total = 0.0
+            var lhs_im_total = 0.0
+            for k in range(k_lhs):
+                var l_re = _complex_real(lhs[], k)
+                var l_im = _complex_imag(lhs[], k)
+                var r_re = _complex_real(rhs[], k)
+                var r_im = _complex_imag(rhs[], k)
+                lhs_re_total += l_re * r_re - l_im * r_im
+                lhs_im_total += l_re * r_im + l_im * r_re
+            _complex_store(result, 0, lhs_re_total, lhs_im_total)
+        else:
+            var total = 0.0
+            for k in range(k_lhs):
+                total += get_logical_as_f64(lhs[], k) * get_logical_as_f64(rhs[], k)
+            set_logical_from_f64(result, 0, total)
         return PythonObject(alloc=result^)
     if maybe_matmul_contiguous(lhs[], rhs[], result, m, n, k_lhs):
+        return PythonObject(alloc=result^)
+    if is_complex:
+        for i in range(m):
+            for j in range(n):
+                var re_total = 0.0
+                var im_total = 0.0
+                for k in range(k_lhs):
+                    var lhs_index = k
+                    if lhs_ndim == 2:
+                        lhs_index = i * k_lhs + k
+                    var rhs_index = k
+                    if rhs_ndim == 2:
+                        rhs_index = k * n + j
+                    var l_re = _complex_real(lhs[], lhs_index)
+                    var l_im = _complex_imag(lhs[], lhs_index)
+                    var r_re = _complex_real(rhs[], rhs_index)
+                    var r_im = _complex_imag(rhs[], rhs_index)
+                    re_total += l_re * r_re - l_im * r_im
+                    im_total += l_re * r_im + l_im * r_re
+                var out_index = j
+                if lhs_ndim == 2:
+                    out_index = i * n + j
+                _complex_store(result, out_index, re_total, im_total)
         return PythonObject(alloc=result^)
     for i in range(m):
         for j in range(n):
@@ -1274,6 +1434,37 @@ def matmul_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObj
                 out_index = i * n + j
             set_logical_from_f64(result, out_index, total)
     return PythonObject(alloc=result^)
+
+
+def _complex_real(arr: Array, logical: Int) raises -> Float64:
+    """Helper: read real part of a complex array at logical index."""
+    var phys = physical_offset(arr, logical)
+    if arr.dtype_code == DTYPE_COMPLEX64:
+        return Float64(get_physical_c64_real(arr, phys))
+    if arr.dtype_code == DTYPE_COMPLEX128:
+        return get_physical_c128_real(arr, phys)
+    return get_logical_as_f64(arr, logical)
+
+
+def _complex_imag(arr: Array, logical: Int) raises -> Float64:
+    """Helper: read imag part of a complex array at logical index."""
+    var phys = physical_offset(arr, logical)
+    if arr.dtype_code == DTYPE_COMPLEX64:
+        return Float64(get_physical_c64_imag(arr, phys))
+    if arr.dtype_code == DTYPE_COMPLEX128:
+        return get_physical_c128_imag(arr, phys)
+    return 0.0
+
+
+def _complex_store(mut arr: Array, logical: Int, real: Float64, imag: Float64) raises:
+    """Helper: write real+imag to a complex array at logical index."""
+    var phys = physical_offset(arr, logical)
+    if arr.dtype_code == DTYPE_COMPLEX64:
+        set_physical_c64(arr, phys, Float32(real), Float32(imag))
+    elif arr.dtype_code == DTYPE_COMPLEX128:
+        set_physical_c128(arr, phys, real, imag)
+    else:
+        set_logical_from_f64(arr, logical, real)
 
 
 def solve_ops(a_obj: PythonObject, b_obj: PythonObject) raises -> PythonObject:
@@ -1333,10 +1524,9 @@ def det_ops(array_obj: PythonObject) raises -> PythonObject:
 # ============================================================
 
 
-def qr_ops(
-    array_obj: PythonObject, mode_obj: PythonObject
-) raises -> PythonObject:
+def qr_ops(array_obj: PythonObject, mode_obj: PythonObject) raises -> PythonObject:
     from std.python import Python
+
     var src = array_obj.downcast_value_ptr[Array]()
     if len(src[].shape) != 2:
         raise Error("linalg.qr: input must be rank-2")
@@ -1369,9 +1559,7 @@ def qr_ops(
         # via `sorgqr(m, m, k, ...)` once the first k columns are set.
         # For simplicity in v1: error if m > n (would need extra work).
         if m < n:
-            raise Error(
-                "linalg.qr: mode='complete' for m < n requires extra work — use mode='reduced'"
-            )
+            raise Error("linalg.qr: mode='complete' for m < n requires extra work — use mode='reduced'")
         var q_shape = List[Int]()
         q_shape.append(m)
         q_shape.append(m)
@@ -1419,10 +1607,9 @@ def cholesky_ops(array_obj: PythonObject) raises -> PythonObject:
     return PythonObject(alloc=result^)
 
 
-def eigh_ops(
-    array_obj: PythonObject, compute_eigenvectors_obj: PythonObject
-) raises -> PythonObject:
+def eigh_ops(array_obj: PythonObject, compute_eigenvectors_obj: PythonObject) raises -> PythonObject:
     from std.python import Python
+
     var src = array_obj.downcast_value_ptr[Array]()
     if len(src[].shape) != 2 or src[].shape[0] != src[].shape[1]:
         raise Error("linalg.eigh: input must be square rank-2")
@@ -1450,10 +1637,9 @@ def eigh_ops(
     return out
 
 
-def eig_ops(
-    array_obj: PythonObject, compute_eigenvectors_obj: PythonObject
-) raises -> PythonObject:
+def eig_ops(array_obj: PythonObject, compute_eigenvectors_obj: PythonObject) raises -> PythonObject:
     from std.python import Python
+
     var src = array_obj.downcast_value_ptr[Array]()
     if len(src[].shape) != 2 or src[].shape[0] != src[].shape[1]:
         raise Error("linalg.eig: input must be square rank-2")
@@ -1492,6 +1678,7 @@ def svd_ops(
     compute_uv_obj: PythonObject,
 ) raises -> PythonObject:
     from std.python import Python
+
     var src = array_obj.downcast_value_ptr[Array]()
     if len(src[].shape) != 2:
         raise Error("linalg.svd: input must be rank-2")
@@ -1537,6 +1724,7 @@ def concatenate_ops(
     # Native concatenation. Replaces the python flat-write path which was
     # ~58000× slower than numpy at N=256.
     from std.memory import memcpy as _memcpy
+
     var n_arrays = Int(py=len(arrays_obj))
     if n_arrays == 0:
         raise Error("concatenate: need at least one array")
@@ -1590,9 +1778,7 @@ def concatenate_ops(
             var src_byte_offset = a[].offset_elems * item_bytes
             for outer in range(outer_size):
                 var src_off_bytes = src_byte_offset + outer * a_slab_size * item_bytes
-                var dst_off_bytes = (
-                    outer * out_row_size + axis_offset * inner_size
-                ) * item_bytes
+                var dst_off_bytes = (outer * out_row_size + axis_offset * inner_size) * item_bytes
                 _memcpy(
                     dest=result.data + dst_off_bytes,
                     src=a[].data + src_off_bytes,
@@ -1603,16 +1789,12 @@ def concatenate_ops(
                 var src_base = outer * a_slab_size
                 var dst_base = outer * out_row_size + axis_offset * inner_size
                 for k in range(a_slab_size):
-                    set_logical_from_f64(
-                        result, dst_base + k, get_logical_as_f64(a[], src_base + k)
-                    )
+                    set_logical_from_f64(result, dst_base + k, get_logical_as_f64(a[], src_base + k))
         axis_offset = axis_offset + a_axis
     return PythonObject(alloc=result^)
 
 
-def tril_ops(
-    array_obj: PythonObject, k_obj: PythonObject
-) raises -> PythonObject:
+def tril_ops(array_obj: PythonObject, k_obj: PythonObject) raises -> PythonObject:
     # Native lower-triangular: copy values where col <= row + k, zero otherwise.
     var src = array_obj.downcast_value_ptr[Array]()
     if len(src[].shape) < 2:
@@ -1639,9 +1821,7 @@ def tril_ops(
     return PythonObject(alloc=result^)
 
 
-def triu_ops(
-    array_obj: PythonObject, k_obj: PythonObject
-) raises -> PythonObject:
+def triu_ops(array_obj: PythonObject, k_obj: PythonObject) raises -> PythonObject:
     # Native upper-triangular: copy values where col >= row + k, zero otherwise.
     var src = array_obj.downcast_value_ptr[Array]()
     if len(src[].shape) < 2:
@@ -1697,6 +1877,34 @@ def eye_ops(
         var col = i + k
         if col >= 0 and col < m:
             set_logical_from_f64(result, i * m + col, 1.0)
+    return PythonObject(alloc=result^)
+
+
+def tri_ops(
+    n_obj: PythonObject,
+    m_obj: PythonObject,
+    k_obj: PythonObject,
+    dtype_code_obj: PythonObject,
+) raises -> PythonObject:
+    var n = Int(py=n_obj)
+    var m = Int(py=m_obj)
+    var k = Int(py=k_obj)
+    var dtype_code = Int(py=dtype_code_obj)
+    var shape = List[Int]()
+    shape.append(n)
+    shape.append(m)
+    var result = make_empty_array(dtype_code, shape^)
+    for r in range(n):
+        var row_limit = r + k + 1
+        if row_limit < 0:
+            row_limit = 0
+        if row_limit > m:
+            row_limit = m
+        for c in range(m):
+            var value = 0.0
+            if c < row_limit:
+                value = 1.0
+            set_logical_from_f64(result, r * m + c, value)
     return PythonObject(alloc=result^)
 
 
@@ -1757,10 +1965,9 @@ def pad_constant_ops(
     return PythonObject(alloc=result^)
 
 
-def lstsq_ops(
-    a_obj: PythonObject, b_obj: PythonObject, rcond_obj: PythonObject
-) raises -> PythonObject:
+def lstsq_ops(a_obj: PythonObject, b_obj: PythonObject, rcond_obj: PythonObject) raises -> PythonObject:
     from std.python import Python
+
     var a = a_obj.downcast_value_ptr[Array]()
     var b = b_obj.downcast_value_ptr[Array]()
     if len(a[].shape) != 2:
@@ -1786,9 +1993,7 @@ def lstsq_ops(
     s_shape.append(k)
     var s = make_empty_array(dtype_code, s_shape^)
     var rank_buf = Int(0)
-    var rank_ptr = rebind[UnsafePointer[Int, MutExternalOrigin]](
-        UnsafePointer(to=rank_buf)
-    )
+    var rank_ptr = rebind[UnsafePointer[Int, MutExternalOrigin]](UnsafePointer(to=rank_buf))
     if dtype_code == DTYPE_FLOAT32:
         var rcond_f32 = Float32(Float64(py=rcond_obj))
         lapack_lstsq_f32_into(a[], b[], x, s, rcond_f32, rank_ptr)

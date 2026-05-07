@@ -149,19 +149,14 @@ struct MultiLayoutIter(Movable):
         self.flat_output_shape = output_shape.copy()
         self.n_modes = len(self.flat_output_shape)
         self.n_operands = len(operand_layouts)
-        if (
-            self.n_operands != len(operand_item_sizes)
-            or self.n_operands != len(operand_base_offsets)
-        ):
+        if self.n_operands != len(operand_item_sizes) or self.n_operands != len(operand_base_offsets):
             raise Error("MultiLayoutIter: operand list lengths disagree")
 
         self.operand_strides = List[List[Int]]()
         for k in range(self.n_operands):
             var s = flatten_to_int_list(operand_layouts[k].stride)
             if len(s) != self.n_modes:
-                raise Error(
-                    "MultiLayoutIter: operand stride rank does not match output shape"
-                )
+                raise Error("MultiLayoutIter: operand stride rank does not match output shape")
             self.operand_strides.append(s^)
         self.operand_item_sizes = operand_item_sizes.copy()
         self.operand_base_offsets = operand_base_offsets.copy()
@@ -204,17 +199,11 @@ struct MultiLayoutIter(Movable):
         while i >= 0:
             self.coords[i] += 1
             for k in range(self.n_operands):
-                self.byte_cursors[k] += (
-                    self.operand_strides[k][i] * self.operand_item_sizes[k]
-                )
+                self.byte_cursors[k] += self.operand_strides[k][i] * self.operand_item_sizes[k]
             if self.coords[i] < self.flat_output_shape[i]:
                 return
             for k in range(self.n_operands):
-                var rollback = (
-                    self.coords[i]
-                    * self.operand_strides[k][i]
-                    * self.operand_item_sizes[k]
-                )
+                var rollback = self.coords[i] * self.operand_strides[k][i] * self.operand_item_sizes[k]
                 self.byte_cursors[k] -= rollback
             self.coords[i] = 0
             i -= 1

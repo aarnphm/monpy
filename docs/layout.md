@@ -28,6 +28,7 @@ see Modular's `linalg/matmul/cpu/default.mojo:32-93`: matmul micro-kernel uses `
 ## plans
 
 **keep**:
+
 - layout-as-function
 - flat `Shape[rank]` (no nested IntTuple)
 - `__call__` (crd→offset)
@@ -36,6 +37,7 @@ see Modular's `linalg/matmul/cpu/default.mojo:32-93`: matmul micro-kernel uses `
 - static-vs-dynamic distinction inside one type.
 
 **skip**:
+
 - nested `IntTuple` storage trick
 - `composition`
 - `complement`
@@ -44,7 +46,7 @@ see Modular's `linalg/matmul/cpu/default.mojo:32-93`: matmul micro-kernel uses `
 - `blocked_product`
 - swizzle
 - TMA
-- tensor_core*
+- tensor_core\*
 - `RuntimeLayout` as a separate type
 - `distribute` (use `sync_parallelize` from std)
 
@@ -68,14 +70,14 @@ src/
 
 ## kernel migration
 
-| # | kernel | current home | rationale |
-| - | --- | --- | --- |
-| 1 | none - land types only | `layout.mojo` | smell-test the abstraction with unit tests |
-| 2 | `binary_elementwise[op, dtype, L]` | replaces same-shape contiguous binary loops in `elementwise.mojo` | one static pointer-walk family |
-| 3 | `unary_elementwise[op, dtype, L]` | replaces contiguous unary loops in `elementwise.mojo` | same arc |
-| 4 | `binary_scalar[op, dtype, L]` | replaces contiguous scalar-binary loops in `elementwise.mojo` | same arc |
-| 5 | `reduce[op, dtype, L]` | replaces contiguous reductions in `elementwise.mojo` | preserves scalar-tail |
-| 6 | `matmul_microkernel[Mk, Nk, simd]` | replaces the small-matmul inner loop in `matmul.mojo` / `elementwise.mojo` | mirrors the raw-ptr style from modular cpu matmul |
+| #   | kernel                             | current home                                                               | rationale                                         |
+| --- | ---------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------- |
+| 1   | none - land types only             | `layout.mojo`                                                              | smell-test the abstraction with unit tests        |
+| 2   | `binary_elementwise[op, dtype, L]` | replaces same-shape contiguous binary loops in `elementwise.mojo`          | one static pointer-walk family                    |
+| 3   | `unary_elementwise[op, dtype, L]`  | replaces contiguous unary loops in `elementwise.mojo`                      | same arc                                          |
+| 4   | `binary_scalar[op, dtype, L]`      | replaces contiguous scalar-binary loops in `elementwise.mojo`              | same arc                                          |
+| 5   | `reduce[op, dtype, L]`             | replaces contiguous reductions in `elementwise.mojo`                       | preserves scalar-tail                             |
+| 6   | `matmul_microkernel[Mk, Nk, simd]` | replaces the small-matmul inner loop in `matmul.mojo` / `elementwise.mojo` | mirrors the raw-ptr style from modular cpu matmul |
 
 ### kernels that never migrate??
 
@@ -98,9 +100,10 @@ src/
 - writing fused-kernel families generically (today `fused_sin_add_mul` is hand-coded; with Layout you write `def fused[ops, L]` once)
 - `_DeferredArray` (currently 0.82-1.01× via expression detection) can generate a specialized kernel per expression shape
 
-leverage for the *next* round of perf work
+leverage for the _next_ round of perf work
 
 Notes when asking the perf team:
+
 - **do not split `Layout` and `RuntimeLayout`**.
   - We split them because GPU kernels need type-erasure across thousands of compile-time-known shapes.
   - monpy has runtime polymorphism at the Python boundary anyway.

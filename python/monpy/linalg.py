@@ -216,8 +216,126 @@ def multi_dot(arrays):
   for a in arrs[1:]:out=matmul(out,a)
   return out
 
-def tensorinv(a,ind=2):raise NotImplementedError("tensorinv not implemented in v1")
-def tensorsolve(a,b,axes=None):raise NotImplementedError("tensorsolve not implemented in v1")
+def tensorinv(a,ind=2):
+  # numpy.linalg.tensorinv: reshape A as a (prod(in_shape), prod(out_shape))
+  # matrix where in_shape = a.shape[ind:], out_shape = a.shape[:ind].
+  # Solve for B such that A @ B = I, then reshape B to (in_shape + out_shape).
+  A=asarray(a)
+  if A.ndim<ind:raise ValueError("tensorinv: ind must be < a.ndim")
+  out_shape=A.shape[:ind];in_shape=A.shape[ind:]
+  out_size=1
+  for d in out_shape:out_size*=d
+  in_size=1
+  for d in in_shape:in_size*=d
+  if out_size!=in_size:raise ValueError("tensorinv: outer / inner volumes must match")
+  flat=A.reshape((out_size,in_size))
+  inverse=inv(flat)
+  return inverse.reshape(in_shape+out_shape)
+
+def tensorsolve(a,b,axes=None):
+  # numpy.linalg.tensorsolve: like solve but with general-rank tensors.
+  # Layout: a.shape == b.shape + x.shape (the leading axes of a match
+  # b's full shape; the trailing axes form x's shape). After moving the
+  # contracted axes to the end (when `axes` is given), reshape into a
+  # square (prod(b.shape), prod(x.shape)) matrix and call solve.
+  A=asarray(a);B=asarray(b)
+  if axes is not None:
+    # Move the listed axes to the trailing end (they form x's shape).
+    a_axes=list(range(A.ndim))
+    for ax in sorted(axes,reverse=True):a_axes.pop(ax)
+    a_axes+=list(axes)
+    A=transpose(A,tuple(a_axes))
+  prod_b=1
+  for d in B.shape:prod_b*=d
+  # Leading axes of A correspond to b's shape; trailing axes are x's shape.
+  if A.ndim<B.ndim or A.shape[:B.ndim]!=B.shape:
+    raise ValueError("tensorsolve: leading axes of a must match b.shape")
+  x_shape=A.shape[B.ndim:]
+  prod_x=1
+  for d in x_shape:prod_x*=d
+  if prod_b!=prod_x:raise ValueError("tensorsolve: square reshape required")
+  flat_a=A.reshape((prod_b,prod_x))
+  flat_b=ravel(B)
+  x=solve(flat_a,flat_b)
+  return x.reshape(x_shape)
+
+
+def einsum(subscripts,*operands,**kwargs):
+  # Einstein summation: parse subscripts, build a contraction plan, walk it.
+  # v1: supports the (input1,input2,...->output) form with letter labels.
+  # Implementation strategy: reduce the sequence of operands pairwise via
+  # `_einsum_pair_contract`, building an output indexing that matches the
+  # spec. Equivalent to calling `tensordot` along the matched axes.
+  if "out" in kwargs:raise NotImplementedError("einsum: out= not supported in v1")
+  if "optimize" in kwargs:pass  # accepted, ignored (we always do pairwise)
+  if "->" in subscripts:
+    in_subs,out_sub=subscripts.split("->")
+  else:
+    in_subs,out_sub=subscripts,None
+  in_subs=in_subs.split(",")
+  if len(in_subs)!=len(operands):raise ValueError("einsum: subscript / operand count mismatch")
+  arrs=[asarray(op) for op in operands]
+  for sub,arr in builtins.zip(in_subs,arrs,strict=True):
+    if len(sub)!=arr.ndim:raise ValueError(f"einsum: subscript '{sub}' does not match operand ndim {arr.ndim}")
+  # Auto-derive output: every label that appears exactly once across inputs.
+  if out_sub is None:
+    counts={}
+    for sub in in_subs:
+      for ch in sub:counts[ch]=counts.get(ch,0)+1
+    out_sub="".join(sorted([ch for ch,c in counts.items() if c==1]))
+  # Contract operands left-to-right.
+  cur_sub,cur=in_subs[0],arrs[0]
+  # Handle internal traces (repeated labels in a single operand) early.
+  cur_sub,cur=_einsum_trace_diag(cur_sub,cur)
+  for nxt_sub,nxt in builtins.zip(in_subs[1:],arrs[1:]):
+    nxt_sub,nxt=_einsum_trace_diag(nxt_sub,nxt)
+    cur_sub,cur=_einsum_pair_contract(cur_sub,cur,nxt_sub,nxt)
+  # Final reduction: sum out any labels not in the output, then permute.
+  return _einsum_finalise(cur_sub,cur,out_sub)
+
+
+def _einsum_trace_diag(sub,arr):
+  # Collapse repeated labels in a single operand by taking the diagonal.
+  while True:
+    seen={}
+    repeated=None
+    for i,ch in enumerate(sub):
+      if ch in seen:repeated=(seen[ch],i,ch);break
+      seen[ch]=i
+    if repeated is None:return sub,arr
+    a,b,ch=repeated
+    arr=diagonal(arr,offset=0,axis1=a,axis2=b)  # diagonal moves to the end
+    new_sub=[c for i,c in enumerate(sub) if i!=a and i!=b]+[ch]
+    sub="".join(new_sub)
+
+
+def _einsum_pair_contract(la,a,lb,b):
+  # Pair contract two arrays based on their label strings.
+  # Strategy: matched labels (in both) become contraction axes; unique
+  # labels become free axes; the result label string is la_unique + lb_unique.
+  shared=[ch for ch in la if ch in lb]
+  la_unique=[ch for ch in la if ch not in shared]
+  lb_unique=[ch for ch in lb if ch not in shared]
+  a_axes=tuple(la.index(ch) for ch in shared)
+  b_axes=tuple(lb.index(ch) for ch in shared)
+  out=tensordot(a,b,axes=(a_axes,b_axes))
+  return "".join(la_unique+lb_unique),out
+
+
+def _einsum_finalise(sub,arr,out_sub):
+  # Sum out labels not in out_sub, then permute the remaining axes
+  # to match out_sub's order.
+  to_sum=[i for i,ch in enumerate(sub) if ch not in out_sub]
+  for ax in sorted(to_sum,reverse=True):
+    arr=_sum(arr,axis=ax)
+    sub=sub[:ax]+sub[ax+1:]
+  if not sub and not out_sub:return arr
+  perm=[sub.index(ch) for ch in out_sub]
+  if perm!=list(range(len(perm))):arr=transpose(arr,tuple(perm))
+  return arr
+
+
+import builtins  # used by einsum (zip, etc.)
 
 # Helpers for the LAPACK-backed paths below.
 _QR_MODES={"reduced":0,"complete":1,"r":2}
@@ -261,20 +379,59 @@ def eigvalsh(a,UPLO='L'):
   return ndarray(out[0])
 
 def eig(a):
+  from . import complex128
   X=_floatify(asarray(a))
   if X.ndim!=2 or X.shape[0]!=X.shape[1]:raise ValueError("eig: input must be square rank-2")
   out=_w(_native.linalg_eig,X._native,True)
-  wr,wi,v,all_real=ndarray(out[0]),ndarray(out[1]),ndarray(out[2]),bool(out[3])
-  if not all_real:raise NotImplementedError("eig: complex eigenvalues require complex dtype (phase 5d, deferred)")
-  return wr,v
+  wr,wi,vr,all_real=ndarray(out[0]),ndarray(out[1]),ndarray(out[2]),bool(out[3])
+  if all_real:return wr,vr
+  # Build complex eigenvalues + eigenvectors. LAPACK packs conjugate
+  # pairs as consecutive entries in WR/WI: real eigvals have wi=0,
+  # complex pairs come as (a+bi, a-bi). Eigenvectors mirror: real cols
+  # are the eigenvectors as-is; complex pairs use vr[:,j] + i*vr[:,j+1]
+  # for the +bi eigenvalue and the conjugate for -bi.
+  n=X.shape[0]
+  wr_flat=[float(wr._native.get_scalar(i)) for i in range(n)]
+  wi_flat=[float(wi._native.get_scalar(i)) for i in range(n)]
+  w_complex=[complex(wr_flat[i],wi_flat[i]) for i in range(n)]
+  w_arr=ndarray(_native.from_flat(w_complex,(n,),complex128.code))
+  vr_dense=numpy_asarray_local(vr)
+  v_complex=[]
+  j=0
+  while j<n:
+    if wi_flat[j]==0.0:
+      for i in range(n):v_complex.append(complex(vr_dense[i,j],0.0))
+      j+=1
+    else:
+      # Pair: column j → +i*v[:,j+1], column j+1 → -i*v[:,j+1]
+      for i in range(n):v_complex.append(complex(vr_dense[i,j],vr_dense[i,j+1]))
+      for i in range(n):v_complex.append(complex(vr_dense[i,j],-vr_dense[i,j+1]))
+      j+=2
+  # v_complex is column-major (column-by-column appended); reshape needs row-major.
+  v_row_major=[]
+  for i in range(n):
+    for c in range(n):
+      v_row_major.append(v_complex[c*n+i])
+  v_arr=ndarray(_native.from_flat(v_row_major,(n,n),complex128.code))
+  return w_arr,v_arr
+
+def numpy_asarray_local(monpy_arr):
+  # Lazy local helper to avoid a top-level numpy import at module load.
+  import numpy
+  return numpy.asarray(monpy_arr)
 
 def eigvals(a):
+  from . import complex128
   X=_floatify(asarray(a))
   if X.ndim!=2 or X.shape[0]!=X.shape[1]:raise ValueError("eigvals: input must be square rank-2")
   out=_w(_native.linalg_eig,X._native,False)
   wr,wi,_,all_real=ndarray(out[0]),ndarray(out[1]),ndarray(out[2]),bool(out[3])
-  if not all_real:raise NotImplementedError("eigvals: complex eigenvalues require complex dtype (phase 5d, deferred)")
-  return wr
+  if all_real:return wr
+  n=X.shape[0]
+  wr_flat=[float(wr._native.get_scalar(i)) for i in range(n)]
+  wi_flat=[float(wi._native.get_scalar(i)) for i in range(n)]
+  w_complex=[complex(wr_flat[i],wi_flat[i]) for i in range(n)]
+  return ndarray(_native.from_flat(w_complex,(n,),complex128.code))
 
 def svd(a,full_matrices=True,compute_uv=True,hermitian=False):
   X=_floatify(asarray(a))

@@ -66,10 +66,11 @@ def test_python_scalars_are_weak_for_float32_arrays(
 
 @pytest.mark.parametrize(
   "dtype",
-  # uint family + float16 moved to phase-5b/5c — see
-  # test_array_coercion.py::test_phase5b_unsigned_int_dtype_allocation_works
-  # and ::test_phase5c_float16_dtype_allocation_works.
-  ["complex128", "object", "str", numpy.complex128],
+  # uint / f16 / complex moved to phase-5b/5c/5d — see
+  # test_array_coercion.py::test_phase5b_unsigned_int_dtype_allocation_works,
+  # ::test_phase5c_float16_dtype_allocation_works,
+  # ::test_phase5d_complex_dtype_allocation_works.
+  ["object", "str"],
 )
 def test_unsupported_promotion_dtype_families_are_explicit_blockers(dtype: object) -> None:
   with pytest.raises(NotImplementedError, match="unsupported dtype"):

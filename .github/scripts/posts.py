@@ -13,7 +13,11 @@ import urllib.request
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-MARKER = "<!-- monpy-array-core-benchmark -->"
+MARKER = "<!-- monpy-bench -->"
+LEGACY_MARKERS = (
+  "<!-- monpy-benchmark-sweep -->",
+  "<!-- monpy-array-core-benchmark -->",
+)
 API_VERSION = "2026-03-10"
 
 
@@ -43,6 +47,17 @@ def format_range(min_value: object, max_value: object, *, ratio: bool = False) -
   return f"{formatter(min_value)}..{formatter(max_value)}"
 
 
+def winner(value: object) -> str:
+  ratio = finite_float(value)
+  if math.isinf(ratio):
+    return "numpy"
+  if ratio < 0.995:
+    return "monpy"
+  if ratio > 1.005:
+    return "numpy"
+  return "tie"
+
+
 def string_value(value: object) -> str:
   if isinstance(value, str):
     return value
@@ -59,6 +74,7 @@ def result_rows(results: Sequence[Mapping[str, object]]) -> list[tuple[str, ...]
       "monpy us",
       "numpy us",
       "monpy/numpy",
+      "winner",
       "monpy range",
       "numpy range",
       "ratio range",
@@ -72,6 +88,7 @@ def result_rows(results: Sequence[Mapping[str, object]]) -> list[tuple[str, ...]
       format_us(result["monpy_median_us"]),
       format_us(result["numpy_median_us"]),
       format_ratio(result["ratio_median"]),
+      winner(result["ratio_median"]),
       format_range(result["monpy_min_us"], result["monpy_max_us"]),
       format_range(result["numpy_min_us"], result["numpy_max_us"]),
       format_range(result["ratio_min"], result["ratio_max"], ratio=True),
@@ -97,9 +114,35 @@ def render_markdown_table(payload: Mapping[str, object]) -> str:
 
   rows = result_rows(results)
   header = "| " + " | ".join(rows[0]) + " |"
-  align = "| " + " | ".join(["---", "---", "---:", "---:", "---:", "---:", "---:", "---:", "---:"]) + " |"
+  align = "| " + " | ".join([
+    "---",
+    "---",
+    "---:",
+    "---:",
+    "---:",
+    "---",
+    "---:",
+    "---:",
+    "---:",
+    "---:",
+  ]) + " |"
   body = ["| " + " | ".join(row) + " |" for row in rows[1:]]
-  line = f"rounds={config['rounds']} repeats={config['repeats']} loops={config['loops']} unit={config['unit']}"
+  parts = [
+    f"suite={config.get('suite', 'array-core')}",
+    f"rounds={config['rounds']}",
+    f"repeats={config['repeats']}",
+    f"loops={config['loops']}",
+    f"unit={config['unit']}",
+  ]
+  types = config.get("types")
+  if isinstance(types, Sequence) and not isinstance(types, str):
+    parts.append("types=" + ",".join(string_value(value) for value in types))
+  candidate = config.get("candidate")
+  baseline = config.get("baseline")
+  if candidate is not None and baseline is not None:
+    parts.append(f"candidate={string_value(candidate)}")
+    parts.append(f"baseline={string_value(baseline)}")
+  line = " ".join(parts)
   return "\n".join([line, "", header, align, *body])
 
 
@@ -154,14 +197,23 @@ def render_metadata_table(rows: Sequence[tuple[str, str]]) -> str:
 def render_comment(payload: Mapping[str, object]) -> str:
   return "\n\n".join([
     MARKER,
-    "### array core benchmark",
+    "### monpy benchmark sweep",
     render_metadata_table(metadata_rows()),
-    "lower `monpy/numpy` is better for monpy.",
+    (
+      "lower `monpy/numpy` is better for monpy; values below `1.000x` mean "
+      "monpy beat numpy for that case."
+    ),
     render_markdown_table(payload),
   ])
 
 
-def request_json(method: str, path: str, *, token: str, body: Mapping[str, object] | None = None) -> object:
+def request_json(
+  method: str,
+  path: str,
+  *,
+  token: str,
+  body: Mapping[str, object] | None = None,
+) -> object:
   api_url = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
   data = None if body is None else json.dumps(body).encode()
   request = urllib.request.Request(
@@ -172,7 +224,7 @@ def request_json(method: str, path: str, *, token: str, body: Mapping[str, objec
       "Accept": "application/vnd.github+json",
       "Authorization": f"Bearer {token}",
       "Content-Type": "application/json",
-      "User-Agent": "monpy-array-core-benchmark",
+      "User-Agent": "monpy-bench",
       "X-GitHub-Api-Version": API_VERSION,
     },
   )
@@ -196,7 +248,12 @@ def existing_comment_id(*, repo: str, sha: str, token: str) -> int | None:
       continue
     body = comment.get("body")
     comment_id = comment.get("id")
-    if isinstance(body, str) and MARKER in body and isinstance(comment_id, int):
+    markers = (MARKER, *LEGACY_MARKERS)
+    if (
+      isinstance(body, str)
+      and any(marker in body for marker in markers)
+      and isinstance(comment_id, int)
+    ):
       return comment_id
   return None
 
@@ -207,9 +264,19 @@ def upsert_commit_comment(body: str) -> str:
   token = os.environ["GITHUB_TOKEN"]
   comment_id = existing_comment_id(repo=repo, sha=sha, token=token)
   if comment_id is None:
-    response = request_json("POST", f"/repos/{repo}/commits/{sha}/comments", token=token, body={"body": body})
+    response = request_json(
+      "POST",
+      f"/repos/{repo}/commits/{sha}/comments",
+      token=token,
+      body={"body": body},
+    )
   else:
-    response = request_json("PATCH", f"/repos/{repo}/comments/{comment_id}", token=token, body={"body": body})
+    response = request_json(
+      "PATCH",
+      f"/repos/{repo}/comments/{comment_id}",
+      token=token,
+      body={"body": body},
+    )
   if isinstance(response, Mapping):
     url = response.get("html_url")
     if isinstance(url, str):
@@ -222,12 +289,45 @@ def load_payload(path: Path) -> Mapping[str, object]:
     payload = json.load(f)
   if not isinstance(payload, Mapping):
     raise TypeError("benchmark json root must be an object")
+  if payload.get("kind") == "monpy-bench-manifest":
+    return load_payload_from_manifest(path, payload)
   return payload
 
 
+def load_payload_from_manifest(path: Path, manifest: Mapping[str, object]) -> Mapping[str, object]:
+  outputs = manifest.get("outputs")
+  if not isinstance(outputs, Mapping):
+    raise TypeError("benchmark manifest outputs must be an object")
+  results = outputs.get("results")
+  if not isinstance(results, Mapping):
+    raise TypeError("benchmark manifest outputs.results must be an object")
+  result_format = results.get("format")
+  if result_format != "json":
+    raise TypeError("benchmark manifest must point at json results")
+  raw_result_path = results.get("path")
+  if not isinstance(raw_result_path, str):
+    raise TypeError("benchmark manifest result path must be a string")
+
+  result_path = Path(raw_result_path)
+  if result_path.is_absolute():
+    candidates = [result_path]
+  else:
+    candidates = [
+      Path.cwd() / result_path,
+      path.parent / result_path.name,
+    ]
+  for candidate in candidates:
+    if candidate.exists():
+      return load_payload(candidate)
+  searched = ", ".join(str(candidate) for candidate in candidates)
+  raise FileNotFoundError(f"benchmark results json not found; searched {searched}")
+
+
 def main() -> None:
-  parser = argparse.ArgumentParser(description="render and optionally post monpy array-core benchmark results")
-  parser.add_argument("results_json", type=Path)
+  parser = argparse.ArgumentParser(
+    description="render and optionally post monpy benchmark sweep results"
+  )
+  parser.add_argument("results_json", type=Path, help="benchmark results json or manifest.json")
   parser.add_argument("--comment-output", type=Path)
   parser.add_argument("--post", action="store_true")
   args = parser.parse_args()

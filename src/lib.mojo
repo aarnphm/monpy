@@ -60,6 +60,7 @@ from create import (
     trace_ops,
     transpose_full_reverse_ops,
     transpose_ops,
+    tri_ops,
     tril_ops,
     triu_ops,
     unary_ops,
@@ -154,6 +155,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[tril_ops]("tril")
         module.def_function[triu_ops]("triu")
         module.def_function[eye_ops]("eye")
+        module.def_function[tri_ops]("tri")
         module.def_function[pad_constant_ops]("pad_constant")
         module.def_function[fill_ops]("fill")
         module.def_function[copyto_ops]("copyto")

@@ -43,11 +43,16 @@ comptime DTYPE_UINT8 = 10
 # Phase-5c float16. Stored as 2-byte half; arithmetic delegates through
 # the f64 round-trip path until a SIMD float16 kernel lands.
 comptime DTYPE_FLOAT16 = 11
+# Phase-5d complex. Interleaved (real, imag) storage per numpy convention.
+# complex64 = 2 × float32 = 8 bytes. complex128 = 2 × float64 = 16 bytes.
+comptime DTYPE_COMPLEX64 = 12
+comptime DTYPE_COMPLEX128 = 13
 
 comptime DTYPE_KIND_BOOL = 0
 comptime DTYPE_KIND_SIGNED_INT = 1
 comptime DTYPE_KIND_REAL_FLOAT = 2
 comptime DTYPE_KIND_UNSIGNED_INT = 3
+comptime DTYPE_KIND_COMPLEX_FLOAT = 4
 
 comptime CASTING_NO = 0
 comptime CASTING_EQUIV = 1
@@ -104,6 +109,9 @@ comptime UNARY_CEIL = 36
 comptime UNARY_TRUNC = 37
 comptime UNARY_RINT = 38
 comptime UNARY_LOGICAL_NOT = 39
+# Phase-5d complex-only unary ops. CONJ flips imag sign; REAL/IMAG/ANGLE
+# return a real-valued result (handled at python level).
+comptime UNARY_CONJUGATE = 40
 
 comptime CMP_EQ = 0
 comptime CMP_NE = 1
@@ -145,6 +153,10 @@ def dtype_item_size(dtype_code: Int) raises -> Int:
         return 4
     if dtype_code == DTYPE_INT64 or dtype_code == DTYPE_FLOAT64 or dtype_code == DTYPE_UINT64:
         return 8
+    if dtype_code == DTYPE_COMPLEX64:
+        return 8  # 2 × float32
+    if dtype_code == DTYPE_COMPLEX128:
+        return 16  # 2 × float64
     raise Error("unsupported dtype code")
 
 
@@ -153,29 +165,19 @@ def dtype_alignment(dtype_code: Int) raises -> Int:
 
 
 def _is_signed_int_code(code: Int) -> Bool:
-    return (
-        code == DTYPE_INT64
-        or code == DTYPE_INT32
-        or code == DTYPE_INT16
-        or code == DTYPE_INT8
-    )
+    return code == DTYPE_INT64 or code == DTYPE_INT32 or code == DTYPE_INT16 or code == DTYPE_INT8
 
 
 def _is_unsigned_int_code(code: Int) -> Bool:
-    return (
-        code == DTYPE_UINT64
-        or code == DTYPE_UINT32
-        or code == DTYPE_UINT16
-        or code == DTYPE_UINT8
-    )
+    return code == DTYPE_UINT64 or code == DTYPE_UINT32 or code == DTYPE_UINT16 or code == DTYPE_UINT8
 
 
 def _is_float_code(code: Int) -> Bool:
-    return (
-        code == DTYPE_FLOAT64
-        or code == DTYPE_FLOAT32
-        or code == DTYPE_FLOAT16
-    )
+    return code == DTYPE_FLOAT64 or code == DTYPE_FLOAT32 or code == DTYPE_FLOAT16
+
+
+def _is_complex_code(code: Int) -> Bool:
+    return code == DTYPE_COMPLEX64 or code == DTYPE_COMPLEX128
 
 
 def dtype_kind_code(dtype_code: Int) raises -> Int:
@@ -187,6 +189,8 @@ def dtype_kind_code(dtype_code: Int) raises -> Int:
         return DTYPE_KIND_UNSIGNED_INT
     if _is_float_code(dtype_code):
         return DTYPE_KIND_REAL_FLOAT
+    if _is_complex_code(dtype_code):
+        return DTYPE_KIND_COMPLEX_FLOAT
     raise Error("unsupported dtype code")
 
 
@@ -222,6 +226,14 @@ def dtype_code_from_format_char(c: Int, itemsize: Int) raises -> Int:
         return DTYPE_FLOAT32
     if c == 0x64 and itemsize == 8:  # 'd'
         return DTYPE_FLOAT64
+    if c == 0x46 and itemsize == 8:  # 'F' (complex64 = 2 × float32 = 8 bytes)
+        return DTYPE_COMPLEX64
+    if c == 0x44 and itemsize == 16:  # 'D' (complex128 = 2 × float64 = 16 bytes)
+        return DTYPE_COMPLEX128
+    if c == 0x5A and itemsize == 8:  # 'Z' = numpy struct typestr; resolves complex64
+        return DTYPE_COMPLEX64
+    if c == 0x5A and itemsize == 16:  # 'Z' for complex128
+        return DTYPE_COMPLEX128
     raise Error("buffer format unsupported by monpy")
 
 
@@ -230,6 +242,10 @@ def dtype_result_for_unary(dtype_code: Int) -> Int:
         return DTYPE_FLOAT16
     if dtype_code == DTYPE_FLOAT32:
         return DTYPE_FLOAT32
+    if dtype_code == DTYPE_COMPLEX64:
+        return DTYPE_COMPLEX64
+    if dtype_code == DTYPE_COMPLEX128:
+        return DTYPE_COMPLEX128
     return DTYPE_FLOAT64
 
 
@@ -299,9 +315,22 @@ def _signed_unsigned_promote(signed_code: Int, unsigned_code: Int) raises -> Int
 
 
 def dtype_result_for_binary(lhs_dtype: Int, rhs_dtype: Int, op: Int) -> Int:
-    """Numpy 2.x binary promotion. Covers the 11-dtype matrix plus any
+    """Numpy 2.x binary promotion. Covers the 13-dtype matrix plus any
     operator-specific overrides (always-float transcendentals, division).
     """
+    # Complex absorbs everything: any pair with at least one complex side
+    # promotes to the wider of the two complex types (or complex64 for
+    # complex64+anything-non-complex128).
+    if _is_complex_code(lhs_dtype) or _is_complex_code(rhs_dtype):
+        if lhs_dtype == DTYPE_COMPLEX128 or rhs_dtype == DTYPE_COMPLEX128:
+            return DTYPE_COMPLEX128
+        # The other side may be a real that can't fit in complex64's f32 mantissa.
+        var other = rhs_dtype if _is_complex_code(lhs_dtype) else lhs_dtype
+        if other == DTYPE_FLOAT64 or other == DTYPE_INT64 or other == DTYPE_UINT64:
+            return DTYPE_COMPLEX128
+        if other == DTYPE_INT32 or other == DTYPE_UINT32:
+            return DTYPE_COMPLEX128
+        return DTYPE_COMPLEX64
     # Always-float binary transcendentals.
     if op == OP_ARCTAN2 or op == OP_HYPOT or op == OP_COPYSIGN:
         if lhs_dtype == DTYPE_FLOAT32 and rhs_dtype == DTYPE_FLOAT32:
@@ -414,6 +443,31 @@ def dtype_can_cast(from_dtype: Int, to_dtype: Int, casting: Int) raises -> Bool:
         return False
     if casting == CASTING_UNSAFE:
         return True
+    # Complex has its own casting rules: real → complex always safe;
+    # complex → real never safe (lossy); complex → complex widens.
+    if from_kind == DTYPE_KIND_COMPLEX_FLOAT:
+        if to_kind == DTYPE_KIND_COMPLEX_FLOAT:
+            if casting == CASTING_SAFE:
+                # complex64 → complex128 safe; reverse not.
+                return from_dtype == DTYPE_COMPLEX64 and to_dtype == DTYPE_COMPLEX128
+            return casting == CASTING_SAME_KIND
+        return False
+    if to_kind == DTYPE_KIND_COMPLEX_FLOAT:
+        if casting == CASTING_SAFE:
+            # Real → complex safe if real fits the complex's float component.
+            if to_dtype == DTYPE_COMPLEX128:
+                return True  # any real fits in complex128's f64 component
+            # to_dtype == DTYPE_COMPLEX64
+            if from_kind == DTYPE_KIND_BOOL:
+                return True
+            if from_dtype == DTYPE_FLOAT32 or from_dtype == DTYPE_FLOAT16:
+                return True
+            if from_dtype == DTYPE_INT8 or from_dtype == DTYPE_INT16:
+                return True
+            if from_dtype == DTYPE_UINT8 or from_dtype == DTYPE_UINT16:
+                return True
+            return False
+        return casting == CASTING_SAME_KIND
     if casting == CASTING_SAFE:
         # Bool fits in any numeric type.
         if from_kind == DTYPE_KIND_BOOL:

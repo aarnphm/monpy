@@ -37,10 +37,11 @@ class _NumpyArrayLike(typing.Protocol):
 DTYPE_BOOL,DTYPE_INT64,DTYPE_FLOAT32,DTYPE_FLOAT64=range(4)
 # Phase-5a signed ints.
 DTYPE_INT32,DTYPE_INT16,DTYPE_INT8=4,5,6
-# Phase-5b unsigned ints + Phase-5c float16.
+# Phase-5b unsigned ints + Phase-5c float16 + Phase-5d complex.
 DTYPE_UINT64,DTYPE_UINT32,DTYPE_UINT16,DTYPE_UINT8=7,8,9,10
 DTYPE_FLOAT16=11
-DTYPE_KIND_BOOL,DTYPE_KIND_SIGNED_INT,DTYPE_KIND_REAL_FLOAT,DTYPE_KIND_UNSIGNED_INT=range(4)
+DTYPE_COMPLEX64,DTYPE_COMPLEX128=12,13
+DTYPE_KIND_BOOL,DTYPE_KIND_SIGNED_INT,DTYPE_KIND_REAL_FLOAT,DTYPE_KIND_UNSIGNED_INT,DTYPE_KIND_COMPLEX_FLOAT=range(5)
 CASTING_NO,CASTING_EQUIV,CASTING_SAFE,CASTING_SAME_KIND,CASTING_UNSAFE=range(5)
 OP_ADD,OP_SUB,OP_MUL,OP_DIV=range(4)
 # Phase-3 binary op codes; mirror src/domain.mojo.
@@ -50,6 +51,8 @@ UNARY_SIN,UNARY_COS,UNARY_EXP,UNARY_LOG=range(4)
 UNARY_TAN,UNARY_ARCSIN,UNARY_ARCCOS,UNARY_ARCTAN,UNARY_SINH,UNARY_COSH,UNARY_TANH,UNARY_LOG1P,UNARY_LOG2,UNARY_LOG10,UNARY_EXP2,UNARY_EXPM1,UNARY_SQRT,UNARY_CBRT,UNARY_DEG2RAD,UNARY_RAD2DEG,UNARY_RECIPROCAL=range(4,21)
 # Phase-3 unary arith (preserve dtype).
 UNARY_NEGATE,UNARY_POSITIVE,UNARY_ABS,UNARY_SQUARE,UNARY_SIGN,UNARY_FLOOR,UNARY_CEIL,UNARY_TRUNC,UNARY_RINT,UNARY_LOGICAL_NOT=range(30,40)
+# Phase-5d complex-only unary.
+UNARY_CONJUGATE=40
 # Phase-3 comparison / logical / predicate op codes.
 CMP_EQ,CMP_NE,CMP_LT,CMP_LE,CMP_GT,CMP_GE=range(6)
 LOGIC_AND,LOGIC_OR,LOGIC_XOR=range(3)
@@ -99,18 +102,22 @@ uint8=DType("uint8",10,"u",1,1,"|","|u1","B",builtins.int)
 # Phase-5c float16. Storage is 2-byte half; arithmetic delegates through f64.
 float16=DType("float16",11,"f",2,2,"=","<f2","e",builtins.float)
 half=float16  # numpy alias
+# Phase-5d complex. Interleaved (real, imag) storage matching numpy/PEP-3118.
+complex64=DType("complex64",12,"c",8,4,"=","<c8","F",builtins.complex)
+complex128=DType("complex128",13,"c",16,8,"=","<c16","D",builtins.complex)
+csingle=complex64;cdouble=complex128;clongdouble=complex128;complex_=complex128  # numpy aliases (clongdouble caps at c128 here)
 bool_=bool;int_=int64;float_=float64;intp=int64
 ubyte=uint8;ushort=uint16;uintc=uint32;ulonglong=uint64
 
-_DT:tuple[DType,...]=(bool,int64,float32,float64,int32,int16,int8,uint64,uint32,uint16,uint8,float16)             # ordered by .code; idx == code
+_DT:tuple[DType,...]=(bool,int64,float32,float64,int32,int16,int8,uint64,uint32,uint16,uint8,float16,complex64,complex128)  # ordered by .code; idx == code
 _DTC:dict[int,DType]={d.code:d for d in _DT}                                                                     # code → DType
-_DTN:dict[str,DType]={d.name:d for d in _DT}|{"bool_":bool,"int_":int64,"float_":float64,"single":float32,"double":float64,"intp":int64,"half":float16,"ubyte":uint8,"ushort":uint16,"uintc":uint32,"ulonglong":uint64} # name → DType
-_DTNK:dict[tuple[str,int],DType]={("b",1):bool,("i",8):int64,("i",4):int32,("i",2):int16,("i",1):int8,("u",8):uint64,("u",4):uint32,("u",2):uint16,("u",1):uint8,("f",2):float16,("f",4):float32,("f",8):float64} # (numpy kind, itemsize) → DType
-_DTBT:dict[str,DType]={"|b1":bool,"|i1":int8,"|u1":uint8}|{p+s:d for s,d in[("i8",int64),("i4",int32),("i2",int16),("u8",uint64),("u4",uint32),("u2",uint16),("f2",float16),("f4",float32),("f8",float64)] for p in"<>="}  # numpy typestr (incl. byteorder prefix) → DType
-_DTK:dict[DType,int]={bool:DTYPE_KIND_BOOL,int64:DTYPE_KIND_SIGNED_INT,int32:DTYPE_KIND_SIGNED_INT,int16:DTYPE_KIND_SIGNED_INT,int8:DTYPE_KIND_SIGNED_INT,uint64:DTYPE_KIND_UNSIGNED_INT,uint32:DTYPE_KIND_UNSIGNED_INT,uint16:DTYPE_KIND_UNSIGNED_INT,uint8:DTYPE_KIND_UNSIGNED_INT,float32:DTYPE_KIND_REAL_FLOAT,float64:DTYPE_KIND_REAL_FLOAT,float16:DTYPE_KIND_REAL_FLOAT}
+_DTN:dict[str,DType]={d.name:d for d in _DT}|{"bool_":bool,"int_":int64,"float_":float64,"single":float32,"double":float64,"intp":int64,"half":float16,"ubyte":uint8,"ushort":uint16,"uintc":uint32,"ulonglong":uint64,"csingle":complex64,"cdouble":complex128,"clongdouble":complex128,"complex_":complex128} # name → DType
+_DTNK:dict[tuple[str,int],DType]={("b",1):bool,("i",8):int64,("i",4):int32,("i",2):int16,("i",1):int8,("u",8):uint64,("u",4):uint32,("u",2):uint16,("u",1):uint8,("f",2):float16,("f",4):float32,("f",8):float64,("c",8):complex64,("c",16):complex128} # (numpy kind, itemsize) → DType
+_DTBT:dict[str,DType]={"|b1":bool,"|i1":int8,"|u1":uint8}|{p+s:d for s,d in[("i8",int64),("i4",int32),("i2",int16),("u8",uint64),("u4",uint32),("u2",uint16),("f2",float16),("f4",float32),("f8",float64),("c8",complex64),("c16",complex128)] for p in"<>="}  # numpy typestr (incl. byteorder prefix) → DType
+_DTK:dict[DType,int]={bool:DTYPE_KIND_BOOL,int64:DTYPE_KIND_SIGNED_INT,int32:DTYPE_KIND_SIGNED_INT,int16:DTYPE_KIND_SIGNED_INT,int8:DTYPE_KIND_SIGNED_INT,uint64:DTYPE_KIND_UNSIGNED_INT,uint32:DTYPE_KIND_UNSIGNED_INT,uint16:DTYPE_KIND_UNSIGNED_INT,uint8:DTYPE_KIND_UNSIGNED_INT,float32:DTYPE_KIND_REAL_FLOAT,float64:DTYPE_KIND_REAL_FLOAT,float16:DTYPE_KIND_REAL_FLOAT,complex64:DTYPE_KIND_COMPLEX_FLOAT,complex128:DTYPE_KIND_COMPLEX_FLOAT}
 _NPTYPE:type[object]|None=None                                                                                   # cached numpy.ndarray type (lazy import)
 _CASTING_CODES:dict[str,int]={"no":CASTING_NO,"equiv":CASTING_EQUIV,"safe":CASTING_SAFE,"same_kind":CASTING_SAME_KIND,"unsafe":CASTING_UNSAFE}
-_ISDTYPE_KINDS:dict[str,set[DType]]={"bool":{bool},"signed integer":{int64,int32,int16,int8},"unsigned integer":{uint64,uint32,uint16,uint8},"integral":{int64,int32,int16,int8,uint64,uint32,uint16,uint8},"real floating":{float32,float64,float16},"complex floating":set(),"numeric":{int64,int32,int16,int8,uint64,uint32,uint16,uint8,float32,float64,float16}}
+_ISDTYPE_KINDS:dict[str,set[DType]]={"bool":{bool},"signed integer":{int64,int32,int16,int8},"unsigned integer":{uint64,uint32,uint16,uint8},"integral":{int64,int32,int16,int8,uint64,uint32,uint16,uint8},"real floating":{float32,float64,float16},"complex floating":{complex64,complex128},"numeric":{int64,int32,int16,int8,uint64,uint32,uint16,uint8,float32,float64,float16,complex64,complex128}}
 _FINFO:dict[DType,_FInfo]={float32:_FInfo(float32,32,1.1920928955078125e-07,5.960464477539063e-08,3.4028234663852886e38,-3.4028234663852886e38,1.1754943508222875e-38,1.1754943508222875e-38,1e-06,6,23,8,128,-126,-23,-24),float64:_FInfo(float64,64,2.220446049250313e-16,1.1102230246251565e-16,1.7976931348623157e308,-1.7976931348623157e308,2.2250738585072014e-308,2.2250738585072014e-308,1e-15,15,52,11,1024,-1022,-52,-53),float16:_FInfo(float16,16,0.0009765625,0.00048828125,65504.0,-65504.0,6.103515625e-05,6.103515625e-05,1e-03,3,10,5,16,-14,-10,-11)}
 _IINFO:dict[DType,_IInfo]={int64:_IInfo(int64,64,-9223372036854775808,9223372036854775807),int32:_IInfo(int32,32,-2147483648,2147483647),int16:_IInfo(int16,16,-32768,32767),int8:_IInfo(int8,8,-128,127),uint64:_IInfo(uint64,64,0,18446744073709551615),uint32:_IInfo(uint32,32,0,4294967295),uint16:_IInfo(uint16,16,0,65535),uint8:_IInfo(uint8,8,0,255)}
 _PHASE5A_UNIMPLEMENTED:set[DType]=set()                                                                              # phase-5a int kernels landed; allocation gate removed
@@ -124,8 +131,8 @@ _BR:dict[int,dict[tuple[DType,DType],DType]]={OP_ADD:_NPT,OP_SUB:_NPT,OP_MUL:_NP
                                               OP_FLOOR_DIV:_NPT,OP_MOD:_NPT,OP_POWER:_NPT,
                                               OP_MAXIMUM:_NPT,OP_MINIMUM:_NPT,OP_FMIN:_NPT,OP_FMAX:_NPT,
                                               OP_ARCTAN2:_DPT,OP_HYPOT:_DPT,OP_COPYSIGN:_DPT}                    # binary op → promotion table
-_UR:dict[DType,DType]={bool:float64,int64:float64,int32:float64,int16:float64,int8:float64,uint64:float64,uint32:float64,uint16:float64,uint8:float64,float16:float16,float32:float32,float64:float64}  # unary (sin/cos/exp/log) result: int kinds → f64
-_UR_PRESERVE:dict[DType,DType]={bool:int64,int64:int64,int32:int32,int16:int16,int8:int8,uint64:uint64,uint32:uint32,uint16:uint16,uint8:uint8,float16:float16,float32:float32,float64:float64}  # preserve-kind unary: bool → int64
+_UR:dict[DType,DType]={bool:float64,int64:float64,int32:float64,int16:float64,int8:float64,uint64:float64,uint32:float64,uint16:float64,uint8:float64,float16:float16,float32:float32,float64:float64,complex64:complex64,complex128:complex128}  # unary (sin/cos/exp/log) result: int kinds → f64
+_UR_PRESERVE:dict[DType,DType]={bool:int64,int64:int64,int32:int32,int16:int16,int8:int8,uint64:uint64,uint32:uint32,uint16:uint16,uint8:uint8,float16:float16,float32:float32,float64:float64,complex64:complex64,complex128:complex128}  # preserve-kind unary: bool → int64
 _CFE="unable to avoid copy while creating a monpy array as requested"                                            # error msg for copy=False refusal
 _S1E="only size-1 arrays can be converted to python scalars"                                                     # error msg for non-size-1 → python scalar
 
@@ -205,6 +212,7 @@ class Ufunc:
         if r.dtype!=t:r=r.astype(t)
       else:
         l,r=_coerce(l,r,self._op)
+      if out is not None:_native.binary_into(out._native,l._native,r._native,self._op);return out
       res=ndarray(_native.binary(l._native,r._native,self._op))
     if out is not None:out[...]=res;return out
     return res
@@ -368,10 +376,17 @@ class ndarray:
     return builtins.bool(self._scalar())
   def __int__(self)->int:
     if self.size!=1:raise TypeError(_S1E)
-    return builtins.int(self._scalar())
+    s=self._scalar()
+    if isinstance(s,builtins.complex):return builtins.int(s.real)
+    return builtins.int(s)
   def __float__(self)->float:
     if self.size!=1:raise TypeError(_S1E)
-    return float(self._scalar())
+    s=self._scalar()
+    if isinstance(s,builtins.complex):return float(s.real)
+    return float(s)
+  def __complex__(self)->complex:
+    if self.size!=1:raise TypeError(_S1E)
+    return builtins.complex(self._scalar())
   # binary fast paths: ndarray×ndarray dispatches straight to the native method.
   # Mojo's `binary_dispatch_ops` (in `create.mojo`) handles dtype promotion
   # internally via `result_dtype_for_binary`, so the python-side dtype check
@@ -667,11 +682,7 @@ def identity(n:int,dtype:object=None,*,device:object=None)->ndarray:return eye(n
 
 def tri(N:int,M:int|None=None,k:int=0,dtype:object=None,*,device:object=None)->ndarray:
   _check_cpu(device);t=_resolve_dtype(dtype) if dtype is not None else float64;m=N if M is None else M
-  out=zeros((N,m),dtype=t,device=device)
-  for i in range(N):
-    j_max=builtins.min(m,i+k+1)
-    for j in range(j_max):out[i,j]=1
-  return out
+  return ndarray(_native.tri(N,m,k,t.code))
 
 def atleast_1d(*arys:object)->ndarray|tuple[ndarray,...]:
   def _bump(a:object)->ndarray:
@@ -1079,6 +1090,44 @@ trunc=Ufunc("trunc",1,1,"unary_preserve",UNARY_TRUNC)
 rint=Ufunc("rint",1,1,"unary_preserve",UNARY_RINT)
 fix=trunc
 logical_not=Ufunc("logical_not",1,1,"unary_preserve",UNARY_LOGICAL_NOT)
+# Phase-5d complex-only ufunc. Conjugate negates imag for complex; identity for real.
+conjugate=Ufunc("conjugate",1,1,"unary_preserve",UNARY_CONJUGATE)
+conj=conjugate
+
+# Real / imag / angle. These are accessor ops that return real-valued
+# arrays (component split) — implemented as python wrappers since their
+# output dtype differs from the input (complex → real). Writes through
+# `_native.from_flat` so the output is c-contig regardless of input strides.
+def real(x:object)->ndarray:
+  a=_mat(_av(x))
+  if a.dtype not in(complex64,complex128):return a  # real input, identity
+  rdt=float32 if a.dtype==complex64 else float64
+  flat=[a._native.get_scalar(i).real for i in range(a.size)]
+  return ndarray(_native.from_flat(flat,a.shape,rdt.code))
+
+def imag(x:object)->ndarray:
+  a=_mat(_av(x))
+  if a.dtype not in(complex64,complex128):return zeros_like(a)
+  rdt=float32 if a.dtype==complex64 else float64
+  flat=[a._native.get_scalar(i).imag for i in range(a.size)]
+  return ndarray(_native.from_flat(flat,a.shape,rdt.code))
+
+def angle(z:object,deg:builtins.bool=False)->ndarray:
+  a=_mat(_av(z))
+  if a.dtype not in(complex64,complex128):
+    # real input: angle is 0 for non-negatives, pi for negatives.
+    rdt=float32 if a.dtype==float32 else float64
+    flat=[(math.pi if a._native.get_scalar(i)<0 else 0.0) for i in range(a.size)]
+    if deg:flat=[math.degrees(v) for v in flat]
+    return ndarray(_native.from_flat(flat,a.shape,rdt.code))
+  rdt=float32 if a.dtype==complex64 else float64
+  flat=[]
+  for i in range(a.size):
+    c=a._native.get_scalar(i)
+    val=math.atan2(c.imag,c.real)
+    if deg:val=math.degrees(val)
+    flat.append(val)
+  return ndarray(_native.from_flat(flat,a.shape,rdt.code))
 
 # Comparison ufuncs (return bool).
 equal=Ufunc("equal",2,1,"compare",CMP_EQ)
@@ -2329,15 +2378,17 @@ def _cse(sh:tuple[int,...])->tuple[int,...]:                                    
   return tuple(st)
 
 def _infer_dtype(flat:Sequence[object])->DType:
-  # promote up the ladder bool→int→float depending on what we see in the input.
+  # promote up the ladder bool→int→float→complex depending on what we see.
   if not flat:return float64
-  hf=False;hi=False;hb=True                                                                                                    # has_float / has_int / has_bool (so far still all-bool)
+  hc=False;hf=False;hi=False;hb=True                                                                                           # has_complex / float / int / bool (so far still all-bool)
   for v in flat:
     if isinstance(v,builtins.bool):continue
     hb=False
     if isinstance(v,builtins.int):hi=True;continue
     if isinstance(v,builtins.float):hf=True;continue
+    if isinstance(v,builtins.complex):hc=True;continue
     raise NotImplementedError(f"unsupported array value type: {type(v).__name__}")
+  if hc:return complex128
   if hf:return float64
   if hi or not hb:return int64
   return bool
@@ -2383,7 +2434,7 @@ def _flat(obj:object)->tuple[tuple[int,...],list[object]]:
     if builtins.any(s!=fs for s in cs):raise ValueError("cannot create monpy array from ragged nested sequences")
     return(len(obj),)+fs,fl
   if isinstance(obj,ndarray):return obj.shape,[obj._native.get_scalar(i) for i in range(obj.size)]
-  if isinstance(obj,(builtins.bool,builtins.int,builtins.float)):return(),[obj]
+  if isinstance(obj,(builtins.bool,builtins.int,builtins.float,builtins.complex)):return(),[obj]
   raise NotImplementedError(f"unsupported array input type: {type(obj).__name__}")
 
 def _unflat(flat:Sequence[object],sh:tuple[int,...])->object:
@@ -2445,5 +2496,6 @@ cross=linalg.cross
 matvec=linalg.matvec
 vecmat=linalg.vecmat
 vecdot=linalg.vecdot
+einsum=linalg.einsum
 
-__all__=["DType","Ufunc","abs","absolute","add","all","any","append","arange","arccos","arcsin","arctan","arctan2","argpartition","argsort","argwhere","array","array_split","asarray","ascontiguousarray","argmax","argmin","asfortranarray","astype","atleast_1d","atleast_2d","atleast_3d","average","bincount","bool","bool_","broadcast_arrays","broadcast_to","can_cast","cbrt","ceil","column_stack","concatenate","copy","copysign","cos","cosh","count_nonzero","cross","cummax","cummin","cumprod","cumsum","deg2rad","degrees","delete","diagonal","diag_indices","digitize","divide","dot","dsplit","dstack","dtype","e","empty","empty_like","equal","exp","exp2","expm1","expand_dims","eye","fabs","finfo","fix","flatnonzero","flatten","flip","fliplr","flipud","float_","float16","float32","float64","floor","floor_divide","fmax","fmin","frombuffer","from_dlpack","fromiter","full","full_like","geomspace","greater","greater_equal","half","hsplit","hstack","hypot","identity","iinfo","indices","inf","inner","insert","int_","int8","int16","int32","int64","intersect1d","intp","isdtype","isfinite","isinf","isin","isnan","issubdtype","ix_","kron","less","less_equal","lexsort","linalg","linspace","log","log2","log10","log1p","logical_and","logical_not","logical_or","logical_xor","logspace","matmul","matrix_transpose","matvec","max","maximum","mean","median","meshgrid","min","minimum","mod","moveaxis","multiply","nan","nanargmax","nanargmin","nancumprod","nancumsum","nanmax","nanmean","nanmedian","nanmin","nanpercentile","nanprod","nanquantile","nanstd","nansum","nanvar","ndarray","negative","newaxis","nonzero","not_equal","ones","ones_like","outer","pad","partition","percentile","pi","positive","power","prod","promote_types","ptp","quantile","radians","rad2deg","ravel","ravel_multi_index","reciprocal","remainder","repeat","reshape","result_type","rint","roll","rot90","searchsorted","setdiff1d","setxor1d","sign","signbit","sin","sin_add_mul","sinh","sort","split","sqrt","square","squeeze","stack","std","subtract","sum","swapaxes","take","tan","tanh","tensordot","tile","trace","transpose","tri","trim_zeros","triu","tril","triu_indices","tril_indices","true_divide","trunc","ubyte","ufunc","uint8","uint16","uint32","uint64","uintc","ulonglong","union1d","unique","unravel_index","ushort","var","vdot","vecdot","vecmat","vsplit","vstack","where","zeros","zeros_like"]
+__all__=["DType","Ufunc","abs","absolute","add","all","any","append","arange","arccos","arcsin","arctan","arctan2","argpartition","argsort","argwhere","array","array_split","asarray","ascontiguousarray","argmax","argmin","asfortranarray","astype","atleast_1d","atleast_2d","atleast_3d","average","bincount","bool","bool_","broadcast_arrays","broadcast_to","can_cast","cbrt","cdouble","ceil","clongdouble","column_stack","complex_","complex64","complex128","concatenate","conj","conjugate","copy","copysign","cos","cosh","count_nonzero","cross","csingle","cummax","cummin","cumprod","cumsum","deg2rad","degrees","delete","diagonal","diag_indices","digitize","divide","dot","dsplit","dstack","dtype","einsum","e","empty","empty_like","equal","exp","exp2","expm1","expand_dims","eye","fabs","finfo","fix","flatnonzero","flatten","flip","fliplr","flipud","float_","float16","float32","float64","floor","floor_divide","fmax","fmin","frombuffer","from_dlpack","fromiter","full","full_like","geomspace","greater","greater_equal","half","hsplit","hstack","hypot","identity","iinfo","imag","indices","inf","inner","insert","int_","int8","int16","int32","int64","intersect1d","intp","isdtype","isfinite","isinf","isin","isnan","issubdtype","ix_","kron","less","less_equal","lexsort","linalg","linspace","log","log2","log10","log1p","logical_and","logical_not","logical_or","logical_xor","logspace","matmul","matrix_transpose","matvec","max","maximum","mean","median","meshgrid","min","minimum","mod","moveaxis","multiply","nan","nanargmax","nanargmin","nancumprod","nancumsum","nanmax","nanmean","nanmedian","nanmin","nanpercentile","nanprod","nanquantile","nanstd","nansum","nanvar","ndarray","negative","newaxis","nonzero","not_equal","ones","ones_like","outer","pad","partition","percentile","pi","positive","power","prod","promote_types","ptp","quantile","radians","rad2deg","ravel","ravel_multi_index","real","reciprocal","remainder","repeat","reshape","result_type","rint","roll","rot90","searchsorted","setdiff1d","setxor1d","sign","signbit","sin","sin_add_mul","sinh","sort","split","sqrt","square","squeeze","stack","std","subtract","sum","swapaxes","take","tan","tanh","angle","tensordot","tile","trace","transpose","tri","trim_zeros","triu","tril","triu_indices","tril_indices","true_divide","trunc","ubyte","ufunc","uint8","uint16","uint32","uint64","uintc","ulonglong","union1d","unique","unravel_index","ushort","var","vdot","vecdot","vecmat","vsplit","vstack","where","zeros","zeros_like"]

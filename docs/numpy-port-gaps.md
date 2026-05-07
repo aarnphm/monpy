@@ -22,15 +22,15 @@ snapshot target:
 
 observed upstream tree shape:
 
-| upstream path | entries |
-| --- | ---: |
-| `numpy/` | 50 entries: 22 directories, 28 files |
-| `numpy/_core/` | 71 entries: 4 directories, 67 files |
+| upstream path                 |                               entries |
+| ----------------------------- | ------------------------------------: |
+| `numpy/`                      |  50 entries: 22 directories, 28 files |
+| `numpy/_core/`                |   71 entries: 4 directories, 67 files |
 | `numpy/_core/src/multiarray/` | 120 entries: 2 directories, 118 files |
-| `numpy/_core/src/umath/` | 60 files |
-| `numpy/lib/` | 65 entries |
-| `numpy/random/` | 34 entries |
-| `numpy/linalg/` | 11 entries |
+| `numpy/_core/src/umath/`      |                              60 files |
+| `numpy/lib/`                  |                            65 entries |
+| `numpy/random/`               |                            34 entries |
+| `numpy/linalg/`               |                            11 entries |
 
 the top-level public namespace is a poor implementation guide by itself. in the
 local numpy `2.4.4` install, numpy exposes 495 public top-level names; monpy

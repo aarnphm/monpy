@@ -1,4 +1,4 @@
-name: Core Benchmark
+name: Benchmark Sweep
 
 on:
   push:
@@ -16,7 +16,7 @@ jobs:
     # macOS run (and vice versa). `matrix.os` is only addressable inside the
     # job, not at workflow level, so concurrency lives here.
     concurrency:
-      group: array-core-benchmark-${{ github.ref }}-${{ matrix.os }}
+      group: monpy-bench-${{ github.ref }}-${{ matrix.os }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
@@ -118,17 +118,23 @@ jobs:
           assert sol._native.used_accelerate(), 'LAPACK sgesv (solve) path did not fire'
           "
 
-      - name: run array core benchmark
+      - name: run benchmark sweep
         run: |
           set -euo pipefail
 
-          .venv/bin/python benchmarks/bench_array_core.py \
+          benchmark_dir="results/$(date -u +%F)"
+          monpy-bench \
             --format json \
             --no-progress \
+            --no-stdout \
+            --output-dir "$benchmark_dir" \
+            --types all \
             --loops "$BENCH_LOOPS" \
             --repeats "$BENCH_REPEATS" \
-            --rounds "$BENCH_ROUNDS" \
-            > benchmark-results.json
+            --rounds "$BENCH_ROUNDS"
+
+          test -s "$benchmark_dir/results.json"
+          test -s "$benchmark_dir/manifest.json"
 
       - name: post commit comment
         if: runner.os == 'macOS'
@@ -137,8 +143,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          .venv/bin/python benchmarks/post_array_core_benchmark.py \
-            benchmark-results.json \
+          benchmark_dir="results/$(date -u +%F)"
+          .venv/bin/python .github/scripts/posts.py \
+            "$benchmark_dir/results.json" \
             --comment-output benchmark-comment.md \
             --post
 
@@ -146,8 +153,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: array-core-benchmark-${{ matrix.os }}-${{ github.sha }}
+          name: monpy-bench-${{ matrix.os }}-${{ github.sha }}
           path: |
-            benchmark-results.json
+            results/**
             benchmark-comment.md
           if-no-files-found: ignore

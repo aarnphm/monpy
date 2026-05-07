@@ -23,11 +23,11 @@ You can do
 import monumpy as np
 ```
 
-and enjoy Mojo perf!
+and enjoy Mojo perf! (hopefully)
 
 ## notes
 
-The project is intentionally not a drop-in NumPy replacement.
+The project is intentionally yet to be a drop-in NumPy replacement.
 
 This is educational first, as a part for me to learn Mojo.
 
@@ -35,11 +35,13 @@ The current targets includes CPU-only, array-API-shaped subset with Mojo-owned s
 
 NumPy is used by the tests as an oracle and by `ndarray.__array__` as an explicit conversion target.
 
-There is a small [layout.mojo](src/layout.mojo) where it applies some heuristics and algebra.
+There is a small [layout.mojo](src/cute/layout.mojo) where it applies some CuTe-inspired layout design and relevant algebra.
 
 majority of logics can be found inside [create.mojo](src/create.mojo), and the BLAS/LAPACK backend lives in [accelerate.mojo](src/accelerate.mojo) (it routes to Apple Accelerate on macOS and OpenBLAS / netlib on Linux based on the comptime target)
 
 Some of the major elementwise ops can be found under [elementwise.mojo](src/elementwise.mojo)
+
+We also have a few storage and relevant domains that can be found under [storage.mojo](src/storage.mojo)
 
 ## supported platforms
 
@@ -73,11 +75,16 @@ uv pip install --no-build-isolation -e ".[dev]"
 For running verification and benchmarks
 
 ```bash
+# to run benchmark
+monpy-bench --types all --format csv --loops 3 --no-progress
+# to run tests
 python -m pytest tests/python
-python benchmarks/bench_array_core.py --rounds 3 --loop 3
-python benchmarks/bench_array_core.py --format csv --no-progress
 ```
 
+Benchmark runs write `results/yyyy-mm-dd/results.<format>` and
+`results/yyyy-mm-dd/manifest.json` by default. See
+[docs/benchmarks.md](docs/benchmarks.md) for suite types, output formats,
+saved manifests, and CI comment posting.
 
 ## notes
 
@@ -92,3 +99,4 @@ MOHAUS_MOJO=/path/bin/mojo
 - CuTEDSL Layout algebra
 - Modular's `LayoutTensor`
 - [NuMojo](https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo)
+- [numpy](https://github.com/numpy/numpy)

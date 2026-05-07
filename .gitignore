@@ -3,6 +3,9 @@
 /.venv/
 /.ruff_cache/
 /.pytest_cache/
+/results/
+/.pre-commit-config.yaml
+/.oxfmtrc.*.json
 *.egg-info/
 __pycache__/
 *.py[cod]

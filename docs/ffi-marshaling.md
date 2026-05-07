@@ -1,6 +1,7 @@
 # where the time goes (after typed kernels)
 
 there are three main smells:
+
 - `asarray_zero_copy` at 35x
 - `strided_view` at 16x
 - `array_copy` at 7x
@@ -8,11 +9,13 @@ there are three main smells:
 this is mostly marshaling tax.
 
 it's worth retracing the kernel passes to make this concrete. some recap:
+
 - bucket B for the transposed-binary case, plus a fix to the strided walker that previously fell off into a divmod-per-element scalar walk.
 - slimmed the python `ndarray` wrapper from six slots to three and added a `_wrap` classmethod that bypasses `__init__`'s kwarg parsing.
 - typed-kernel pass
 
 look at what `asarray(np_arr, copy=False)` actually does on the mojo side.
+
 - the python wrapper hands the numpy array to `_native.asarray_from_numpy(obj, dtype_code, copy_flag)`.
 - inside, mojo reads numpy's `__array_interface__`.
 - the interface is a python dict.
@@ -37,6 +40,7 @@ eight or nine python interactions per array crossing. each one is 30–100 nanos
 - every attribute read still pays the full cpython call cost on the way through.
 
 TODO:
+
 - one is the cpython buffer protocol. numpy arrays implement `Py_buffer`, which returns the data pointer, shape, strides, and itemsize through a single cpython call. one `PyObject_GetBuffer(obj, &view, flags)` returns everything currently fetched with eight separate attribute reads. cost on numpy's end is unchanged; on our end it becomes a single ffi call. mojo can speak the buffer protocol through the same `_get_dylib_function` machinery already in `accelerate.mojo` for blas, pointing at `libpython3.11.dylib` instead.
 - the other is numpy's c api: `PyArray_DATA(obj)`, `PyArray_NDIM(obj)`, `PyArray_DIMS(obj)`, `PyArray_STRIDES(obj)`. these macros expand to direct struct-field reads on `PyArrayObject` and cost single-digit nanoseconds each. faster than the buffer protocol, but the cost is linking against numpy's runtime dylib and tracking abi (numpy promises api stability across minor versions, abi only across patch versions). the buffer protocol is the portable answer; the numpy c api is the fast answer; do whichever the use case warrants.
 

@@ -74,6 +74,40 @@ comptime cblas_dgemv_type = def(
     Int32,
 ) thin -> None
 
+comptime cblas_cgemm_type = def(
+    _CBLASOrder,
+    _CBLASTranspose,
+    _CBLASTranspose,
+    Int32,
+    Int32,
+    Int32,
+    UnsafePointer[Float32, ImmutAnyOrigin],  # alpha (re, im) pair
+    UnsafePointer[Float32, ImmutAnyOrigin],
+    Int32,
+    UnsafePointer[Float32, ImmutAnyOrigin],
+    Int32,
+    UnsafePointer[Float32, ImmutAnyOrigin],  # beta (re, im) pair
+    UnsafePointer[Float32, MutAnyOrigin],
+    Int32,
+) thin -> None
+
+comptime cblas_zgemm_type = def(
+    _CBLASOrder,
+    _CBLASTranspose,
+    _CBLASTranspose,
+    Int32,
+    Int32,
+    Int32,
+    UnsafePointer[Float64, ImmutAnyOrigin],
+    UnsafePointer[Float64, ImmutAnyOrigin],
+    Int32,
+    UnsafePointer[Float64, ImmutAnyOrigin],
+    Int32,
+    UnsafePointer[Float64, ImmutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    Int32,
+) thin -> None
+
 comptime cblas_sgemv_type = def(
     _CBLASOrder,
     _CBLASTranspose,
@@ -99,6 +133,26 @@ comptime vv_f64_type = def(
     UnsafePointer[Float64, MutAnyOrigin],
     UnsafePointer[Float64, ImmutAnyOrigin],
     UnsafePointer[Int32, ImmutAnyOrigin],
+) thin -> None
+
+comptime vdsp_binary_f32_type = def(
+    UnsafePointer[Float32, ImmutAnyOrigin],
+    Int64,
+    UnsafePointer[Float32, ImmutAnyOrigin],
+    Int64,
+    UnsafePointer[Float32, MutAnyOrigin],
+    Int64,
+    UInt64,
+) thin -> None
+
+comptime vdsp_binary_f64_type = def(
+    UnsafePointer[Float64, ImmutAnyOrigin],
+    Int64,
+    UnsafePointer[Float64, ImmutAnyOrigin],
+    Int64,
+    UnsafePointer[Float64, MutAnyOrigin],
+    Int64,
+    UInt64,
 ) thin -> None
 
 comptime lapack_sgesv_type = def(
@@ -148,14 +202,14 @@ comptime lapack_dgetrf_type = def(
 # UnsafePointer[Int8].
 
 comptime lapack_sgeqrf_type = def(
-    UnsafePointer[Int32, MutAnyOrigin],         # M
-    UnsafePointer[Int32, MutAnyOrigin],         # N
-    UnsafePointer[Float32, MutAnyOrigin],       # A[lda*n]
-    UnsafePointer[Int32, MutAnyOrigin],         # LDA
-    UnsafePointer[Float32, MutAnyOrigin],       # TAU[min(M,N)]
-    UnsafePointer[Float32, MutAnyOrigin],       # WORK[lwork]
-    UnsafePointer[Int32, MutAnyOrigin],         # LWORK
-    UnsafePointer[Int32, MutAnyOrigin],         # INFO
+    UnsafePointer[Int32, MutAnyOrigin],  # M
+    UnsafePointer[Int32, MutAnyOrigin],  # N
+    UnsafePointer[Float32, MutAnyOrigin],  # A[lda*n]
+    UnsafePointer[Int32, MutAnyOrigin],  # LDA
+    UnsafePointer[Float32, MutAnyOrigin],  # TAU[min(M,N)]
+    UnsafePointer[Float32, MutAnyOrigin],  # WORK[lwork]
+    UnsafePointer[Int32, MutAnyOrigin],  # LWORK
+    UnsafePointer[Int32, MutAnyOrigin],  # INFO
 ) thin -> None
 
 comptime lapack_dgeqrf_type = def(
@@ -170,15 +224,15 @@ comptime lapack_dgeqrf_type = def(
 ) thin -> None
 
 comptime lapack_sorgqr_type = def(
-    UnsafePointer[Int32, MutAnyOrigin],         # M
-    UnsafePointer[Int32, MutAnyOrigin],         # N
-    UnsafePointer[Int32, MutAnyOrigin],         # K
-    UnsafePointer[Float32, MutAnyOrigin],       # A
-    UnsafePointer[Int32, MutAnyOrigin],         # LDA
-    UnsafePointer[Float32, MutAnyOrigin],       # TAU
-    UnsafePointer[Float32, MutAnyOrigin],       # WORK
-    UnsafePointer[Int32, MutAnyOrigin],         # LWORK
-    UnsafePointer[Int32, MutAnyOrigin],         # INFO
+    UnsafePointer[Int32, MutAnyOrigin],  # M
+    UnsafePointer[Int32, MutAnyOrigin],  # N
+    UnsafePointer[Int32, MutAnyOrigin],  # K
+    UnsafePointer[Float32, MutAnyOrigin],  # A
+    UnsafePointer[Int32, MutAnyOrigin],  # LDA
+    UnsafePointer[Float32, MutAnyOrigin],  # TAU
+    UnsafePointer[Float32, MutAnyOrigin],  # WORK
+    UnsafePointer[Int32, MutAnyOrigin],  # LWORK
+    UnsafePointer[Int32, MutAnyOrigin],  # INFO
 ) thin -> None
 
 comptime lapack_dorgqr_type = def(
@@ -194,11 +248,11 @@ comptime lapack_dorgqr_type = def(
 ) thin -> None
 
 comptime lapack_spotrf_type = def(
-    UnsafePointer[Int8, MutAnyOrigin],          # UPLO ('U'/'L')
-    UnsafePointer[Int32, MutAnyOrigin],         # N
-    UnsafePointer[Float32, MutAnyOrigin],       # A
-    UnsafePointer[Int32, MutAnyOrigin],         # LDA
-    UnsafePointer[Int32, MutAnyOrigin],         # INFO
+    UnsafePointer[Int8, MutAnyOrigin],  # UPLO ('U'/'L')
+    UnsafePointer[Int32, MutAnyOrigin],  # N
+    UnsafePointer[Float32, MutAnyOrigin],  # A
+    UnsafePointer[Int32, MutAnyOrigin],  # LDA
+    UnsafePointer[Int32, MutAnyOrigin],  # INFO
 ) thin -> None
 
 comptime lapack_dpotrf_type = def(
@@ -210,15 +264,15 @@ comptime lapack_dpotrf_type = def(
 ) thin -> None
 
 comptime lapack_ssyev_type = def(
-    UnsafePointer[Int8, MutAnyOrigin],          # JOBZ ('N'/'V')
-    UnsafePointer[Int8, MutAnyOrigin],          # UPLO
-    UnsafePointer[Int32, MutAnyOrigin],         # N
-    UnsafePointer[Float32, MutAnyOrigin],       # A
-    UnsafePointer[Int32, MutAnyOrigin],         # LDA
-    UnsafePointer[Float32, MutAnyOrigin],       # W[N]
-    UnsafePointer[Float32, MutAnyOrigin],       # WORK
-    UnsafePointer[Int32, MutAnyOrigin],         # LWORK
-    UnsafePointer[Int32, MutAnyOrigin],         # INFO
+    UnsafePointer[Int8, MutAnyOrigin],  # JOBZ ('N'/'V')
+    UnsafePointer[Int8, MutAnyOrigin],  # UPLO
+    UnsafePointer[Int32, MutAnyOrigin],  # N
+    UnsafePointer[Float32, MutAnyOrigin],  # A
+    UnsafePointer[Int32, MutAnyOrigin],  # LDA
+    UnsafePointer[Float32, MutAnyOrigin],  # W[N]
+    UnsafePointer[Float32, MutAnyOrigin],  # WORK
+    UnsafePointer[Int32, MutAnyOrigin],  # LWORK
+    UnsafePointer[Int32, MutAnyOrigin],  # INFO
 ) thin -> None
 
 comptime lapack_dsyev_type = def(
@@ -234,20 +288,20 @@ comptime lapack_dsyev_type = def(
 ) thin -> None
 
 comptime lapack_sgesdd_type = def(
-    UnsafePointer[Int8, MutAnyOrigin],          # JOBZ
-    UnsafePointer[Int32, MutAnyOrigin],         # M
-    UnsafePointer[Int32, MutAnyOrigin],         # N
-    UnsafePointer[Float32, MutAnyOrigin],       # A
-    UnsafePointer[Int32, MutAnyOrigin],         # LDA
-    UnsafePointer[Float32, MutAnyOrigin],       # S
-    UnsafePointer[Float32, MutAnyOrigin],       # U
-    UnsafePointer[Int32, MutAnyOrigin],         # LDU
-    UnsafePointer[Float32, MutAnyOrigin],       # VT
-    UnsafePointer[Int32, MutAnyOrigin],         # LDVT
-    UnsafePointer[Float32, MutAnyOrigin],       # WORK
-    UnsafePointer[Int32, MutAnyOrigin],         # LWORK
-    UnsafePointer[Int32, MutAnyOrigin],         # IWORK[8*min(M,N)]
-    UnsafePointer[Int32, MutAnyOrigin],         # INFO
+    UnsafePointer[Int8, MutAnyOrigin],  # JOBZ
+    UnsafePointer[Int32, MutAnyOrigin],  # M
+    UnsafePointer[Int32, MutAnyOrigin],  # N
+    UnsafePointer[Float32, MutAnyOrigin],  # A
+    UnsafePointer[Int32, MutAnyOrigin],  # LDA
+    UnsafePointer[Float32, MutAnyOrigin],  # S
+    UnsafePointer[Float32, MutAnyOrigin],  # U
+    UnsafePointer[Int32, MutAnyOrigin],  # LDU
+    UnsafePointer[Float32, MutAnyOrigin],  # VT
+    UnsafePointer[Int32, MutAnyOrigin],  # LDVT
+    UnsafePointer[Float32, MutAnyOrigin],  # WORK
+    UnsafePointer[Int32, MutAnyOrigin],  # LWORK
+    UnsafePointer[Int32, MutAnyOrigin],  # IWORK[8*min(M,N)]
+    UnsafePointer[Int32, MutAnyOrigin],  # INFO
 ) thin -> None
 
 comptime lapack_dgesdd_type = def(
@@ -268,20 +322,20 @@ comptime lapack_dgesdd_type = def(
 ) thin -> None
 
 comptime lapack_sgelsd_type = def(
-    UnsafePointer[Int32, MutAnyOrigin],         # M
-    UnsafePointer[Int32, MutAnyOrigin],         # N
-    UnsafePointer[Int32, MutAnyOrigin],         # NRHS
-    UnsafePointer[Float32, MutAnyOrigin],       # A
-    UnsafePointer[Int32, MutAnyOrigin],         # LDA
-    UnsafePointer[Float32, MutAnyOrigin],       # B
-    UnsafePointer[Int32, MutAnyOrigin],         # LDB
-    UnsafePointer[Float32, MutAnyOrigin],       # S[min(M,N)]
-    UnsafePointer[Float32, MutAnyOrigin],       # RCOND
-    UnsafePointer[Int32, MutAnyOrigin],         # RANK
-    UnsafePointer[Float32, MutAnyOrigin],       # WORK
-    UnsafePointer[Int32, MutAnyOrigin],         # LWORK
-    UnsafePointer[Int32, MutAnyOrigin],         # IWORK
-    UnsafePointer[Int32, MutAnyOrigin],         # INFO
+    UnsafePointer[Int32, MutAnyOrigin],  # M
+    UnsafePointer[Int32, MutAnyOrigin],  # N
+    UnsafePointer[Int32, MutAnyOrigin],  # NRHS
+    UnsafePointer[Float32, MutAnyOrigin],  # A
+    UnsafePointer[Int32, MutAnyOrigin],  # LDA
+    UnsafePointer[Float32, MutAnyOrigin],  # B
+    UnsafePointer[Int32, MutAnyOrigin],  # LDB
+    UnsafePointer[Float32, MutAnyOrigin],  # S[min(M,N)]
+    UnsafePointer[Float32, MutAnyOrigin],  # RCOND
+    UnsafePointer[Int32, MutAnyOrigin],  # RANK
+    UnsafePointer[Float32, MutAnyOrigin],  # WORK
+    UnsafePointer[Int32, MutAnyOrigin],  # LWORK
+    UnsafePointer[Int32, MutAnyOrigin],  # IWORK
+    UnsafePointer[Int32, MutAnyOrigin],  # INFO
 ) thin -> None
 
 comptime lapack_dgelsd_type = def(
@@ -302,20 +356,20 @@ comptime lapack_dgelsd_type = def(
 ) thin -> None
 
 comptime lapack_sgeev_type = def(
-    UnsafePointer[Int8, MutAnyOrigin],          # JOBVL
-    UnsafePointer[Int8, MutAnyOrigin],          # JOBVR
-    UnsafePointer[Int32, MutAnyOrigin],         # N
-    UnsafePointer[Float32, MutAnyOrigin],       # A
-    UnsafePointer[Int32, MutAnyOrigin],         # LDA
-    UnsafePointer[Float32, MutAnyOrigin],       # WR[N]
-    UnsafePointer[Float32, MutAnyOrigin],       # WI[N]
-    UnsafePointer[Float32, MutAnyOrigin],       # VL
-    UnsafePointer[Int32, MutAnyOrigin],         # LDVL
-    UnsafePointer[Float32, MutAnyOrigin],       # VR
-    UnsafePointer[Int32, MutAnyOrigin],         # LDVR
-    UnsafePointer[Float32, MutAnyOrigin],       # WORK
-    UnsafePointer[Int32, MutAnyOrigin],         # LWORK
-    UnsafePointer[Int32, MutAnyOrigin],         # INFO
+    UnsafePointer[Int8, MutAnyOrigin],  # JOBVL
+    UnsafePointer[Int8, MutAnyOrigin],  # JOBVR
+    UnsafePointer[Int32, MutAnyOrigin],  # N
+    UnsafePointer[Float32, MutAnyOrigin],  # A
+    UnsafePointer[Int32, MutAnyOrigin],  # LDA
+    UnsafePointer[Float32, MutAnyOrigin],  # WR[N]
+    UnsafePointer[Float32, MutAnyOrigin],  # WI[N]
+    UnsafePointer[Float32, MutAnyOrigin],  # VL
+    UnsafePointer[Int32, MutAnyOrigin],  # LDVL
+    UnsafePointer[Float32, MutAnyOrigin],  # VR
+    UnsafePointer[Int32, MutAnyOrigin],  # LDVR
+    UnsafePointer[Float32, MutAnyOrigin],  # WORK
+    UnsafePointer[Int32, MutAnyOrigin],  # LWORK
+    UnsafePointer[Int32, MutAnyOrigin],  # INFO
 ) thin -> None
 
 comptime lapack_dgeev_type = def(
@@ -558,6 +612,96 @@ def call_vv_f64[
         rebind[UnsafePointer[Float64, MutAnyOrigin]](out_ptr),
         rebind[UnsafePointer[Float64, ImmutAnyOrigin]](src_ptr),
         rebind[UnsafePointer[Int32, ImmutAnyOrigin]](UnsafePointer(to=count)),
+    )
+
+
+@always_inline
+def call_vdsp_binary_f32[
+    func_name: StaticString
+](
+    lhs_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    rhs_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    out_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    count_value: Int,
+) raises:
+    var function = get_accelerate_function[func_name, vdsp_binary_f32_type]()
+    function(
+        rebind[UnsafePointer[Float32, ImmutAnyOrigin]](lhs_ptr),
+        Int64(1),
+        rebind[UnsafePointer[Float32, ImmutAnyOrigin]](rhs_ptr),
+        Int64(1),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](out_ptr),
+        Int64(1),
+        UInt64(count_value),
+    )
+
+
+@always_inline
+def call_vdsp_binary_strided_f32[
+    func_name: StaticString
+](
+    lhs_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    lhs_stride: Int,
+    rhs_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    rhs_stride: Int,
+    out_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    out_stride: Int,
+    count_value: Int,
+) raises:
+    var function = get_accelerate_function[func_name, vdsp_binary_f32_type]()
+    function(
+        rebind[UnsafePointer[Float32, ImmutAnyOrigin]](lhs_ptr),
+        Int64(lhs_stride),
+        rebind[UnsafePointer[Float32, ImmutAnyOrigin]](rhs_ptr),
+        Int64(rhs_stride),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](out_ptr),
+        Int64(out_stride),
+        UInt64(count_value),
+    )
+
+
+@always_inline
+def call_vdsp_binary_f64[
+    func_name: StaticString
+](
+    lhs_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    rhs_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    out_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    count_value: Int,
+) raises:
+    var function = get_accelerate_function[func_name, vdsp_binary_f64_type]()
+    function(
+        rebind[UnsafePointer[Float64, ImmutAnyOrigin]](lhs_ptr),
+        Int64(1),
+        rebind[UnsafePointer[Float64, ImmutAnyOrigin]](rhs_ptr),
+        Int64(1),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](out_ptr),
+        Int64(1),
+        UInt64(count_value),
+    )
+
+
+@always_inline
+def call_vdsp_binary_strided_f64[
+    func_name: StaticString
+](
+    lhs_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    lhs_stride: Int,
+    rhs_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    rhs_stride: Int,
+    out_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    out_stride: Int,
+    count_value: Int,
+) raises:
+    var function = get_accelerate_function[func_name, vdsp_binary_f64_type]()
+    function(
+        rebind[UnsafePointer[Float64, ImmutAnyOrigin]](lhs_ptr),
+        Int64(lhs_stride),
+        rebind[UnsafePointer[Float64, ImmutAnyOrigin]](rhs_ptr),
+        Int64(rhs_stride),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](out_ptr),
+        Int64(out_stride),
+        UInt64(count_value),
     )
 
 
@@ -807,6 +951,81 @@ def cblas_dgemv_row_major_ld(
         0.0,
         rebind[UnsafePointer[Float64, MutAnyOrigin]](y_ptr),
         Int32(1),
+    )
+
+
+@always_inline
+def get_cblas_cgemm_function() raises -> cblas_cgemm_type:
+    return get_blas_function["cblas_cgemm", cblas_cgemm_type]()
+
+
+@always_inline
+def get_cblas_zgemm_function() raises -> cblas_zgemm_type:
+    return get_blas_function["cblas_zgemm", cblas_zgemm_type]()
+
+
+@always_inline
+def cblas_cgemm_row_major(
+    m: Int,
+    n: Int,
+    k: Int,
+    c_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    a_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    b_ptr: UnsafePointer[Float32, MutExternalOrigin],
+) raises:
+    # Complex single-precision GEMM. Row-major layout, no transposes.
+    # Pointers are interleaved (real, imag) float32 pairs; lda/ldb/ldc are
+    # in *complex* element units, not float units.
+    var cgemm = get_cblas_cgemm_function()
+    var alpha = InlineArray[Float32, 2](fill=0.0)
+    alpha[0] = 1.0
+    var beta = InlineArray[Float32, 2](fill=0.0)
+    cgemm(
+        _CBLASOrder.ROW_MAJOR,
+        _CBLASTranspose.NO_TRANSPOSE,
+        _CBLASTranspose.NO_TRANSPOSE,
+        Int32(m),
+        Int32(n),
+        Int32(k),
+        rebind[UnsafePointer[Float32, ImmutAnyOrigin]](alpha.unsafe_ptr()),
+        rebind[UnsafePointer[Float32, ImmutAnyOrigin]](a_ptr),
+        Int32(k),
+        rebind[UnsafePointer[Float32, ImmutAnyOrigin]](b_ptr),
+        Int32(n),
+        rebind[UnsafePointer[Float32, ImmutAnyOrigin]](beta.unsafe_ptr()),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](c_ptr),
+        Int32(n),
+    )
+
+
+@always_inline
+def cblas_zgemm_row_major(
+    m: Int,
+    n: Int,
+    k: Int,
+    c_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    a_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    b_ptr: UnsafePointer[Float64, MutExternalOrigin],
+) raises:
+    var zgemm = get_cblas_zgemm_function()
+    var alpha = InlineArray[Float64, 2](fill=0.0)
+    alpha[0] = 1.0
+    var beta = InlineArray[Float64, 2](fill=0.0)
+    zgemm(
+        _CBLASOrder.ROW_MAJOR,
+        _CBLASTranspose.NO_TRANSPOSE,
+        _CBLASTranspose.NO_TRANSPOSE,
+        Int32(m),
+        Int32(n),
+        Int32(k),
+        rebind[UnsafePointer[Float64, ImmutAnyOrigin]](alpha.unsafe_ptr()),
+        rebind[UnsafePointer[Float64, ImmutAnyOrigin]](a_ptr),
+        Int32(k),
+        rebind[UnsafePointer[Float64, ImmutAnyOrigin]](b_ptr),
+        Int32(n),
+        rebind[UnsafePointer[Float64, ImmutAnyOrigin]](beta.unsafe_ptr()),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](c_ptr),
+        Int32(n),
     )
 
 

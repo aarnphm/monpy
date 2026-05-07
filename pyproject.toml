@@ -10,6 +10,9 @@ requires-python = ">=3.11"
 [project.optional-dependencies]
 dev = ["numpy>=2", "pytest>=9"]
 
+[project.scripts]
+monpy-bench = "monpy._bench.sweep:main"
+
 [tool.mohaus]
 mojo-src = "src"
 python-src = "python"

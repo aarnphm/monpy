@@ -20,7 +20,7 @@ manual definition breaks the cycle.
 from std.collections import List
 
 
-struct IntTuple(Copyable, Movable, Defaultable, Equatable, Writable):
+struct IntTuple(Copyable, Defaultable, Equatable, Movable, Writable):
     """A leaf-or-tuple recursive value over `Int`."""
 
     var _is_leaf: Bool

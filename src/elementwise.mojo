@@ -33,12 +33,18 @@ from std.memory.unsafe_pointer import alloc
 from std.sys import CompilationTarget, simd_width_of
 
 from accelerate import (
+    call_vdsp_binary_f32,
+    call_vdsp_binary_f64,
+    call_vdsp_binary_strided_f32,
+    call_vdsp_binary_strided_f64,
     call_vv_f32,
     call_vv_f64,
+    cblas_cgemm_row_major,
     cblas_dgemm_row_major_ld,
     cblas_dgemv_row_major_ld,
     cblas_sgemm_row_major_ld,
     cblas_sgemv_row_major_ld,
+    cblas_zgemm_row_major,
     lapack_dgeev,
     lapack_dgelsd,
     lapack_dgeqrf,
@@ -61,13 +67,19 @@ from accelerate import (
 from domain import (
     BACKEND_ACCELERATE,
     BACKEND_FUSED,
+    DTYPE_COMPLEX128,
+    DTYPE_COMPLEX64,
     DTYPE_FLOAT16,
     DTYPE_FLOAT32,
     DTYPE_FLOAT64,
+    DTYPE_INT16,
     DTYPE_INT32,
     DTYPE_INT64,
+    DTYPE_INT8,
+    DTYPE_UINT16,
     DTYPE_UINT32,
     DTYPE_UINT64,
+    DTYPE_UINT8,
     OP_ADD,
     OP_ARCTAN2,
     OP_COPYSIGN,
@@ -108,6 +120,7 @@ from domain import (
     UNARY_LOG1P,
     UNARY_LOG2,
     UNARY_LOGICAL_NOT,
+    UNARY_CONJUGATE,
     UNARY_NEGATE,
     UNARY_POSITIVE,
     UNARY_RAD2DEG,
@@ -128,10 +141,18 @@ from array import (
     contiguous_f16_ptr,
     contiguous_f32_ptr,
     contiguous_f64_ptr,
+    contiguous_i16_ptr,
     contiguous_i32_ptr,
     contiguous_i64_ptr,
+    contiguous_i8_ptr,
+    contiguous_u16_ptr,
     contiguous_u32_ptr,
     contiguous_u64_ptr,
+    contiguous_u8_ptr,
+    get_physical_c128_imag,
+    get_physical_c128_real,
+    get_physical_c64_imag,
+    get_physical_c64_real,
     get_logical_as_f64,
     has_negative_strides,
     has_zero_strides,
@@ -275,9 +296,7 @@ def apply_unary_f64(value: Float64, op: Int) raises -> Float64:
 
 def apply_binary_typed_vec[
     dtype: DType, width: Int
-](
-    lhs: SIMD[dtype, width], rhs: SIMD[dtype, width], op: Int
-) raises -> SIMD[dtype, width]:
+](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width], op: Int) raises -> SIMD[dtype, width]:
     # Comptime-typed parametric variant of apply_binary_*_vec. Once a kernel
     # has dispatched on dtype at the runtime boundary, all subsequent SIMD
     # work is dtype-monomorphic — this function lets us write each kernel
@@ -343,20 +362,22 @@ def apply_binary_typed_vec[
         else:
             return lhs.lt(rhs).select(lhs, rhs)
     if op == OP_ARCTAN2:
-        comptime if dtype.is_floating_point():
+        # f16 has no `atan2f16` extern; KGEN refuses to legalize the call.
+        # F16 paths route to f64 round-trip via `apply_binary_f64` upstream.
+        comptime if (dtype.is_floating_point() and dtype != DType.float16):
             return atan2(lhs, rhs)
         else:
-            raise Error("arctan2 requires floating-point dtype")
+            raise Error("arctan2 requires float32/float64 dtype")
     if op == OP_HYPOT:
-        comptime if dtype.is_floating_point():
+        comptime if (dtype.is_floating_point() and dtype != DType.float16):
             return hypot(lhs, rhs)
         else:
-            raise Error("hypot requires floating-point dtype")
+            raise Error("hypot requires float32/float64 dtype")
     if op == OP_COPYSIGN:
-        comptime if dtype.is_floating_point():
+        comptime if (dtype.is_floating_point() and dtype != DType.float16):
             return copysign(lhs, rhs)
         else:
-            raise Error("copysign requires floating-point dtype")
+            raise Error("copysign requires float32/float64 dtype")
     raise Error("unknown binary op")
 
 
@@ -386,9 +407,7 @@ def binary_same_shape_contig_typed[
         )
         i += width
     while i < size:
-        out_ptr[i] = apply_binary_typed_vec[dtype, 1](
-            SIMD[dtype, 1](lhs_ptr[i]), SIMD[dtype, 1](rhs_ptr[i]), op
-        )[0]
+        out_ptr[i] = apply_binary_typed_vec[dtype, 1](SIMD[dtype, 1](lhs_ptr[i]), SIMD[dtype, 1](rhs_ptr[i]), op)[0]
         i += 1
 
 
@@ -412,16 +431,12 @@ def binary_scalar_contig_typed[
         if scalar_on_left:
             out_ptr.store(
                 i,
-                apply_binary_typed_vec[dtype, width](
-                    scalar_vec, array_vec, op
-                ),
+                apply_binary_typed_vec[dtype, width](scalar_vec, array_vec, op),
             )
         else:
             out_ptr.store(
                 i,
-                apply_binary_typed_vec[dtype, width](
-                    array_vec, scalar_vec, op
-                ),
+                apply_binary_typed_vec[dtype, width](array_vec, scalar_vec, op),
             )
         i += width
     while i < size:
@@ -506,9 +521,7 @@ def apply_unary_typed_vec[
     if op == UNARY_RINT:
         return math_round(value)
     if op == UNARY_LOGICAL_NOT:
-        return value.eq(SIMD[dtype, width](0)).select(
-            SIMD[dtype, width](1), SIMD[dtype, width](0)
-        )
+        return value.eq(SIMD[dtype, width](0)).select(SIMD[dtype, width](1), SIMD[dtype, width](0))
     raise Error("unknown unary op")
 
 
@@ -564,9 +577,7 @@ def strided_binary_walk_typed[
                 )
                 i += width
             while i < inner_size:
-                op_[i] = apply_binary_typed_vec[dtype, 1](
-                    SIMD[dtype, 1](lp[i]), SIMD[dtype, 1](rp[i]), op
-                )[0]
+                op_[i] = apply_binary_typed_vec[dtype, 1](SIMD[dtype, 1](lp[i]), SIMD[dtype, 1](rp[i]), op)[0]
                 i += 1
         elif inner_kind == 2:
             var lp = lhs_data + lhs_offset
@@ -579,14 +590,10 @@ def strided_binary_walk_typed[
                     op,
                 )
                 comptime for k in range(width):
-                    result_data[
-                        result_offset + (i + k) * inner_result_stride
-                    ] = ovec[k]
+                    result_data[result_offset + (i + k) * inner_result_stride] = ovec[k]
                 i += width
             while i < inner_size:
-                result_data[
-                    result_offset + i * inner_result_stride
-                ] = apply_binary_typed_vec[dtype, 1](
+                result_data[result_offset + i * inner_result_stride] = apply_binary_typed_vec[dtype, 1](
                     SIMD[dtype, 1](lp[i]), SIMD[dtype, 1](rp[i]), op
                 )[0]
                 i += 1
@@ -599,28 +606,16 @@ def strided_binary_walk_typed[
             # reversed, matching result's stride sign).
             var i = 0
             while i + width <= inner_size:
-                var lvec = (
-                    (lhs_data + lhs_offset - i - width + 1)
-                    .load[width=width](0)
-                    .reversed()
-                )
-                var rvec = (
-                    (rhs_data + rhs_offset - i - width + 1)
-                    .load[width=width](0)
-                    .reversed()
-                )
+                var lvec = (lhs_data + lhs_offset - i - width + 1).load[width=width](0).reversed()
+                var rvec = (rhs_data + rhs_offset - i - width + 1).load[width=width](0).reversed()
                 var ovec = apply_binary_typed_vec[dtype, width](lvec, rvec, op)
                 if inner_result_stride == 1:
                     (result_data + result_offset + i).store(0, ovec)
                 else:
-                    (result_data + result_offset - i - width + 1).store(
-                        0, ovec.reversed()
-                    )
+                    (result_data + result_offset - i - width + 1).store(0, ovec.reversed())
                 i += width
             while i < inner_size:
-                result_data[
-                    result_offset + i * inner_result_stride
-                ] = apply_binary_typed_vec[dtype, 1](
+                result_data[result_offset + i * inner_result_stride] = apply_binary_typed_vec[dtype, 1](
                     SIMD[dtype, 1](lhs_data[lhs_offset - i]),
                     SIMD[dtype, 1](rhs_data[rhs_offset - i]),
                     op,
@@ -628,15 +623,9 @@ def strided_binary_walk_typed[
                 i += 1
         else:
             for i in range(inner_size):
-                result_data[
-                    result_offset + i * inner_result_stride
-                ] = apply_binary_typed_vec[dtype, 1](
-                    SIMD[dtype, 1](
-                        lhs_data[lhs_offset + i * inner_lhs_stride]
-                    ),
-                    SIMD[dtype, 1](
-                        rhs_data[rhs_offset + i * inner_rhs_stride]
-                    ),
+                result_data[result_offset + i * inner_result_stride] = apply_binary_typed_vec[dtype, 1](
+                    SIMD[dtype, 1](lhs_data[lhs_offset + i * inner_lhs_stride]),
+                    SIMD[dtype, 1](rhs_data[rhs_offset + i * inner_rhs_stride]),
                     op,
                 )[0]
         if outer_ndim == 0:
@@ -684,16 +673,12 @@ def binary_row_broadcast_contig_typed[
             if row_on_left:
                 out_ptr.store(
                     matrix_index,
-                    apply_binary_typed_vec[dtype, width](
-                        row_vec, matrix_vec, op
-                    ),
+                    apply_binary_typed_vec[dtype, width](row_vec, matrix_vec, op),
                 )
             else:
                 out_ptr.store(
                     matrix_index,
-                    apply_binary_typed_vec[dtype, width](
-                        matrix_vec, row_vec, op
-                    ),
+                    apply_binary_typed_vec[dtype, width](matrix_vec, row_vec, op),
                 )
             j += width
         while j < cols:
@@ -701,13 +686,9 @@ def binary_row_broadcast_contig_typed[
             var lhs_v = SIMD[dtype, 1](matrix_ptr[matrix_index])
             var rhs_v = SIMD[dtype, 1](row_ptr[j])
             if row_on_left:
-                out_ptr[matrix_index] = apply_binary_typed_vec[dtype, 1](
-                    rhs_v, lhs_v, op
-                )[0]
+                out_ptr[matrix_index] = apply_binary_typed_vec[dtype, 1](rhs_v, lhs_v, op)[0]
             else:
-                out_ptr[matrix_index] = apply_binary_typed_vec[dtype, 1](
-                    lhs_v, rhs_v, op
-                )[0]
+                out_ptr[matrix_index] = apply_binary_typed_vec[dtype, 1](lhs_v, rhs_v, op)[0]
             j += 1
 
 
@@ -759,16 +740,194 @@ def unary_contig_typed[
     while i + width <= size:
         out_ptr.store(
             i,
-            apply_unary_typed_vec[dtype, width](
-                src_ptr.load[width=width](i), op
-            ),
+            apply_unary_typed_vec[dtype, width](src_ptr.load[width=width](i), op),
         )
         i += width
     while i < size:
-        out_ptr[i] = apply_unary_typed_vec[dtype, 1](
-            SIMD[dtype, 1](src_ptr[i]), op
-        )[0]
+        out_ptr[i] = apply_unary_typed_vec[dtype, 1](SIMD[dtype, 1](src_ptr[i]), op)[0]
         i += 1
+
+
+def apply_unary_preserve_typed_vec[
+    dtype: DType, width: Int
+](value: SIMD[dtype, width], op: Int) raises -> SIMD[dtype, width]:
+    # Preserve-dtype unary ops: works on both float and integer dtypes.
+    # Excludes the float-only ops (sin/cos/exp/log/etc.) which go through
+    # `apply_unary_typed_vec` and require a float result anyway via
+    # `dtype_result_for_unary`.
+    if op == UNARY_NEGATE:
+        return -value
+    if op == UNARY_POSITIVE:
+        return value
+    if op == UNARY_ABS:
+        comptime if dtype.is_unsigned():
+            return value  # unsigned values are already non-negative
+        else:
+            var neg = -value
+            return value.lt(SIMD[dtype, width](0)).select(neg, value)
+    if op == UNARY_SQUARE:
+        return value * value
+    if op == UNARY_SIGN:
+        comptime if dtype.is_unsigned():
+            # uint sign: 0 → 0, anything else → 1.
+            return value.gt(SIMD[dtype, width](0)).select(SIMD[dtype, width](1), SIMD[dtype, width](0))
+        else:
+            comptime if dtype.is_floating_point():
+                var pos = value.gt(SIMD[dtype, width](0))
+                var neg = value.lt(SIMD[dtype, width](0))
+                var nan_mask = isnan(value)
+                var s = pos.select(SIMD[dtype, width](1), SIMD[dtype, width](0))
+                s = neg.select(SIMD[dtype, width](-1), s)
+                return nan_mask.select(SIMD[dtype, width](nan[dtype]()), s)
+            else:
+                var pos = value.gt(SIMD[dtype, width](0))
+                var neg = value.lt(SIMD[dtype, width](0))
+                var s = pos.select(SIMD[dtype, width](1), SIMD[dtype, width](0))
+                return neg.select(SIMD[dtype, width](-1), s)
+    if op == UNARY_FLOOR or op == UNARY_CEIL or op == UNARY_TRUNC or op == UNARY_RINT:
+        comptime if dtype.is_floating_point():
+            if op == UNARY_FLOOR:
+                return math_floor(value)
+            if op == UNARY_CEIL:
+                return math_ceil(value)
+            if op == UNARY_TRUNC:
+                return math_trunc(value)
+            return math_round(value)
+        else:
+            return value  # integers are already integral
+    if op == UNARY_LOGICAL_NOT:
+        return value.eq(SIMD[dtype, width](0)).select(SIMD[dtype, width](1), SIMD[dtype, width](0))
+    raise Error("unknown unary preserve op")
+
+
+def unary_preserve_contig_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    size: Int,
+    op: Int,
+) raises:
+    comptime width = simd_width_of[dtype]()
+    var i = 0
+    while i + width <= size:
+        out_ptr.store(
+            i,
+            apply_unary_preserve_typed_vec[dtype, width](src_ptr.load[width=width](i), op),
+        )
+        i += width
+    while i < size:
+        out_ptr[i] = apply_unary_preserve_typed_vec[dtype, 1](SIMD[dtype, 1](src_ptr[i]), op)[0]
+        i += 1
+
+
+def complex_unary_preserve_contig_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    n_elems: Int,
+    op: Int,
+) raises where dtype.is_floating_point():
+    # Complex unary preserve: NEGATE (both lanes), POSITIVE (id), CONJUGATE
+    # (negate imag), SQUARE ((a+bi)² = a²-b² + 2abi).
+    if op == UNARY_NEGATE:
+        # Scalar loop over 2N floats (interleaved re/im). The SIMD path
+        # would be valid but Mojo's f64 SIMD width and the size-6 mismatch
+        # in some configurations leaves imag tails unwritten — explicit
+        # walk is safe and the perf delta is negligible at small N.
+        for i in range(n_elems * 2):
+            out_ptr[i] = -src_ptr[i]
+        return
+    if op == UNARY_POSITIVE:
+        for i in range(n_elems * 2):
+            out_ptr[i] = src_ptr[i]
+        return
+    if op == UNARY_CONJUGATE:
+        for i in range(n_elems):
+            out_ptr[i * 2] = src_ptr[i * 2]
+            out_ptr[i * 2 + 1] = -src_ptr[i * 2 + 1]
+        return
+    if op == UNARY_SQUARE:
+        for i in range(n_elems):
+            var a = src_ptr[i * 2]
+            var b = src_ptr[i * 2 + 1]
+            out_ptr[i * 2] = a * a - b * b
+            out_ptr[i * 2 + 1] = Scalar[dtype](2) * a * b
+        return
+    raise Error("unsupported op for complex unary preserve kernel")
+
+
+def maybe_unary_preserve_contiguous(src: Array, mut result: Array, op: Int) raises -> Bool:
+    # Same-dtype c-contig fast path for preserve-dtype unary ops.
+    if src.dtype_code != result.dtype_code or not is_c_contiguous(src) or not is_c_contiguous(result):
+        return False
+    # Complex paths.
+    if src.dtype_code == DTYPE_COMPLEX64:
+        complex_unary_preserve_contig_typed[DType.float32](
+            contiguous_f32_ptr(src),
+            contiguous_f32_ptr(result),
+            src.size_value,
+            op,
+        )
+        return True
+    if src.dtype_code == DTYPE_COMPLEX128:
+        complex_unary_preserve_contig_typed[DType.float64](
+            contiguous_f64_ptr(src),
+            contiguous_f64_ptr(result),
+            src.size_value,
+            op,
+        )
+        return True
+    if src.dtype_code == DTYPE_FLOAT32:
+        unary_preserve_contig_typed[DType.float32](
+            contiguous_f32_ptr(src),
+            contiguous_f32_ptr(result),
+            src.size_value,
+            op,
+        )
+        return True
+    if src.dtype_code == DTYPE_FLOAT64:
+        unary_preserve_contig_typed[DType.float64](
+            contiguous_f64_ptr(src),
+            contiguous_f64_ptr(result),
+            src.size_value,
+            op,
+        )
+        return True
+    if src.dtype_code == DTYPE_INT64:
+        unary_preserve_contig_typed[DType.int64](
+            contiguous_i64_ptr(src),
+            contiguous_i64_ptr(result),
+            src.size_value,
+            op,
+        )
+        return True
+    if src.dtype_code == DTYPE_INT32:
+        unary_preserve_contig_typed[DType.int32](
+            contiguous_i32_ptr(src),
+            contiguous_i32_ptr(result),
+            src.size_value,
+            op,
+        )
+        return True
+    if src.dtype_code == DTYPE_UINT64:
+        unary_preserve_contig_typed[DType.uint64](
+            contiguous_u64_ptr(src),
+            contiguous_u64_ptr(result),
+            src.size_value,
+            op,
+        )
+        return True
+    if src.dtype_code == DTYPE_UINT32:
+        unary_preserve_contig_typed[DType.uint32](
+            contiguous_u32_ptr(src),
+            contiguous_u32_ptr(result),
+            src.size_value,
+            op,
+        )
+        return True
+    return False
 
 
 def is_float_dtype(dtype_code: Int) -> Bool:
@@ -834,12 +993,8 @@ def rank2_blas_layout(array: Array) raises -> Rank2BlasLayout:
     return Rank2BlasLayout(False, False, 0)
 
 
-def maybe_unary_contiguous(
-    src: Array, mut result: Array, op: Int
-) raises -> Bool:
-    if not is_contiguous_float_array(src) or not is_contiguous_float_array(
-        result
-    ):
+def maybe_unary_contiguous(src: Array, mut result: Array, op: Int) raises -> Bool:
+    if not is_contiguous_float_array(src) or not is_contiguous_float_array(result):
         return False
     if src.dtype_code == DTYPE_FLOAT32 and result.dtype_code == DTYPE_FLOAT32:
         comptime if CompilationTarget.is_macos():
@@ -868,9 +1023,7 @@ def maybe_unary_contiguous(
     return False
 
 
-def maybe_unary_accelerate_f32(
-    src: Array, mut result: Array, op: Int
-) raises -> Bool:
+def maybe_unary_accelerate_f32(src: Array, mut result: Array, op: Int) raises -> Bool:
     var src_ptr = contiguous_f32_ptr(src)
     var out_ptr = contiguous_f32_ptr(result)
     if op == UNARY_SIN:
@@ -887,9 +1040,7 @@ def maybe_unary_accelerate_f32(
     return True
 
 
-def maybe_unary_accelerate_f64(
-    src: Array, mut result: Array, op: Int
-) raises -> Bool:
+def maybe_unary_accelerate_f64(src: Array, mut result: Array, op: Int) raises -> Bool:
     var src_ptr = contiguous_f64_ptr(src)
     var out_ptr = contiguous_f64_ptr(result)
     if op == UNARY_SIN:
@@ -904,9 +1055,206 @@ def maybe_unary_accelerate_f64(
     return True
 
 
-def maybe_binary_same_shape_contiguous(
-    lhs: Array, rhs: Array, mut result: Array, op: Int
-) raises -> Bool:
+def maybe_binary_accelerate_f32(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
+    var lhs_ptr = contiguous_f32_ptr(lhs)
+    var rhs_ptr = contiguous_f32_ptr(rhs)
+    var out_ptr = contiguous_f32_ptr(result)
+    if op == OP_ADD:
+        call_vdsp_binary_f32["vDSP_vadd"](lhs_ptr, rhs_ptr, out_ptr, result.size_value)
+    elif op == OP_SUB:
+        call_vdsp_binary_f32["vDSP_vsub"](rhs_ptr, lhs_ptr, out_ptr, result.size_value)
+    elif op == OP_MUL:
+        call_vdsp_binary_f32["vDSP_vmul"](lhs_ptr, rhs_ptr, out_ptr, result.size_value)
+    elif op == OP_DIV:
+        call_vdsp_binary_f32["vDSP_vdiv"](rhs_ptr, lhs_ptr, out_ptr, result.size_value)
+    else:
+        return False
+    result.backend_code = BACKEND_ACCELERATE
+    return True
+
+
+def maybe_binary_accelerate_f64(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
+    var lhs_ptr = contiguous_f64_ptr(lhs)
+    var rhs_ptr = contiguous_f64_ptr(rhs)
+    var out_ptr = contiguous_f64_ptr(result)
+    if op == OP_ADD:
+        call_vdsp_binary_f64["vDSP_vaddD"](lhs_ptr, rhs_ptr, out_ptr, result.size_value)
+    elif op == OP_SUB:
+        call_vdsp_binary_f64["vDSP_vsubD"](rhs_ptr, lhs_ptr, out_ptr, result.size_value)
+    elif op == OP_MUL:
+        call_vdsp_binary_f64["vDSP_vmulD"](lhs_ptr, rhs_ptr, out_ptr, result.size_value)
+    elif op == OP_DIV:
+        call_vdsp_binary_f64["vDSP_vdivD"](rhs_ptr, lhs_ptr, out_ptr, result.size_value)
+    else:
+        return False
+    result.backend_code = BACKEND_ACCELERATE
+    return True
+
+
+def maybe_binary_rank1_strided_accelerate(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
+    if (
+        len(lhs.shape) != 1
+        or not same_shape(lhs.shape, rhs.shape)
+        or not same_shape(lhs.shape, result.shape)
+        or not is_c_contiguous(result)
+    ):
+        return False
+    comptime if not CompilationTarget.is_macos():
+        return False
+    if lhs.dtype_code == DTYPE_FLOAT32 and rhs.dtype_code == DTYPE_FLOAT32 and result.dtype_code == DTYPE_FLOAT32:
+        var lhs_ptr = contiguous_f32_ptr(lhs)
+        var rhs_ptr = contiguous_f32_ptr(rhs)
+        var out_ptr = contiguous_f32_ptr(result)
+        if op == OP_ADD:
+            call_vdsp_binary_strided_f32["vDSP_vadd"](
+                lhs_ptr,
+                lhs.strides[0],
+                rhs_ptr,
+                rhs.strides[0],
+                out_ptr,
+                1,
+                result.size_value,
+            )
+        elif op == OP_SUB:
+            call_vdsp_binary_strided_f32["vDSP_vsub"](
+                rhs_ptr,
+                rhs.strides[0],
+                lhs_ptr,
+                lhs.strides[0],
+                out_ptr,
+                1,
+                result.size_value,
+            )
+        elif op == OP_MUL:
+            call_vdsp_binary_strided_f32["vDSP_vmul"](
+                lhs_ptr,
+                lhs.strides[0],
+                rhs_ptr,
+                rhs.strides[0],
+                out_ptr,
+                1,
+                result.size_value,
+            )
+        elif op == OP_DIV:
+            call_vdsp_binary_strided_f32["vDSP_vdiv"](
+                rhs_ptr,
+                rhs.strides[0],
+                lhs_ptr,
+                lhs.strides[0],
+                out_ptr,
+                1,
+                result.size_value,
+            )
+        else:
+            return False
+        result.backend_code = BACKEND_ACCELERATE
+        return True
+    if lhs.dtype_code == DTYPE_FLOAT64 and rhs.dtype_code == DTYPE_FLOAT64 and result.dtype_code == DTYPE_FLOAT64:
+        var lhs_ptr = contiguous_f64_ptr(lhs)
+        var rhs_ptr = contiguous_f64_ptr(rhs)
+        var out_ptr = contiguous_f64_ptr(result)
+        if op == OP_ADD:
+            call_vdsp_binary_strided_f64["vDSP_vaddD"](
+                lhs_ptr,
+                lhs.strides[0],
+                rhs_ptr,
+                rhs.strides[0],
+                out_ptr,
+                1,
+                result.size_value,
+            )
+        elif op == OP_SUB:
+            call_vdsp_binary_strided_f64["vDSP_vsubD"](
+                rhs_ptr,
+                rhs.strides[0],
+                lhs_ptr,
+                lhs.strides[0],
+                out_ptr,
+                1,
+                result.size_value,
+            )
+        elif op == OP_MUL:
+            call_vdsp_binary_strided_f64["vDSP_vmulD"](
+                lhs_ptr,
+                lhs.strides[0],
+                rhs_ptr,
+                rhs.strides[0],
+                out_ptr,
+                1,
+                result.size_value,
+            )
+        elif op == OP_DIV:
+            call_vdsp_binary_strided_f64["vDSP_vdivD"](
+                rhs_ptr,
+                rhs.strides[0],
+                lhs_ptr,
+                lhs.strides[0],
+                out_ptr,
+                1,
+                result.size_value,
+            )
+        else:
+            return False
+        result.backend_code = BACKEND_ACCELERATE
+        return True
+    return False
+
+
+def complex_binary_contig_typed[
+    dtype: DType
+](
+    lhs_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    rhs_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    n_elems: Int,
+    op: Int,
+) raises where dtype.is_floating_point():
+    # Complex arithmetic over interleaved (real, imag) pairs. n_elems is
+    # the count of complex elements; each occupies 2 lanes of `dtype`.
+    if op == OP_ADD or op == OP_SUB:
+        # Componentwise on the float pairs: add/sub treats interleaved
+        # storage as a 2N float vector. Reuse the existing typed kernel.
+        binary_same_shape_contig_typed[dtype](
+            lhs_ptr,
+            rhs_ptr,
+            out_ptr,
+            n_elems * 2,
+            op,
+        )
+        return
+    if op == OP_MUL:
+        for i in range(n_elems):
+            var a = lhs_ptr[i * 2]
+            var b = lhs_ptr[i * 2 + 1]
+            var c = rhs_ptr[i * 2]
+            var d = rhs_ptr[i * 2 + 1]
+            out_ptr[i * 2] = a * c - b * d
+            out_ptr[i * 2 + 1] = a * d + b * c
+        return
+    if op == OP_DIV:
+        # Smith's algorithm: avoids overflow when |c|, |d| are very different.
+        for i in range(n_elems):
+            var a = lhs_ptr[i * 2]
+            var b = lhs_ptr[i * 2 + 1]
+            var c = rhs_ptr[i * 2]
+            var d = rhs_ptr[i * 2 + 1]
+            var abs_c = c if c >= Scalar[dtype](0) else -c
+            var abs_d = d if d >= Scalar[dtype](0) else -d
+            if abs_c >= abs_d:
+                var r = d / c
+                var den = c + d * r
+                out_ptr[i * 2] = (a + b * r) / den
+                out_ptr[i * 2 + 1] = (b - a * r) / den
+            else:
+                var r = c / d
+                var den = c * r + d
+                out_ptr[i * 2] = (a * r + b) / den
+                out_ptr[i * 2 + 1] = (b * r - a) / den
+        return
+    raise Error("unsupported op for complex binary kernel")
+
+
+def maybe_binary_same_shape_contiguous(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
     if (
         not same_shape(lhs.shape, rhs.shape)
         or not same_shape(lhs.shape, result.shape)
@@ -915,13 +1263,13 @@ def maybe_binary_same_shape_contiguous(
         or not is_c_contiguous(result)
     ):
         return False
-    # Float fast paths first (most common).
+    # Complex paths first (storage is interleaved float pairs).
     if (
-        lhs.dtype_code == DTYPE_FLOAT32
-        and rhs.dtype_code == DTYPE_FLOAT32
-        and result.dtype_code == DTYPE_FLOAT32
+        lhs.dtype_code == DTYPE_COMPLEX64
+        and rhs.dtype_code == DTYPE_COMPLEX64
+        and result.dtype_code == DTYPE_COMPLEX64
     ):
-        binary_same_shape_contig_typed[DType.float32](
+        complex_binary_contig_typed[DType.float32](
             contiguous_f32_ptr(lhs),
             contiguous_f32_ptr(rhs),
             contiguous_f32_ptr(result),
@@ -930,10 +1278,35 @@ def maybe_binary_same_shape_contiguous(
         )
         return True
     if (
-        lhs.dtype_code == DTYPE_FLOAT64
-        and rhs.dtype_code == DTYPE_FLOAT64
-        and result.dtype_code == DTYPE_FLOAT64
+        lhs.dtype_code == DTYPE_COMPLEX128
+        and rhs.dtype_code == DTYPE_COMPLEX128
+        and result.dtype_code == DTYPE_COMPLEX128
     ):
+        complex_binary_contig_typed[DType.float64](
+            contiguous_f64_ptr(lhs),
+            contiguous_f64_ptr(rhs),
+            contiguous_f64_ptr(result),
+            result.size_value,
+            op,
+        )
+        return True
+    # Float fast paths first (most common).
+    if lhs.dtype_code == DTYPE_FLOAT32 and rhs.dtype_code == DTYPE_FLOAT32 and result.dtype_code == DTYPE_FLOAT32:
+        comptime if CompilationTarget.is_macos():
+            if maybe_binary_accelerate_f32(lhs, rhs, result, op):
+                return True
+        binary_same_shape_contig_typed[DType.float32](
+            contiguous_f32_ptr(lhs),
+            contiguous_f32_ptr(rhs),
+            contiguous_f32_ptr(result),
+            result.size_value,
+            op,
+        )
+        return True
+    if lhs.dtype_code == DTYPE_FLOAT64 and rhs.dtype_code == DTYPE_FLOAT64 and result.dtype_code == DTYPE_FLOAT64:
+        comptime if CompilationTarget.is_macos():
+            if maybe_binary_accelerate_f64(lhs, rhs, result, op):
+                return True
         binary_same_shape_contig_typed[DType.float64](
             contiguous_f64_ptr(lhs),
             contiguous_f64_ptr(rhs),
@@ -944,11 +1317,7 @@ def maybe_binary_same_shape_contiguous(
         return True
     # Phase 5b: typed int paths (int32/int64/uint32/uint64). Closes the
     # ~50× wrapper-bound gap on uint8/uint16/uint32/uint64 + int paths.
-    if (
-        lhs.dtype_code == DTYPE_INT64
-        and rhs.dtype_code == DTYPE_INT64
-        and result.dtype_code == DTYPE_INT64
-    ):
+    if lhs.dtype_code == DTYPE_INT64 and rhs.dtype_code == DTYPE_INT64 and result.dtype_code == DTYPE_INT64:
         binary_same_shape_contig_typed[DType.int64](
             contiguous_i64_ptr(lhs),
             contiguous_i64_ptr(rhs),
@@ -957,11 +1326,7 @@ def maybe_binary_same_shape_contiguous(
             op,
         )
         return True
-    if (
-        lhs.dtype_code == DTYPE_INT32
-        and rhs.dtype_code == DTYPE_INT32
-        and result.dtype_code == DTYPE_INT32
-    ):
+    if lhs.dtype_code == DTYPE_INT32 and rhs.dtype_code == DTYPE_INT32 and result.dtype_code == DTYPE_INT32:
         binary_same_shape_contig_typed[DType.int32](
             contiguous_i32_ptr(lhs),
             contiguous_i32_ptr(rhs),
@@ -970,11 +1335,7 @@ def maybe_binary_same_shape_contiguous(
             op,
         )
         return True
-    if (
-        lhs.dtype_code == DTYPE_UINT64
-        and rhs.dtype_code == DTYPE_UINT64
-        and result.dtype_code == DTYPE_UINT64
-    ):
+    if lhs.dtype_code == DTYPE_UINT64 and rhs.dtype_code == DTYPE_UINT64 and result.dtype_code == DTYPE_UINT64:
         binary_same_shape_contig_typed[DType.uint64](
             contiguous_u64_ptr(lhs),
             contiguous_u64_ptr(rhs),
@@ -983,11 +1344,7 @@ def maybe_binary_same_shape_contiguous(
             op,
         )
         return True
-    if (
-        lhs.dtype_code == DTYPE_UINT32
-        and rhs.dtype_code == DTYPE_UINT32
-        and result.dtype_code == DTYPE_UINT32
-    ):
+    if lhs.dtype_code == DTYPE_UINT32 and rhs.dtype_code == DTYPE_UINT32 and result.dtype_code == DTYPE_UINT32:
         binary_same_shape_contig_typed[DType.uint32](
             contiguous_u32_ptr(lhs),
             contiguous_u32_ptr(rhs),
@@ -996,21 +1353,120 @@ def maybe_binary_same_shape_contiguous(
             op,
         )
         return True
-    # Phase 5c float16: typed-vec dispatch deferred. Mojo's atan2/hypot/copysign
-    # extern bindings emit a conflicting-signature error for `f16` (no libm
-    # entry point exists for half-precision; `atan2f` overload is f32 only).
-    # f16 falls through to the f64 round-trip below until kernel codegen
-    # gates those float-only ops via `comptime if dtype is not float16`.
+    # Small-int paths: int8/int16/uint8/uint16.
+    if lhs.dtype_code == DTYPE_INT16 and rhs.dtype_code == DTYPE_INT16 and result.dtype_code == DTYPE_INT16:
+        binary_same_shape_contig_typed[DType.int16](
+            contiguous_i16_ptr(lhs),
+            contiguous_i16_ptr(rhs),
+            contiguous_i16_ptr(result),
+            result.size_value,
+            op,
+        )
+        return True
+    if lhs.dtype_code == DTYPE_INT8 and rhs.dtype_code == DTYPE_INT8 and result.dtype_code == DTYPE_INT8:
+        binary_same_shape_contig_typed[DType.int8](
+            contiguous_i8_ptr(lhs),
+            contiguous_i8_ptr(rhs),
+            contiguous_i8_ptr(result),
+            result.size_value,
+            op,
+        )
+        return True
+    if lhs.dtype_code == DTYPE_UINT16 and rhs.dtype_code == DTYPE_UINT16 and result.dtype_code == DTYPE_UINT16:
+        binary_same_shape_contig_typed[DType.uint16](
+            contiguous_u16_ptr(lhs),
+            contiguous_u16_ptr(rhs),
+            contiguous_u16_ptr(result),
+            result.size_value,
+            op,
+        )
+        return True
+    if lhs.dtype_code == DTYPE_UINT8 and rhs.dtype_code == DTYPE_UINT8 and result.dtype_code == DTYPE_UINT8:
+        binary_same_shape_contig_typed[DType.uint8](
+            contiguous_u8_ptr(lhs),
+            contiguous_u8_ptr(rhs),
+            contiguous_u8_ptr(result),
+            result.size_value,
+            op,
+        )
+        return True
+    # Phase 5c float16: typed-vec dispatch landed after the codegen workaround.
+    # `apply_binary_typed_vec` now gates `atan2`/`hypot`/`copysign` via
+    # `comptime if dtype is not DType.float16` so the f16 path skips those
+    # extern bindings (which Mojo can't legalize for half-precision).
+    # ARCTAN2/HYPOT/COPYSIGN with f16 inputs upstream-promote to f32/f64
+    # via `dtype_result_for_binary` so they never enter this kernel.
+    if lhs.dtype_code == DTYPE_FLOAT16 and rhs.dtype_code == DTYPE_FLOAT16 and result.dtype_code == DTYPE_FLOAT16:
+        binary_same_shape_contig_typed[DType.float16](
+            contiguous_f16_ptr(lhs),
+            contiguous_f16_ptr(rhs),
+            contiguous_f16_ptr(result),
+            result.size_value,
+            op,
+        )
+        return True
     # Fallback: f64 round-trip for any dtype combo we don't have a typed path for.
     for i in range(result.size_value):
         set_contiguous_from_f64(
             result,
             i,
-            apply_binary_f64(
-                contiguous_as_f64(lhs, i), contiguous_as_f64(rhs, i), op
-            ),
+            apply_binary_f64(contiguous_as_f64(lhs, i), contiguous_as_f64(rhs, i), op),
         )
     return True
+
+
+def complex_scalar_complex_contig_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    scalar_real: Scalar[dtype],
+    scalar_imag: Scalar[dtype],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    n_elems: Int,
+    op: Int,
+    scalar_on_left: Bool,
+) raises where dtype.is_floating_point():
+    # Complex x complex-scalar: full complex broadcast. ADD/SUB/MUL/DIV.
+    if op == OP_ADD:
+        for i in range(n_elems):
+            out_ptr[i * 2] = src_ptr[i * 2] + scalar_real
+            out_ptr[i * 2 + 1] = src_ptr[i * 2 + 1] + scalar_imag
+        return
+    if op == OP_SUB:
+        if scalar_on_left:
+            for i in range(n_elems):
+                out_ptr[i * 2] = scalar_real - src_ptr[i * 2]
+                out_ptr[i * 2 + 1] = scalar_imag - src_ptr[i * 2 + 1]
+        else:
+            for i in range(n_elems):
+                out_ptr[i * 2] = src_ptr[i * 2] - scalar_real
+                out_ptr[i * 2 + 1] = src_ptr[i * 2 + 1] - scalar_imag
+        return
+    if op == OP_MUL:
+        for i in range(n_elems):
+            var a = src_ptr[i * 2]
+            var b = src_ptr[i * 2 + 1]
+            out_ptr[i * 2] = a * scalar_real - b * scalar_imag
+            out_ptr[i * 2 + 1] = a * scalar_imag + b * scalar_real
+        return
+    if op == OP_DIV:
+        if scalar_on_left:
+            # scalar / complex_i = scalar * conj(c) / |c|²
+            for i in range(n_elems):
+                var a = src_ptr[i * 2]
+                var b = src_ptr[i * 2 + 1]
+                var denom = a * a + b * b
+                out_ptr[i * 2] = (scalar_real * a + scalar_imag * b) / denom
+                out_ptr[i * 2 + 1] = (scalar_imag * a - scalar_real * b) / denom
+        else:
+            for i in range(n_elems):
+                var a = src_ptr[i * 2]
+                var b = src_ptr[i * 2 + 1]
+                var denom = scalar_real * scalar_real + scalar_imag * scalar_imag
+                out_ptr[i * 2] = (a * scalar_real + b * scalar_imag) / denom
+                out_ptr[i * 2 + 1] = (b * scalar_real - a * scalar_imag) / denom
+        return
+    raise Error("unsupported op for complex × complex-scalar kernel")
 
 
 def maybe_binary_scalar_contiguous(
@@ -1023,11 +1479,56 @@ def maybe_binary_scalar_contiguous(
     if (
         len(scalar.shape) != 0
         or not same_shape(array.shape, result.shape)
-        or not is_contiguous_float_array(array)
-        or not is_contiguous_float_array(scalar)
-        or not is_contiguous_float_array(result)
+        or not is_c_contiguous(array)
+        or not is_c_contiguous(scalar)
+        or not is_c_contiguous(result)
     ):
         return False
+    # Complex paths: array is complex, scalar may be complex or real.
+    if array.dtype_code == DTYPE_COMPLEX64 and result.dtype_code == DTYPE_COMPLEX64:
+        var s_real: Float32
+        var s_imag: Float32
+        if scalar.dtype_code == DTYPE_COMPLEX64:
+            s_real = get_physical_c64_real(scalar, scalar.offset_elems)
+            s_imag = get_physical_c64_imag(scalar, scalar.offset_elems)
+        elif scalar.dtype_code == DTYPE_COMPLEX128:
+            s_real = Float32(get_physical_c128_real(scalar, scalar.offset_elems))
+            s_imag = Float32(get_physical_c128_imag(scalar, scalar.offset_elems))
+        else:
+            s_real = Float32(contiguous_as_f64(scalar, 0))
+            s_imag = 0.0
+        complex_scalar_complex_contig_typed[DType.float32](
+            contiguous_f32_ptr(array),
+            s_real,
+            s_imag,
+            contiguous_f32_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
+    if array.dtype_code == DTYPE_COMPLEX128 and result.dtype_code == DTYPE_COMPLEX128:
+        var s_real: Float64
+        var s_imag: Float64
+        if scalar.dtype_code == DTYPE_COMPLEX128:
+            s_real = get_physical_c128_real(scalar, scalar.offset_elems)
+            s_imag = get_physical_c128_imag(scalar, scalar.offset_elems)
+        elif scalar.dtype_code == DTYPE_COMPLEX64:
+            s_real = Float64(get_physical_c64_real(scalar, scalar.offset_elems))
+            s_imag = Float64(get_physical_c64_imag(scalar, scalar.offset_elems))
+        else:
+            s_real = contiguous_as_f64(scalar, 0)
+            s_imag = 0.0
+        complex_scalar_complex_contig_typed[DType.float64](
+            contiguous_f64_ptr(array),
+            s_real,
+            s_imag,
+            contiguous_f64_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
     var scalar_value = contiguous_as_f64(scalar, 0)
     if array.dtype_code == DTYPE_FLOAT32 and result.dtype_code == DTYPE_FLOAT32:
         binary_scalar_contig_typed[DType.float32](
@@ -1049,6 +1550,47 @@ def maybe_binary_scalar_contiguous(
             scalar_on_left,
         )
         return True
+    # Phase 5b typed int paths: int32/int64/uint32/uint64.
+    if array.dtype_code == DTYPE_INT64 and result.dtype_code == DTYPE_INT64:
+        binary_scalar_contig_typed[DType.int64](
+            contiguous_i64_ptr(array),
+            Int64(Int(scalar_value)),
+            contiguous_i64_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
+    if array.dtype_code == DTYPE_INT32 and result.dtype_code == DTYPE_INT32:
+        binary_scalar_contig_typed[DType.int32](
+            contiguous_i32_ptr(array),
+            Int32(Int(scalar_value)),
+            contiguous_i32_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
+    if array.dtype_code == DTYPE_UINT64 and result.dtype_code == DTYPE_UINT64:
+        binary_scalar_contig_typed[DType.uint64](
+            contiguous_u64_ptr(array),
+            UInt64(Int(scalar_value)),
+            contiguous_u64_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
+    if array.dtype_code == DTYPE_UINT32 and result.dtype_code == DTYPE_UINT32:
+        binary_scalar_contig_typed[DType.uint32](
+            contiguous_u32_ptr(array),
+            UInt32(Int(scalar_value)),
+            contiguous_u32_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
     for i in range(result.size_value):
         var lhs = contiguous_as_f64(array, i)
         var rhs = scalar_value
@@ -1059,6 +1601,55 @@ def maybe_binary_scalar_contiguous(
     return True
 
 
+def complex_scalar_real_contig_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    scalar_real: Scalar[dtype],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    n_elems: Int,
+    op: Int,
+    scalar_on_left: Bool,
+) raises where dtype.is_floating_point():
+    # Complex × real-scalar: numpy treats the scalar as real (zero imag).
+    # ADD/SUB: only the real lane is touched; imag passes through.
+    # MUL/DIV: both lanes scale by the scalar (since (a+bi)*s = as + bs i).
+    if op == OP_ADD:
+        for i in range(n_elems):
+            out_ptr[i * 2] = src_ptr[i * 2] + scalar_real if not scalar_on_left else scalar_real + src_ptr[i * 2]
+            out_ptr[i * 2 + 1] = src_ptr[i * 2 + 1]
+        return
+    if op == OP_SUB:
+        for i in range(n_elems):
+            if scalar_on_left:
+                out_ptr[i * 2] = scalar_real - src_ptr[i * 2]
+                out_ptr[i * 2 + 1] = -src_ptr[i * 2 + 1]
+            else:
+                out_ptr[i * 2] = src_ptr[i * 2] - scalar_real
+                out_ptr[i * 2 + 1] = src_ptr[i * 2 + 1]
+        return
+    if op == OP_MUL:
+        for i in range(n_elems):
+            out_ptr[i * 2] = src_ptr[i * 2] * scalar_real
+            out_ptr[i * 2 + 1] = src_ptr[i * 2 + 1] * scalar_real
+        return
+    if op == OP_DIV:
+        if scalar_on_left:
+            # scalar / complex = scalar * conj(c) / |c|²
+            for i in range(n_elems):
+                var a = src_ptr[i * 2]
+                var b = src_ptr[i * 2 + 1]
+                var denom = a * a + b * b
+                out_ptr[i * 2] = scalar_real * a / denom
+                out_ptr[i * 2 + 1] = -scalar_real * b / denom
+        else:
+            for i in range(n_elems):
+                out_ptr[i * 2] = src_ptr[i * 2] / scalar_real
+                out_ptr[i * 2 + 1] = src_ptr[i * 2 + 1] / scalar_real
+        return
+    raise Error("unsupported op for complex scalar real binary kernel")
+
+
 def maybe_binary_scalar_value_contiguous(
     array: Array,
     scalar_value: Float64,
@@ -1066,12 +1657,29 @@ def maybe_binary_scalar_value_contiguous(
     op: Int,
     scalar_on_left: Bool,
 ) raises -> Bool:
-    if (
-        not same_shape(array.shape, result.shape)
-        or not is_contiguous_float_array(array)
-        or not is_contiguous_float_array(result)
-    ):
+    if not same_shape(array.shape, result.shape) or not is_c_contiguous(array) or not is_c_contiguous(result):
         return False
+    # Complex × real-scalar paths.
+    if array.dtype_code == DTYPE_COMPLEX64 and result.dtype_code == DTYPE_COMPLEX64:
+        complex_scalar_real_contig_typed[DType.float32](
+            contiguous_f32_ptr(array),
+            Float32(scalar_value),
+            contiguous_f32_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
+    if array.dtype_code == DTYPE_COMPLEX128 and result.dtype_code == DTYPE_COMPLEX128:
+        complex_scalar_real_contig_typed[DType.float64](
+            contiguous_f64_ptr(array),
+            scalar_value,
+            contiguous_f64_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
     if array.dtype_code == DTYPE_FLOAT32 and result.dtype_code == DTYPE_FLOAT32:
         binary_scalar_contig_typed[DType.float32](
             contiguous_f32_ptr(array),
@@ -1087,6 +1695,46 @@ def maybe_binary_scalar_value_contiguous(
             contiguous_f64_ptr(array),
             scalar_value,
             contiguous_f64_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
+    if array.dtype_code == DTYPE_INT64 and result.dtype_code == DTYPE_INT64:
+        binary_scalar_contig_typed[DType.int64](
+            contiguous_i64_ptr(array),
+            Int64(Int(scalar_value)),
+            contiguous_i64_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
+    if array.dtype_code == DTYPE_INT32 and result.dtype_code == DTYPE_INT32:
+        binary_scalar_contig_typed[DType.int32](
+            contiguous_i32_ptr(array),
+            Int32(Int(scalar_value)),
+            contiguous_i32_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
+    if array.dtype_code == DTYPE_UINT64 and result.dtype_code == DTYPE_UINT64:
+        binary_scalar_contig_typed[DType.uint64](
+            contiguous_u64_ptr(array),
+            UInt64(Int(scalar_value)),
+            contiguous_u64_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
+    if array.dtype_code == DTYPE_UINT32 and result.dtype_code == DTYPE_UINT32:
+        binary_scalar_contig_typed[DType.uint32](
+            contiguous_u32_ptr(array),
+            UInt32(Int(scalar_value)),
+            contiguous_u32_ptr(result),
             result.size_value,
             op,
             scalar_on_left,
@@ -1114,18 +1762,14 @@ def maybe_binary_row_broadcast_contiguous(
         or len(row.shape) != 1
         or row.shape[0] != matrix.shape[1]
         or not same_shape(matrix.shape, result.shape)
-        or not is_contiguous_float_array(matrix)
-        or not is_contiguous_float_array(row)
-        or not is_contiguous_float_array(result)
+        or not is_c_contiguous(matrix)
+        or not is_c_contiguous(row)
+        or not is_c_contiguous(result)
     ):
         return False
     var rows = matrix.shape[0]
     var cols = matrix.shape[1]
-    if (
-        matrix.dtype_code == DTYPE_FLOAT32
-        and row.dtype_code == DTYPE_FLOAT32
-        and result.dtype_code == DTYPE_FLOAT32
-    ):
+    if matrix.dtype_code == DTYPE_FLOAT32 and row.dtype_code == DTYPE_FLOAT32 and result.dtype_code == DTYPE_FLOAT32:
         binary_row_broadcast_contig_typed[DType.float32](
             contiguous_f32_ptr(matrix),
             contiguous_f32_ptr(row),
@@ -1136,15 +1780,56 @@ def maybe_binary_row_broadcast_contiguous(
             row_on_left,
         )
         return True
-    if (
-        matrix.dtype_code == DTYPE_FLOAT64
-        and row.dtype_code == DTYPE_FLOAT64
-        and result.dtype_code == DTYPE_FLOAT64
-    ):
+    if matrix.dtype_code == DTYPE_FLOAT64 and row.dtype_code == DTYPE_FLOAT64 and result.dtype_code == DTYPE_FLOAT64:
         binary_row_broadcast_contig_typed[DType.float64](
             contiguous_f64_ptr(matrix),
             contiguous_f64_ptr(row),
             contiguous_f64_ptr(result),
+            rows,
+            cols,
+            op,
+            row_on_left,
+        )
+        return True
+    # Phase 5b typed int paths.
+    if matrix.dtype_code == DTYPE_INT64 and row.dtype_code == DTYPE_INT64 and result.dtype_code == DTYPE_INT64:
+        binary_row_broadcast_contig_typed[DType.int64](
+            contiguous_i64_ptr(matrix),
+            contiguous_i64_ptr(row),
+            contiguous_i64_ptr(result),
+            rows,
+            cols,
+            op,
+            row_on_left,
+        )
+        return True
+    if matrix.dtype_code == DTYPE_INT32 and row.dtype_code == DTYPE_INT32 and result.dtype_code == DTYPE_INT32:
+        binary_row_broadcast_contig_typed[DType.int32](
+            contiguous_i32_ptr(matrix),
+            contiguous_i32_ptr(row),
+            contiguous_i32_ptr(result),
+            rows,
+            cols,
+            op,
+            row_on_left,
+        )
+        return True
+    if matrix.dtype_code == DTYPE_UINT64 and row.dtype_code == DTYPE_UINT64 and result.dtype_code == DTYPE_UINT64:
+        binary_row_broadcast_contig_typed[DType.uint64](
+            contiguous_u64_ptr(matrix),
+            contiguous_u64_ptr(row),
+            contiguous_u64_ptr(result),
+            rows,
+            cols,
+            op,
+            row_on_left,
+        )
+        return True
+    if matrix.dtype_code == DTYPE_UINT32 and row.dtype_code == DTYPE_UINT32 and result.dtype_code == DTYPE_UINT32:
+        binary_row_broadcast_contig_typed[DType.uint32](
+            contiguous_u32_ptr(matrix),
+            contiguous_u32_ptr(row),
+            contiguous_u32_ptr(result),
             rows,
             cols,
             op,
@@ -1159,9 +1844,7 @@ def maybe_binary_row_broadcast_contiguous(
             if row_on_left:
                 lhs = contiguous_as_f64(row, j)
                 rhs = contiguous_as_f64(matrix, matrix_index)
-            set_contiguous_from_f64(
-                result, matrix_index, apply_binary_f64(lhs, rhs, op)
-            )
+            set_contiguous_from_f64(result, matrix_index, apply_binary_f64(lhs, rhs, op))
     return True
 
 
@@ -1171,9 +1854,7 @@ struct StridedInnerChoice(ImplicitlyCopyable, Movable):
     var kind: Int  # 0=scalar, 1=full-SIMD, 2=SIMD-load+scatter
 
 
-def pick_inner_axis_for_strided_binary(
-    lhs: Array, rhs: Array, result: Array
-) raises -> StridedInnerChoice:
+def pick_inner_axis_for_strided_binary(lhs: Array, rhs: Array, result: Array) raises -> StridedInnerChoice:
     # Pick the inner axis for a same-shape strided binary walk.
     #   kind == 1: all three operands have stride +1 on `axis` -> full SIMD
     #   kind == 2: lhs and rhs have stride +1 -> SIMD load + scatter store
@@ -1207,7 +1888,7 @@ def pick_inner_axis_for_strided_binary(
 
 def maybe_binary_rank2_transposed_tile[
     dtype: DType
-](lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool where dtype.is_floating_point():
+](lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
     # Tile-transpose fast path for rank-2 binary ops where both inputs have
     # stride-1 axis 0 (the F-contig pattern that `arr.T` produces from a
     # c-contig `arr`) and the result is c-contig. Without this, the generic
@@ -1226,9 +1907,7 @@ def maybe_binary_rank2_transposed_tile[
     # some throughput for the same scatter-avoiding pattern.
     if len(lhs.shape) != 2:
         return False
-    if not same_shape(lhs.shape, rhs.shape) or not same_shape(
-        lhs.shape, result.shape
-    ):
+    if not same_shape(lhs.shape, rhs.shape) or not same_shape(lhs.shape, result.shape):
         return False
     if lhs.strides[0] != 1 or rhs.strides[0] != 1:
         return False
@@ -1252,25 +1931,13 @@ def maybe_binary_rank2_transposed_tile[
         var j = 0
         while j < main_cols:
             var l0 = (lhs_data + i + j * lhs_col_stride).load[width=tile](0)
-            var l1 = (lhs_data + i + (j + 1) * lhs_col_stride).load[width=tile](
-                0
-            )
-            var l2 = (lhs_data + i + (j + 2) * lhs_col_stride).load[width=tile](
-                0
-            )
-            var l3 = (lhs_data + i + (j + 3) * lhs_col_stride).load[width=tile](
-                0
-            )
+            var l1 = (lhs_data + i + (j + 1) * lhs_col_stride).load[width=tile](0)
+            var l2 = (lhs_data + i + (j + 2) * lhs_col_stride).load[width=tile](0)
+            var l3 = (lhs_data + i + (j + 3) * lhs_col_stride).load[width=tile](0)
             var r0 = (rhs_data + i + j * rhs_col_stride).load[width=tile](0)
-            var r1 = (rhs_data + i + (j + 1) * rhs_col_stride).load[width=tile](
-                0
-            )
-            var r2 = (rhs_data + i + (j + 2) * rhs_col_stride).load[width=tile](
-                0
-            )
-            var r3 = (rhs_data + i + (j + 3) * rhs_col_stride).load[width=tile](
-                0
-            )
+            var r1 = (rhs_data + i + (j + 1) * rhs_col_stride).load[width=tile](0)
+            var r2 = (rhs_data + i + (j + 2) * rhs_col_stride).load[width=tile](0)
+            var r3 = (rhs_data + i + (j + 3) * rhs_col_stride).load[width=tile](0)
             var s0 = apply_binary_typed_vec[dtype, tile](l0, r0, op)
             var s1 = apply_binary_typed_vec[dtype, tile](l1, r1, op)
             var s2 = apply_binary_typed_vec[dtype, tile](l2, r2, op)
@@ -1297,11 +1964,9 @@ def maybe_binary_rank2_transposed_tile[
             comptime for k in range(tile):
                 var lv = lhs_data[i + k + j * lhs_col_stride]
                 var rv = rhs_data[i + k + j * rhs_col_stride]
-                result_data[(i + k) * result_row_stride + j] = (
-                    apply_binary_typed_vec[dtype, 1](
-                        SIMD[dtype, 1](lv), SIMD[dtype, 1](rv), op
-                    )[0]
-                )
+                result_data[(i + k) * result_row_stride + j] = apply_binary_typed_vec[dtype, 1](
+                    SIMD[dtype, 1](lv), SIMD[dtype, 1](rv), op
+                )[0]
             j += 1
         i += tile
     # row tail: scalar walk for residual rows
@@ -1310,28 +1975,31 @@ def maybe_binary_rank2_transposed_tile[
         while j < cols:
             var lv = lhs_data[i + j * lhs_col_stride]
             var rv = rhs_data[i + j * rhs_col_stride]
-            result_data[i * result_row_stride + j] = apply_binary_typed_vec[
-                dtype, 1
-            ](SIMD[dtype, 1](lv), SIMD[dtype, 1](rv), op)[0]
+            result_data[i * result_row_stride + j] = apply_binary_typed_vec[dtype, 1](
+                SIMD[dtype, 1](lv), SIMD[dtype, 1](rv), op
+            )[0]
             j += 1
         i += 1
     return True
 
 
-def maybe_binary_same_shape_strided(
-    lhs: Array, rhs: Array, mut result: Array, op: Int
-) raises -> Bool:
+def maybe_binary_same_shape_strided(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
     # General N-D same-shape strided walker. Walks `inner_axis` with SIMD when
     # possible (full or load-only) and walks the remaining axes with a coord
     # stack that uses incremental offset arithmetic (no divmod per element).
     # Subsumes the previous rank-1 and rank-2 special cases.
-    if not same_shape(lhs.shape, rhs.shape) or not same_shape(
-        lhs.shape, result.shape
-    ):
+    if not same_shape(lhs.shape, rhs.shape) or not same_shape(lhs.shape, result.shape):
         return False
     if lhs.dtype_code != rhs.dtype_code or rhs.dtype_code != result.dtype_code:
         return False
-    if lhs.dtype_code != DTYPE_FLOAT32 and lhs.dtype_code != DTYPE_FLOAT64:
+    if (
+        lhs.dtype_code != DTYPE_FLOAT32
+        and lhs.dtype_code != DTYPE_FLOAT64
+        and lhs.dtype_code != DTYPE_INT64
+        and lhs.dtype_code != DTYPE_INT32
+        and lhs.dtype_code != DTYPE_UINT64
+        and lhs.dtype_code != DTYPE_UINT32
+    ):
         return False
     var ndim = len(lhs.shape)
     if ndim == 0:
@@ -1411,12 +2079,90 @@ def maybe_binary_same_shape_strided(
             op,
         )
         return True
+    if lhs.dtype_code == DTYPE_INT64:
+        strided_binary_walk_typed[DType.int64](
+            lhs,
+            rhs,
+            result,
+            inner_kind,
+            inner_size,
+            inner_lhs_stride,
+            inner_rhs_stride,
+            inner_result_stride,
+            outer_shape,
+            outer_lhs_stride,
+            outer_rhs_stride,
+            outer_result_stride,
+            outer_lhs_carry,
+            outer_rhs_carry,
+            outer_result_carry,
+            op,
+        )
+        return True
+    if lhs.dtype_code == DTYPE_INT32:
+        strided_binary_walk_typed[DType.int32](
+            lhs,
+            rhs,
+            result,
+            inner_kind,
+            inner_size,
+            inner_lhs_stride,
+            inner_rhs_stride,
+            inner_result_stride,
+            outer_shape,
+            outer_lhs_stride,
+            outer_rhs_stride,
+            outer_result_stride,
+            outer_lhs_carry,
+            outer_rhs_carry,
+            outer_result_carry,
+            op,
+        )
+        return True
+    if lhs.dtype_code == DTYPE_UINT64:
+        strided_binary_walk_typed[DType.uint64](
+            lhs,
+            rhs,
+            result,
+            inner_kind,
+            inner_size,
+            inner_lhs_stride,
+            inner_rhs_stride,
+            inner_result_stride,
+            outer_shape,
+            outer_lhs_stride,
+            outer_rhs_stride,
+            outer_result_stride,
+            outer_lhs_carry,
+            outer_rhs_carry,
+            outer_result_carry,
+            op,
+        )
+        return True
+    if lhs.dtype_code == DTYPE_UINT32:
+        strided_binary_walk_typed[DType.uint32](
+            lhs,
+            rhs,
+            result,
+            inner_kind,
+            inner_size,
+            inner_lhs_stride,
+            inner_rhs_stride,
+            inner_result_stride,
+            outer_shape,
+            outer_lhs_stride,
+            outer_rhs_stride,
+            outer_result_stride,
+            outer_lhs_carry,
+            outer_rhs_carry,
+            outer_result_carry,
+            op,
+        )
+        return True
     return False
 
 
-def maybe_binary_contiguous(
-    lhs: Array, rhs: Array, mut result: Array, op: Int
-) raises -> Bool:
+def maybe_binary_contiguous(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
     # Fast-path dispatch is intentionally shape-specific here. We want to be dumb.
     # The fallback below still handles dynamic-rank broadcasting, so every branch
     # here must be a provably cheaper case with the same semantics.
@@ -1430,23 +2176,25 @@ def maybe_binary_contiguous(
         return True
     if maybe_binary_row_broadcast_contiguous(rhs, lhs, result, op, True):
         return True
-    if (
-        lhs.dtype_code == DTYPE_FLOAT32
-        and rhs.dtype_code == DTYPE_FLOAT32
-        and result.dtype_code == DTYPE_FLOAT32
-    ):
-        if maybe_binary_rank2_transposed_tile[DType.float32](
-            lhs, rhs, result, op
-        ):
+    if maybe_binary_rank1_strided_accelerate(lhs, rhs, result, op):
+        return True
+    if lhs.dtype_code == DTYPE_FLOAT32 and rhs.dtype_code == DTYPE_FLOAT32 and result.dtype_code == DTYPE_FLOAT32:
+        if maybe_binary_rank2_transposed_tile[DType.float32](lhs, rhs, result, op):
             return True
-    elif (
-        lhs.dtype_code == DTYPE_FLOAT64
-        and rhs.dtype_code == DTYPE_FLOAT64
-        and result.dtype_code == DTYPE_FLOAT64
-    ):
-        if maybe_binary_rank2_transposed_tile[DType.float64](
-            lhs, rhs, result, op
-        ):
+    elif lhs.dtype_code == DTYPE_FLOAT64 and rhs.dtype_code == DTYPE_FLOAT64 and result.dtype_code == DTYPE_FLOAT64:
+        if maybe_binary_rank2_transposed_tile[DType.float64](lhs, rhs, result, op):
+            return True
+    elif lhs.dtype_code == DTYPE_INT64 and rhs.dtype_code == DTYPE_INT64 and result.dtype_code == DTYPE_INT64:
+        if maybe_binary_rank2_transposed_tile[DType.int64](lhs, rhs, result, op):
+            return True
+    elif lhs.dtype_code == DTYPE_INT32 and rhs.dtype_code == DTYPE_INT32 and result.dtype_code == DTYPE_INT32:
+        if maybe_binary_rank2_transposed_tile[DType.int32](lhs, rhs, result, op):
+            return True
+    elif lhs.dtype_code == DTYPE_UINT64 and rhs.dtype_code == DTYPE_UINT64 and result.dtype_code == DTYPE_UINT64:
+        if maybe_binary_rank2_transposed_tile[DType.uint64](lhs, rhs, result, op):
+            return True
+    elif lhs.dtype_code == DTYPE_UINT32 and rhs.dtype_code == DTYPE_UINT32 and result.dtype_code == DTYPE_UINT32:
+        if maybe_binary_rank2_transposed_tile[DType.uint32](lhs, rhs, result, op):
             return True
     if maybe_binary_same_shape_strided(lhs, rhs, result, op):
         return True
@@ -1467,11 +2215,7 @@ def maybe_sin_add_mul_contiguous(
         or not is_contiguous_float_array(result)
     ):
         return False
-    if (
-        lhs.dtype_code == DTYPE_FLOAT32
-        and rhs.dtype_code == DTYPE_FLOAT32
-        and result.dtype_code == DTYPE_FLOAT32
-    ):
+    if lhs.dtype_code == DTYPE_FLOAT32 and rhs.dtype_code == DTYPE_FLOAT32 and result.dtype_code == DTYPE_FLOAT32:
         var lhs_ptr = contiguous_f32_ptr(lhs)
         var rhs_ptr = contiguous_f32_ptr(rhs)
         var out_ptr = contiguous_f32_ptr(result)
@@ -1483,8 +2227,7 @@ def maybe_sin_add_mul_contiguous(
             while vforce_i + width <= result.size_value:
                 out_ptr.store(
                     vforce_i,
-                    out_ptr.load[width=width](vforce_i)
-                    + rhs_ptr.load[width=width](vforce_i) * scalar_vec,
+                    out_ptr.load[width=width](vforce_i) + rhs_ptr.load[width=width](vforce_i) * scalar_vec,
                 )
                 vforce_i += width
             while vforce_i < result.size_value:
@@ -1496,22 +2239,15 @@ def maybe_sin_add_mul_contiguous(
         while i + width <= result.size_value:
             out_ptr.store(
                 i,
-                sin(lhs_ptr.load[width=width](i))
-                + rhs_ptr.load[width=width](i) * scalar_vec,
+                sin(lhs_ptr.load[width=width](i)) + rhs_ptr.load[width=width](i) * scalar_vec,
             )
             i += width
         while i < result.size_value:
-            out_ptr[i] = Float32(
-                sin(Float64(lhs_ptr[i])) + Float64(rhs_ptr[i]) * scalar_value
-            )
+            out_ptr[i] = Float32(sin(Float64(lhs_ptr[i])) + Float64(rhs_ptr[i]) * scalar_value)
             i += 1
         result.backend_code = BACKEND_FUSED
         return True
-    if (
-        lhs.dtype_code == DTYPE_FLOAT64
-        and rhs.dtype_code == DTYPE_FLOAT64
-        and result.dtype_code == DTYPE_FLOAT64
-    ):
+    if lhs.dtype_code == DTYPE_FLOAT64 and rhs.dtype_code == DTYPE_FLOAT64 and result.dtype_code == DTYPE_FLOAT64:
         var lhs_ptr = contiguous_f64_ptr(lhs)
         var rhs_ptr = contiguous_f64_ptr(rhs)
         var out_ptr = contiguous_f64_ptr(result)
@@ -1521,8 +2257,7 @@ def maybe_sin_add_mul_contiguous(
         while i + width <= result.size_value:
             out_ptr.store(
                 i,
-                sin(lhs_ptr.load[width=width](i))
-                + rhs_ptr.load[width=width](i) * scalar_vec,
+                sin(lhs_ptr.load[width=width](i)) + rhs_ptr.load[width=width](i) * scalar_vec,
             )
             i += width
         while i < result.size_value:
@@ -1533,21 +2268,15 @@ def maybe_sin_add_mul_contiguous(
     return False
 
 
-def maybe_reduce_contiguous(
-    src: Array, mut result: Array, op: Int
-) raises -> Bool:
+def maybe_reduce_contiguous(src: Array, mut result: Array, op: Int) raises -> Bool:
     if not is_contiguous_float_array(src):
         return False
     if op == REDUCE_SUM or op == REDUCE_MEAN:
         var acc: Float64
         if src.dtype_code == DTYPE_FLOAT32:
-            acc = reduce_sum_typed[DType.float32](
-                contiguous_f32_ptr(src), src.size_value
-            )
+            acc = reduce_sum_typed[DType.float32](contiguous_f32_ptr(src), src.size_value)
         elif src.dtype_code == DTYPE_FLOAT64:
-            acc = reduce_sum_typed[DType.float64](
-                contiguous_f64_ptr(src), src.size_value
-            )
+            acc = reduce_sum_typed[DType.float64](contiguous_f64_ptr(src), src.size_value)
         else:
             return False
         if op == REDUCE_MEAN:
@@ -1602,24 +2331,14 @@ def maybe_matmul_contiguous(
     comptime if CompilationTarget.is_macos() or CompilationTarget.is_linux():
         if maybe_matmul_vector_accelerate(lhs, rhs, result, m, n, k_lhs):
             return True
-    if (
-        len(lhs.shape) != 2
-        or len(rhs.shape) != 2
-        or not is_contiguous_float_array(result)
-    ):
+        if maybe_matmul_complex_accelerate(lhs, rhs, result, m, n, k_lhs):
+            return True
+    if len(lhs.shape) != 2 or len(rhs.shape) != 2 or not is_contiguous_float_array(result):
         return False
     var lhs_layout = rank2_blas_layout(lhs)
     var rhs_layout = rank2_blas_layout(rhs)
-    if (
-        lhs.dtype_code == DTYPE_FLOAT32
-        and rhs.dtype_code == DTYPE_FLOAT32
-        and result.dtype_code == DTYPE_FLOAT32
-    ):
-        if (
-            is_c_contiguous(lhs)
-            and is_c_contiguous(rhs)
-            and maybe_matmul_f32_small(lhs, rhs, result, m, n, k_lhs)
-        ):
+    if lhs.dtype_code == DTYPE_FLOAT32 and rhs.dtype_code == DTYPE_FLOAT32 and result.dtype_code == DTYPE_FLOAT32:
+        if is_c_contiguous(lhs) and is_c_contiguous(rhs) and maybe_matmul_f32_small(lhs, rhs, result, m, n, k_lhs):
             return True
         comptime if CompilationTarget.is_macos() or CompilationTarget.is_linux():
             if lhs_layout.can_use and rhs_layout.can_use:
@@ -1638,11 +2357,7 @@ def maybe_matmul_contiguous(
                 )
                 result.backend_code = BACKEND_ACCELERATE
                 return True
-    if (
-        lhs.dtype_code == DTYPE_FLOAT64
-        and rhs.dtype_code == DTYPE_FLOAT64
-        and result.dtype_code == DTYPE_FLOAT64
-    ):
+    if lhs.dtype_code == DTYPE_FLOAT64 and rhs.dtype_code == DTYPE_FLOAT64 and result.dtype_code == DTYPE_FLOAT64:
         comptime if CompilationTarget.is_macos() or CompilationTarget.is_linux():
             if lhs_layout.can_use and rhs_layout.can_use:
                 cblas_dgemm_row_major_ld(
@@ -1666,9 +2381,7 @@ def maybe_matmul_contiguous(
         for j in range(n):
             var total = 0.0
             for k in range(k_lhs):
-                total += contiguous_as_f64(
-                    lhs, i * k_lhs + k
-                ) * contiguous_as_f64(rhs, k * n + j)
+                total += contiguous_as_f64(lhs, i * k_lhs + k) * contiguous_as_f64(rhs, k * n + j)
             set_contiguous_from_f64(result, i * n + j, total)
     return True
 
@@ -1683,12 +2396,7 @@ def maybe_matmul_vector_accelerate(
 ) raises -> Bool:
     var lhs_ndim = len(lhs.shape)
     var rhs_ndim = len(rhs.shape)
-    if (
-        lhs_ndim == 2
-        and rhs_ndim == 1
-        and is_contiguous_float_array(rhs)
-        and is_contiguous_float_array(result)
-    ):
+    if lhs_ndim == 2 and rhs_ndim == 1 and is_contiguous_float_array(rhs) and is_contiguous_float_array(result):
         var lhs_layout = rank2_blas_layout(lhs)
         if not lhs_layout.can_use:
             return False
@@ -1697,11 +2405,7 @@ def maybe_matmul_vector_accelerate(
         if lhs_layout.transpose:
             rows = k_lhs
             cols = m
-        if (
-            lhs.dtype_code == DTYPE_FLOAT32
-            and rhs.dtype_code == DTYPE_FLOAT32
-            and result.dtype_code == DTYPE_FLOAT32
-        ):
+        if lhs.dtype_code == DTYPE_FLOAT32 and rhs.dtype_code == DTYPE_FLOAT32 and result.dtype_code == DTYPE_FLOAT32:
             cblas_sgemv_row_major_ld(
                 rows,
                 cols,
@@ -1713,11 +2417,7 @@ def maybe_matmul_vector_accelerate(
             )
             result.backend_code = BACKEND_ACCELERATE
             return True
-        if (
-            lhs.dtype_code == DTYPE_FLOAT64
-            and rhs.dtype_code == DTYPE_FLOAT64
-            and result.dtype_code == DTYPE_FLOAT64
-        ):
+        if lhs.dtype_code == DTYPE_FLOAT64 and rhs.dtype_code == DTYPE_FLOAT64 and result.dtype_code == DTYPE_FLOAT64:
             cblas_dgemv_row_major_ld(
                 rows,
                 cols,
@@ -1729,12 +2429,7 @@ def maybe_matmul_vector_accelerate(
             )
             result.backend_code = BACKEND_ACCELERATE
             return True
-    if (
-        lhs_ndim == 1
-        and rhs_ndim == 2
-        and is_contiguous_float_array(lhs)
-        and is_contiguous_float_array(result)
-    ):
+    if lhs_ndim == 1 and rhs_ndim == 2 and is_contiguous_float_array(lhs) and is_contiguous_float_array(result):
         var rhs_layout = rank2_blas_layout(rhs)
         if not rhs_layout.can_use:
             return False
@@ -1745,11 +2440,7 @@ def maybe_matmul_vector_accelerate(
             rows = n
             cols = k_lhs
             transpose_rhs = False
-        if (
-            lhs.dtype_code == DTYPE_FLOAT32
-            and rhs.dtype_code == DTYPE_FLOAT32
-            and result.dtype_code == DTYPE_FLOAT32
-        ):
+        if lhs.dtype_code == DTYPE_FLOAT32 and rhs.dtype_code == DTYPE_FLOAT32 and result.dtype_code == DTYPE_FLOAT32:
             cblas_sgemv_row_major_ld(
                 rows,
                 cols,
@@ -1761,11 +2452,7 @@ def maybe_matmul_vector_accelerate(
             )
             result.backend_code = BACKEND_ACCELERATE
             return True
-        if (
-            lhs.dtype_code == DTYPE_FLOAT64
-            and rhs.dtype_code == DTYPE_FLOAT64
-            and result.dtype_code == DTYPE_FLOAT64
-        ):
+        if lhs.dtype_code == DTYPE_FLOAT64 and rhs.dtype_code == DTYPE_FLOAT64 and result.dtype_code == DTYPE_FLOAT64:
             cblas_dgemv_row_major_ld(
                 rows,
                 cols,
@@ -1777,6 +2464,53 @@ def maybe_matmul_vector_accelerate(
             )
             result.backend_code = BACKEND_ACCELERATE
             return True
+    return False
+
+
+def maybe_matmul_complex_accelerate(
+    lhs: Array,
+    rhs: Array,
+    mut result: Array,
+    m: Int,
+    n: Int,
+    k_lhs: Int,
+) raises -> Bool:
+    # Complex matmul via cgemm/zgemm. Requires both operands rank-2,
+    # c-contiguous, matching complex dtype, and result also complex.
+    if len(lhs.shape) != 2 or len(rhs.shape) != 2:
+        return False
+    if not is_c_contiguous(lhs) or not is_c_contiguous(rhs) or not is_c_contiguous(result):
+        return False
+    if (
+        lhs.dtype_code == DTYPE_COMPLEX64
+        and rhs.dtype_code == DTYPE_COMPLEX64
+        and result.dtype_code == DTYPE_COMPLEX64
+    ):
+        cblas_cgemm_row_major(
+            m,
+            n,
+            k_lhs,
+            contiguous_f32_ptr(result),
+            contiguous_f32_ptr(lhs),
+            contiguous_f32_ptr(rhs),
+        )
+        result.backend_code = BACKEND_ACCELERATE
+        return True
+    if (
+        lhs.dtype_code == DTYPE_COMPLEX128
+        and rhs.dtype_code == DTYPE_COMPLEX128
+        and result.dtype_code == DTYPE_COMPLEX128
+    ):
+        cblas_zgemm_row_major(
+            m,
+            n,
+            k_lhs,
+            contiguous_f64_ptr(result),
+            contiguous_f64_ptr(lhs),
+            contiguous_f64_ptr(rhs),
+        )
+        result.backend_code = BACKEND_ACCELERATE
+        return True
     return False
 
 
@@ -1799,9 +2533,7 @@ def matmul_small_typed[
         while j + width <= n:
             var acc = SIMD[dtype, width](0)
             for k in range(k_lhs):
-                acc += SIMD[dtype, width](
-                    lhs_ptr[i * k_lhs + k]
-                ) * rhs_ptr.load[width=width](k * n + j)
+                acc += SIMD[dtype, width](lhs_ptr[i * k_lhs + k]) * rhs_ptr.load[width=width](k * n + j)
             out_ptr.store(i * n + j, acc)
             j += width
         while j < n:
@@ -1979,9 +2711,7 @@ def write_solve_result_f64(
             set_logical_from_f64(result, out_index, src[row + col * n])
 
 
-def maybe_lapack_solve_f32(
-    a: Array, b: Array, mut result: Array
-) raises -> Bool:
+def maybe_lapack_solve_f32(a: Array, b: Array, mut result: Array) raises -> Bool:
     if (
         a.dtype_code != DTYPE_FLOAT32
         or b.dtype_code != DTYPE_FLOAT32
@@ -2024,9 +2754,7 @@ def maybe_lapack_solve_f32(
     return True
 
 
-def maybe_lapack_solve_f64(
-    a: Array, b: Array, mut result: Array
-) raises -> Bool:
+def maybe_lapack_solve_f64(a: Array, b: Array, mut result: Array) raises -> Bool:
     if (
         a.dtype_code != DTYPE_FLOAT64
         or b.dtype_code != DTYPE_FLOAT64
@@ -2153,9 +2881,7 @@ def maybe_lapack_inverse_f64(a: Array, mut result: Array) raises -> Bool:
     return True
 
 
-def lapack_pivot_sign(
-    pivots: UnsafePointer[Int32, MutExternalOrigin], n: Int
-) -> Float64:
+def lapack_pivot_sign(pivots: UnsafePointer[Int32, MutExternalOrigin], n: Int) -> Float64:
     var sign = 1.0
     for i in range(n):
         if Int(pivots[i]) != i + 1:
@@ -2272,9 +2998,7 @@ def swap_rhs_rows(mut rhs: List[Float64], columns: Int, lhs: Int, rhs_row: Int):
         rhs[rhs_index] = tmp
 
 
-def lu_decompose_partial_pivot(
-    mut lu: List[Float64], mut pivots: List[Int], n: Int
-) raises -> Int:
+def lu_decompose_partial_pivot(mut lu: List[Float64], mut pivots: List[Int], n: Int) raises -> Int:
     var sign = 1
     for k in range(n):
         var pivot = k
@@ -2328,16 +3052,12 @@ def solve_lu_factor_into(
             var out_index = row * rhs_columns + col
             if vector_result:
                 out_index = row
-            set_logical_from_f64(
-                result, out_index, rhs[row * rhs_columns + col]
-            )
+            set_logical_from_f64(result, out_index, rhs[row * rhs_columns + col])
 
 
 def lu_solve_into(a: Array, b: Array, mut result: Array) raises:
     if len(a.shape) != 2 or a.shape[0] != a.shape[1]:
-        raise Error(
-            "linalg.solve() requires a square rank-2 coefficient matrix"
-        )
+        raise Error("linalg.solve() requires a square rank-2 coefficient matrix")
     var n = a.shape[0]
     var rhs_columns = 1
     var vector_result = True
@@ -2367,9 +3087,7 @@ def lu_solve_into(a: Array, b: Array, mut result: Array) raises:
             if len(b.shape) == 2:
                 logical = row * rhs_columns + col
             rhs_values.append(get_logical_as_f64(b, logical))
-    solve_lu_factor_into(
-        lu, pivots, n, rhs_values, rhs_columns, result, vector_result
-    )
+    solve_lu_factor_into(lu, pivots, n, rhs_values, rhs_columns, result, vector_result)
 
 
 def lu_inverse_into(a: Array, mut result: Array) raises:
@@ -2499,9 +3217,7 @@ def write_col_major_to_array_f64(
 
 
 # ---------- QR ----------
-def lapack_qr_reduced_f32_into(
-    a: Array, mut q_out: Array, mut r_out: Array
-) raises:
+def lapack_qr_reduced_f32_into(a: Array, mut q_out: Array, mut r_out: Array) raises:
     var m = a.shape[0]
     var n = a.shape[1]
     var k = m if m < n else n
@@ -2536,9 +3252,7 @@ def lapack_qr_reduced_f32_into(
     r_out.backend_code = BACKEND_ACCELERATE
 
 
-def lapack_qr_reduced_f64_into(
-    a: Array, mut q_out: Array, mut r_out: Array
-) raises:
+def lapack_qr_reduced_f64_into(a: Array, mut q_out: Array, mut r_out: Array) raises:
     var m = a.shape[0]
     var n = a.shape[1]
     var k = m if m < n else n
@@ -2673,9 +3387,7 @@ def lapack_cholesky_f64_into(a: Array, mut result: Array) raises:
 
 
 # ---------- Symmetric eigendecomposition ----------
-def lapack_eigh_f32_into(
-    a: Array, mut w_out: Array, mut v_out: Array, compute_eigenvectors: Bool
-) raises:
+def lapack_eigh_f32_into(a: Array, mut w_out: Array, mut v_out: Array, compute_eigenvectors: Bool) raises:
     var n = a.shape[0]
     var buf = alloc[Float32](n * n)
     var wbuf = alloc[Float32](n if n > 0 else 1)
@@ -2703,9 +3415,7 @@ def lapack_eigh_f32_into(
     w_out.backend_code = BACKEND_ACCELERATE
 
 
-def lapack_eigh_f64_into(
-    a: Array, mut w_out: Array, mut v_out: Array, compute_eigenvectors: Bool
-) raises:
+def lapack_eigh_f64_into(a: Array, mut w_out: Array, mut v_out: Array, compute_eigenvectors: Bool) raises:
     var n = a.shape[0]
     var buf = alloc[Float64](n * n)
     var wbuf = alloc[Float64](n if n > 0 else 1)

@@ -33,7 +33,7 @@ from .int_tuple import (
 )
 
 
-struct Layout(Copyable, Movable, Defaultable, Equatable, Writable):
+struct Layout(Copyable, Defaultable, Equatable, Movable, Writable):
     """A `(shape, stride)` pair representing a function `coord -> int`."""
 
     var shape: IntTuple

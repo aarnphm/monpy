@@ -59,9 +59,7 @@ comptime PyBUF_RECORDS_RO: c_int = PyBUF_STRIDES | PyBUF_FORMAT
 # int PyObject_GetBuffer(PyObject *exporter, Py_buffer *view, int flags)
 comptime PyObject_GetBuffer = ExternalFunction[
     "PyObject_GetBuffer",
-    def(
-        PyObjectPtr, _CPointer[Py_buffer, MutAnyOrigin], c_int
-    ) thin -> c_int,
+    def(PyObjectPtr, _CPointer[Py_buffer, MutAnyOrigin], c_int) thin -> c_int,
 ]
 
 # void PyBuffer_Release(Py_buffer *view)
@@ -128,20 +126,14 @@ def asarray_from_buffer_ops(
     # Resolve dtype before releasing so we know whether to copy. dtype
     # mismatch with `requested_code` is a punt back to python; full
     # promotion is handled there via astype.
-    var src_dtype_code = dtype_code_from_format_char(
-        format_char_value, item_bytes
-    )
+    var src_dtype_code = dtype_code_from_format_char(format_char_value, item_bytes)
     release_fn(view_ptr)
     if requested_code >= 0 and requested_code != src_dtype_code:
-        raise Error(
-            "asarray_from_buffer: dtype conversion handled in python"
-        )
+        raise Error("asarray_from_buffer: dtype conversion handled in python")
     if copy_flag == 0 and readonly:
         raise Error("readonly array requires copy=True")
     var must_copy = (copy_flag == 1) or readonly
-    var data = UnsafePointer[UInt8, MutExternalOrigin](
-        unsafe_from_address=data_addr
-    )
+    var data = UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=data_addr)
     if must_copy:
         var view_shape = List[Int]()
         for i in range(len(shape)):
@@ -159,7 +151,5 @@ def asarray_from_buffer_ops(
         )
         var result = copy_c_contiguous(external)
         return PythonObject(alloc=result^)
-    var result = make_external_array(
-        src_dtype_code, shape^, elem_strides^, 0, data, byte_len
-    )
+    var result = make_external_array(src_dtype_code, shape^, elem_strides^, 0, data, byte_len)
     return PythonObject(alloc=result^)

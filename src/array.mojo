@@ -1,13 +1,15 @@
 from std.collections import List
 from std.memory import memcpy
 from std.os import abort
-from std.python import PythonObject
+from std.python import Python, PythonObject
 
 from domain import (
     BACKEND_ACCELERATE,
     BACKEND_FUSED,
     BACKEND_GENERIC,
     DTYPE_BOOL,
+    DTYPE_COMPLEX128,
+    DTYPE_COMPLEX64,
     DTYPE_FLOAT16,
     DTYPE_FLOAT32,
     DTYPE_FLOAT64,
@@ -166,6 +168,18 @@ struct Array(Movable, Writable):
             return PythonObject(get_physical_f32(self_ptr[], physical_offset(self_ptr[], index)))
         if self_ptr[].dtype_code == DTYPE_FLOAT16:
             return PythonObject(Float64(get_physical_f16(self_ptr[], physical_offset(self_ptr[], index))))
+        if self_ptr[].dtype_code == DTYPE_COMPLEX64:
+            var phys = physical_offset(self_ptr[], index)
+            var real = Float64(get_physical_c64_real(self_ptr[], phys))
+            var imag = Float64(get_physical_c64_imag(self_ptr[], phys))
+            var builtins = Python.import_module("builtins")
+            return builtins.complex(PythonObject(real), PythonObject(imag))
+        if self_ptr[].dtype_code == DTYPE_COMPLEX128:
+            var phys = physical_offset(self_ptr[], index)
+            var real = get_physical_c128_real(self_ptr[], phys)
+            var imag = get_physical_c128_imag(self_ptr[], phys)
+            var builtins = Python.import_module("builtins")
+            return builtins.complex(PythonObject(real), PythonObject(imag))
         return PythonObject(get_physical_f64(self_ptr[], physical_offset(self_ptr[], index)))
 
     def write_to(self, mut writer: Some[Writer]):
@@ -307,9 +321,7 @@ def as_layout(array: Array) raises -> Layout:
     return Layout(IntTuple.nested(shape_children^), IntTuple.nested(stride_children^))
 
 
-def array_with_layout(
-    source: Array, new_layout: Layout, offset_delta: Int = 0
-) raises -> Array:
+def array_with_layout(source: Array, new_layout: Layout, offset_delta: Int = 0) raises -> Array:
     """Build a view of `source` whose shape/strides come from
     `new_layout` and whose `offset_elems` is `source.offset_elems +
     offset_delta`. The Layout is flattened to monpy's flat shape/stride
@@ -323,9 +335,7 @@ def array_with_layout(
     for i in range(len(flat_shape)):
         size_value *= flat_shape[i]
     var new_offset = source.offset_elems + offset_delta
-    return make_view_array(
-        source, flat_shape^, flat_stride^, size_value, new_offset
-    )
+    return make_view_array(source, flat_shape^, flat_stride^, size_value, new_offset)
 
 
 def int_list_from_py(obj: PythonObject) raises -> List[Int]:
@@ -474,6 +484,37 @@ def get_physical_f16(array: Array, physical: Int) raises -> Float16:
     return array.data.bitcast[Float16]()[physical]
 
 
+# Complex accessors: arrays store interleaved (real, imag) pairs.
+# complex64 → 2 × Float32 starting at byte index `physical * 8`.
+# complex128 → 2 × Float64 starting at byte index `physical * 16`.
+def get_physical_c64_real(array: Array, physical: Int) raises -> Float32:
+    return array.data.bitcast[Float32]()[physical * 2]
+
+
+def get_physical_c64_imag(array: Array, physical: Int) raises -> Float32:
+    return array.data.bitcast[Float32]()[physical * 2 + 1]
+
+
+def get_physical_c128_real(array: Array, physical: Int) raises -> Float64:
+    return array.data.bitcast[Float64]()[physical * 2]
+
+
+def get_physical_c128_imag(array: Array, physical: Int) raises -> Float64:
+    return array.data.bitcast[Float64]()[physical * 2 + 1]
+
+
+def set_physical_c64(mut array: Array, physical: Int, real: Float32, imag: Float32) raises:
+    var ptr = array.data.bitcast[Float32]()
+    ptr[physical * 2] = real
+    ptr[physical * 2 + 1] = imag
+
+
+def set_physical_c128(mut array: Array, physical: Int, real: Float64, imag: Float64) raises:
+    var ptr = array.data.bitcast[Float64]()
+    ptr[physical * 2] = real
+    ptr[physical * 2 + 1] = imag
+
+
 def get_physical_as_f64(array: Array, physical: Int) raises -> Float64:
     if array.dtype_code == DTYPE_BOOL:
         if get_physical_bool(array, physical):
@@ -499,6 +540,12 @@ def get_physical_as_f64(array: Array, physical: Int) raises -> Float64:
         return Float64(get_physical_f32(array, physical))
     if array.dtype_code == DTYPE_FLOAT16:
         return Float64(get_physical_f16(array, physical))
+    if array.dtype_code == DTYPE_COMPLEX64:
+        # Returns the real part; imaginary discarded. Matches numpy
+        # behavior for real-valued aggregations on a complex array.
+        return Float64(get_physical_c64_real(array, physical))
+    if array.dtype_code == DTYPE_COMPLEX128:
+        return get_physical_c128_real(array, physical)
     return get_physical_f64(array, physical)
 
 
@@ -543,6 +590,16 @@ def set_physical_from_f64(mut array: Array, physical: Int, value: Float64) raise
         array.data.bitcast[Float32]()[physical] = Float32(value)
     elif array.dtype_code == DTYPE_FLOAT16:
         array.data.bitcast[Float16]()[physical] = Float16(value)
+    elif array.dtype_code == DTYPE_COMPLEX64:
+        # Set the real part; zero the imag part. Matches numpy's
+        # f64-to-complex assignment.
+        var ptr = array.data.bitcast[Float32]()
+        ptr[physical * 2] = Float32(value)
+        ptr[physical * 2 + 1] = 0.0
+    elif array.dtype_code == DTYPE_COMPLEX128:
+        var ptr = array.data.bitcast[Float64]()
+        ptr[physical * 2] = value
+        ptr[physical * 2 + 1] = 0.0
     else:
         array.data.bitcast[Float64]()[physical] = value
 
@@ -599,6 +656,20 @@ def set_logical_from_py(mut array: Array, logical: Int, value_obj: PythonObject)
         array.data.bitcast[Float32]()[physical] = Float32(Float64(py=value_obj))
     elif array.dtype_code == DTYPE_FLOAT16:
         array.data.bitcast[Float16]()[physical] = Float16(Float64(py=value_obj))
+    elif array.dtype_code == DTYPE_COMPLEX64 or array.dtype_code == DTYPE_COMPLEX128:
+        # Accept python complex or real numbers. Real → imaginary=0.
+        var real_obj = value_obj.real
+        var imag_obj = value_obj.imag
+        var real_val = Float64(py=real_obj)
+        var imag_val = Float64(py=imag_obj)
+        if array.dtype_code == DTYPE_COMPLEX64:
+            var ptr = array.data.bitcast[Float32]()
+            ptr[physical * 2] = Float32(real_val)
+            ptr[physical * 2 + 1] = Float32(imag_val)
+        else:
+            var ptr = array.data.bitcast[Float64]()
+            ptr[physical * 2] = real_val
+            ptr[physical * 2 + 1] = imag_val
     else:
         array.data.bitcast[Float64]()[physical] = Float64(py=value_obj)
 
@@ -669,6 +740,30 @@ def contiguous_f16_ptr(
     return array.data.bitcast[Float16]() + array.offset_elems
 
 
+def contiguous_i16_ptr(
+    array: Array,
+) -> UnsafePointer[Int16, MutExternalOrigin]:
+    return array.data.bitcast[Int16]() + array.offset_elems
+
+
+def contiguous_i8_ptr(
+    array: Array,
+) -> UnsafePointer[Int8, MutExternalOrigin]:
+    return array.data.bitcast[Int8]() + array.offset_elems
+
+
+def contiguous_u16_ptr(
+    array: Array,
+) -> UnsafePointer[UInt16, MutExternalOrigin]:
+    return array.data.bitcast[UInt16]() + array.offset_elems
+
+
+def contiguous_u8_ptr(
+    array: Array,
+) -> UnsafePointer[UInt8, MutExternalOrigin]:
+    return array.data.bitcast[UInt8]() + array.offset_elems
+
+
 def contiguous_as_f64(array: Array, index: Int) raises -> Float64:
     if array.dtype_code == DTYPE_FLOAT32:
         return Float64(contiguous_f32_ptr(array)[index])
@@ -720,8 +815,33 @@ def cast_copy_array(src: Array, dtype_code: Int) raises -> Array:
         return copy_c_contiguous(src)
     var shape = clone_int_list(src.shape)
     var result = make_empty_array(dtype_code, shape^)
+    var dst_is_complex = dtype_code == DTYPE_COMPLEX64 or dtype_code == DTYPE_COMPLEX128
     for i in range(src.size_value):
         var physical = physical_offset(src, i)
+        if src.dtype_code == DTYPE_COMPLEX64:
+            var re = Float64(get_physical_c64_real(src, physical))
+            var im = Float64(get_physical_c64_imag(src, physical))
+            if dst_is_complex:
+                if dtype_code == DTYPE_COMPLEX64:
+                    set_physical_c64(result, i, Float32(re), Float32(im))
+                else:
+                    set_physical_c128(result, i, re, im)
+            else:
+                set_logical_from_f64(result, i, re)  # numpy drops imag
+            continue
+        if src.dtype_code == DTYPE_COMPLEX128:
+            var re = get_physical_c128_real(src, physical)
+            var im = get_physical_c128_imag(src, physical)
+            if dst_is_complex:
+                if dtype_code == DTYPE_COMPLEX64:
+                    set_physical_c64(result, i, Float32(re), Float32(im))
+                else:
+                    set_physical_c128(result, i, re, im)
+            else:
+                set_logical_from_f64(result, i, re)
+            continue
+        # Real → anything (including complex). Read source real value and
+        # write through the unified setters (which zero imag for complex).
         if src.dtype_code == DTYPE_BOOL:
             if get_physical_bool(src, physical):
                 set_logical_from_i64(result, i, 1)

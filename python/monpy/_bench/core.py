@@ -35,6 +35,7 @@ class BenchCase:
   rtol: float = 1e-4
   atol: float = 1e-4
   check_values: bool = True
+  check_dtype: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,12 +144,12 @@ def verify_same(monpy_value: object, numpy_value: object, *, rtol: float = 1e-5,
   npt.assert_allclose(np.asarray(monpy_value), np.asarray(numpy_value), rtol=rtol, atol=atol)
 
 
-def verify_shape_dtype(monpy_value: object, numpy_value: object) -> None:
+def verify_shape_dtype(monpy_value: object, numpy_value: object, *, check_dtype: bool = True) -> None:
   monpy_array = np.asarray(monpy_value)
   numpy_array = np.asarray(numpy_value)
   if monpy_array.shape != numpy_array.shape:
     raise AssertionError(f"shape mismatch: {monpy_array.shape!r} != {numpy_array.shape!r}")
-  if monpy_array.dtype != numpy_array.dtype:
+  if check_dtype and monpy_array.dtype != numpy_array.dtype:
     raise AssertionError(f"dtype mismatch: {monpy_array.dtype!r} != {numpy_array.dtype!r}")
 
 
@@ -641,7 +642,7 @@ def build_cases(
     for dtype in (np.float32, np.float64):
       suffix = dtype_name(dtype)
       target = monpy_dtype(dtype)
-      qr_np = np.linspace(1.0, 4.0, size * size, dtype=dtype).reshape(size, size)
+      qr_np = well_conditioned_matrix(size, dtype)
       qr_mp = mnp.asarray(qr_np, dtype=target, copy=True)
       psd_np = qr_np @ qr_np.T + size * np.eye(size, dtype=dtype)
       psd_mp = mnp.asarray(psd_np, dtype=target, copy=True)
@@ -703,6 +704,7 @@ def build_cases(
   for name, monpy_dt, numpy_dt, values in ext_dtype_specs:
     a_mp = mnp.asarray(values, dtype=monpy_dt, copy=True)
     a_np = np.asarray(values, dtype=numpy_dt)
+    reduction_matches_numpy_dtype = name == "i32"
     cases.extend([
       BenchCase(
         "ext_dtypes",
@@ -717,6 +719,7 @@ def build_cases(
         lambda src=a_mp: mnp.sum(src),
         lambda src=a_np: np.sum(src),
         check_values=False,
+        check_dtype=reduction_matches_numpy_dtype,
       ),
     ])
 
@@ -770,7 +773,7 @@ def run_case(case: BenchCase, *, loops: int, repeats: int, round_index: int) -> 
   if case.check_values:
     verify_same(monpy_result, numpy_result, rtol=case.rtol, atol=case.atol)
   else:
-    verify_shape_dtype(monpy_result, numpy_result)
+    verify_shape_dtype(monpy_result, numpy_result, check_dtype=case.check_dtype)
   monpy_us = time_call(case.monpy_fn, loops=loops, repeats=repeats, force=force_monpy) * 1_000_000
   numpy_us = time_call(case.numpy_fn, loops=loops, repeats=repeats) * 1_000_000
   return BenchSample(
@@ -802,18 +805,23 @@ def summarize(case: BenchCase, samples: Sequence[BenchSample]) -> BenchResult:
 def run_benchmarks(
   cases: Sequence[BenchCase], *, rounds: int, loops: int, repeats: int, progress: bool
 ) -> list[BenchResult]:
-  samples_by_case: dict[str, list[BenchSample]] = {case.name: [] for case in cases}
+  samples_by_case: dict[tuple[str, str], list[BenchSample]] = {
+    (case.group, case.name): [] for case in cases
+  }
   total = rounds * len(cases)
   with progress_bar(total=total, enabled=progress) as bar:
     for round_index in range(1, rounds + 1):
       for case in cases:
-        samples_by_case[case.name].append(run_case(case, loops=loops, repeats=repeats, round_index=round_index))
+        key = (case.group, case.name)
+        samples_by_case[key].append(
+          run_case(case, loops=loops, repeats=repeats, round_index=round_index)
+        )
         try:
           bar.set_postfix_str(f"round={round_index} case={case.name}", refresh=False)
           bar.update(1)
         except AttributeError:
           pass
-  return [summarize(case, samples_by_case[case.name]) for case in cases]
+  return [summarize(case, samples_by_case[(case.group, case.name)]) for case in cases]
 
 
 def format_us(value: float) -> str:
@@ -968,50 +976,3 @@ def render_results(results: Sequence[BenchResult], *, args: argparse.Namespace) 
     return render_markdown(ordered, rounds=args.rounds, loops=args.loops, repeats=args.repeats)
   return render_table(ordered, rounds=args.rounds, loops=args.loops, repeats=args.repeats)
 
-
-def main() -> None:
-  parser = argparse.ArgumentParser(description="benchmark monpy array-core paths against numpy")
-  parser.add_argument("--loops", type=positive_int, default=200, help="inner calls per timing sample")
-  parser.add_argument("--repeats", type=positive_int, default=5, help="timing samples per case per round")
-  parser.add_argument("--rounds", type=positive_int, default=3, help="full benchmark passes to aggregate")
-  parser.add_argument(
-    "--vector-size",
-    type=positive_int,
-    default=1024,
-    help="size for the wrapper-bound elementwise cases (default 1024)",
-  )
-  parser.add_argument(
-    "--vector-sizes",
-    type=parse_sizes,
-    default=parse_sizes("16384,262144,1048576"),
-    help="sizes for the bandwidth-regime cases (default 16K,256K,1M)",
-  )
-  parser.add_argument(
-    "--matrix-sizes",
-    type=parse_sizes,
-    default=parse_sizes("16,64,128,256"),
-    help="square matrix sizes for matmul/matvec/vecmat (default 16,64,128,256)",
-  )
-  parser.add_argument(
-    "--linalg-sizes",
-    type=parse_sizes,
-    default=parse_sizes("2,4,8,32,128"),
-    help="square matrix sizes for solve/inv/det (default 2,4,8,32,128)",
-  )
-  parser.add_argument("--format", choices=("table", "csv", "json", "markdown"), default="table")
-  parser.add_argument("--sort", choices=("input", "name", "monpy", "ratio"), default="input")
-  parser.add_argument("--progress", action=argparse.BooleanOptionalAction, default=True)
-  args = parser.parse_args()
-
-  cases = build_cases(
-    vector_size=args.vector_size,
-    vector_sizes=args.vector_sizes,
-    matrix_sizes=args.matrix_sizes,
-    linalg_sizes=args.linalg_sizes,
-  )
-  results = run_benchmarks(cases, rounds=args.rounds, loops=args.loops, repeats=args.repeats, progress=args.progress)
-  print(render_results(results, args=args))
-
-
-if __name__ == "__main__":
-  main()

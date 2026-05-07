@@ -218,7 +218,6 @@ def test_numpy_array_strided_view_copy_false_preserves_view_storage() -> None:
 @pytest.mark.parametrize(
   "dtype",
   [
-    "complex128",
     "object",
     "str",
     [("field", numpy.int64)],
@@ -227,6 +226,16 @@ def test_numpy_array_strided_view_copy_false_preserves_view_storage() -> None:
 def test_unsupported_dtype_requests_are_explicit_blockers(dtype: object) -> None:
   with pytest.raises(NotImplementedError, match="unsupported dtype"):
     np.asarray([1], dtype=dtype)
+
+
+def test_phase5d_complex_dtype_allocation_works() -> None:
+  arr = np.asarray([1 + 2j, 3 + 4j], dtype=np.complex128)
+  assert arr.dtype == np.complex128
+  assert arr.tolist() == [1 + 2j, 3 + 4j]
+  doubled = arr + arr
+  assert doubled.tolist() == [2 + 4j, 6 + 8j]
+  squared = arr * arr
+  assert squared.tolist() == [(1 + 2j) ** 2, (3 + 4j) ** 2]
 
 
 @pytest.mark.parametrize("dtype_name", ["uint64", "uint32", "uint16", "uint8"])
@@ -263,7 +272,13 @@ def test_phase5a_int_dtype_allocation_works(dtype_name: str) -> None:
   assert doubled.tolist() == [2, 4, 6]
 
 
-@pytest.mark.parametrize("obj", [[1 + 2j], ["monpy"], [object()]])
+@pytest.mark.parametrize("obj", [["monpy"], [object()]])
 def test_unsupported_array_value_types_are_explicit_blockers(obj: object) -> None:
   with pytest.raises(NotImplementedError, match="unsupported array input type"):
     np.asarray(obj)
+
+
+def test_complex_value_inputs_promote_to_default_complex_dtype() -> None:
+  arr = np.asarray([1 + 2j, 3 + 4j])
+  assert arr.dtype == np.complex128
+  assert arr.tolist() == [1 + 2j, 3 + 4j]
