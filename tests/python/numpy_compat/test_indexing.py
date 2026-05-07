@@ -3,7 +3,7 @@ from __future__ import annotations
 import monumpy as np
 import numpy
 import pytest
-from _helpers import assert_same_values
+from _helpers import assert_same_shape_dtype, assert_same_values
 
 
 def test_zero_dimensional_empty_index_returns_scalar() -> None:
@@ -87,11 +87,29 @@ def test_slice_assignment_from_array_matches_numpy() -> None:
   assert_same_values(arr, oracle)
 
 
-def test_newaxis_is_an_explicit_v1_gap() -> None:
-  arr = np.asarray([1, 2, 3])
+def test_newaxis_indexing_matches_numpy_and_shares_storage() -> None:
+  arr = np.arange(6, dtype=np.int64).reshape(2, 3)
+  oracle = numpy.arange(6, dtype=numpy.int64).reshape(2, 3)
 
-  with pytest.raises(NotImplementedError, match="newaxis"):
-    _ = arr[None, :]
+  view = arr[:, None, ::-1]
+  expected = oracle[:, None, ::-1]
+
+  assert_same_shape_dtype(view, expected)
+  assert_same_values(view, expected)
+  assert view.strides == expected.strides
+
+  view[1, 0, 1] = -7
+  oracle[:, None, ::-1][1, 0, 1] = -7
+
+  assert_same_values(arr, oracle)
+
+
+def test_expand_dims_matches_numpy_for_supported_axes() -> None:
+  arr = np.arange(6, dtype=np.float64).reshape(2, 3).T
+  oracle = numpy.arange(6, dtype=numpy.float64).reshape(2, 3).T
+
+  assert_same_shape_dtype(np.expand_dims(arr, axis=1), numpy.expand_dims(oracle, axis=1))
+  assert_same_values(np.expand_dims(arr, axis=(0, -1)), numpy.expand_dims(oracle, axis=(0, -1)))
 
 
 @pytest.mark.parametrize(

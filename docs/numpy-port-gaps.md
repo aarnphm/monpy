@@ -50,10 +50,11 @@ covered or partially covered today:
 - shape and stride metadata, c/f-contiguous checks, negative strides, zero
   strides, basic view safety.
 - indexing for integers, slices, reverse slices, ellipsis, and zero-dimensional
-  scalar access.
-- creation: `empty`, `zeros`, `ones`, `full`, `arange`, `linspace`.
+  scalar access, plus `newaxis` / `None` insertion.
+- creation: `empty`, `zeros`, `ones`, `full`, `empty_like`, `zeros_like`,
+  `ones_like`, `full_like`, `copy`, `ascontiguousarray`, `arange`, `linspace`.
 - shape/view operations: `reshape`, `transpose`, `matrix_transpose`,
-  `broadcast_to`, `diagonal`, `trace`.
+  `broadcast_to`, `expand_dims`, `diagonal`, `trace`.
 - elementwise functions: `add`, `subtract`, `multiply`, `divide`, `sin`, `cos`,
   `exp`, `log`, `where`, and the explicit `sin_add_mul` fused kernel.
 - reductions with `axis=None`: `sum`, `mean`, `min`, `max`, `argmax`.
@@ -66,7 +67,7 @@ major local blockers already called out in compatibility coverage:
 
 - unsupported dtype families: complex, object, string, structured, unsigned,
   datetime, and narrow integer arrays.
-- `newaxis`, boolean indexing, and integer-array fancy indexing.
+- boolean indexing and integer-array fancy indexing.
 - axis-aware reductions and reduction keyword controls.
 - higher-rank matmul.
 - full ufunc objects and ufunc methods.
@@ -80,16 +81,20 @@ wide api expansion.
 
 missing pieces:
 
-- dtype registry rather than scattered integer constants.
+- dtype registry for the full numpy dtype universe. the supported v1 dtypes now
+  have native registry-backed metadata and cast/promotion query helpers.
 - scalar aliases and scalar classes for signed integers, unsigned integers,
   floating types, complex types, strings, object, datetime, timedelta, and void.
-- dtype metadata: kind, itemsize, alignment, byte order, native-endian checks,
-  field descriptors, subarray descriptors, canonical names, and format strings.
+- dtype metadata for later families: native-endian checks, field descriptors,
+  subarray descriptors, canonical names beyond the v1 set, and format strings.
 - scalar extraction and python scalar conversion per dtype.
 - cast safety, cast loops, and astype behavior across every supported dtype pair.
-- promotion and type discovery: `result_type`, `promote_types`,
-  `min_scalar_type`, `can_cast`, `common_type`, `issubdtype`, `isdtype`,
-  `finfo`, and `iinfo`.
+  the current four-dtype surface has a native cast-copy path and an adapted
+  numpy cast-matrix test; the wider dtype families are still missing.
+- promotion and type discovery beyond the supported v1 set:
+  `min_scalar_type`, `common_type`, and wider-family behavior for
+  `result_type`, `promote_types`, `can_cast`, `issubdtype`, `isdtype`, `finfo`,
+  and `iinfo`.
 
 monpy implementation note:
 
@@ -116,7 +121,8 @@ missing pieces:
 - dtype discovery and requested-dtype resolution in the same pass.
 - copy policy that is shared by `array`, `asarray`, `copy`, `astype`, dlpack,
   buffer protocol, and numpy interop.
-- buffer-protocol ingestion as the fast portable path.
+- buffer-protocol ingestion as the fast portable path. the current supported
+  dtypes use the native dtype format decoder shared with the registry helpers.
 - optional numpy c-api ingestion as the fastest numpy-specific path if abi
   coupling is worth it.
 
@@ -184,7 +190,8 @@ monpy implementation note:
 
 - make existing `add`, `subtract`, `multiply`, `divide`, `sin`, `cos`, `exp`,
   and `log` ufunc-like before adding the long tail.
-- fix the known `log(-inf)` parity gap while building this layer.
+- keep the `log(-inf)` parity fix pinned while building this layer; full ufunc
+  objects are still missing.
 
 ### reductions and statistics
 
@@ -212,7 +219,6 @@ basic indexing exists. advanced indexing is still missing.
 
 missing pieces:
 
-- `newaxis` / `None` insertion.
 - boolean indexing and assignment.
 - integer-array fancy indexing and assignment.
 - mixed basic and advanced indexing semantics.
@@ -233,14 +239,13 @@ iterator semantics are correct.
 
 missing pieces:
 
-- creation helpers: `empty_like`, `zeros_like`, `ones_like`, `full_like`, `eye`,
-  `identity`, `tri`, `meshgrid`, `logspace`, `geomspace`, `frombuffer`,
-  `fromiter`, `ascontiguousarray`, `asfortranarray`, `atleast_1d`,
-  `atleast_2d`, `atleast_3d`, `copy`.
+- creation helpers: `eye`, `identity`, `tri`, `meshgrid`, `logspace`,
+  `geomspace`, `frombuffer`, `fromiter`, `asfortranarray`, `atleast_1d`,
+  `atleast_2d`, `atleast_3d`.
 - manipulation helpers: `concatenate`, `stack`, `block`, `split`,
-  `array_split`, `hsplit`, `vsplit`, `dsplit`, `squeeze`, `expand_dims`,
-  `ravel`, `moveaxis`, `swapaxes`, `flip`, `fliplr`, `flipud`, `rot90`, `roll`,
-  `repeat`, `tile`, `pad`, `append`, `insert`, `delete`, `trim_zeros`.
+  `array_split`, `hsplit`, `vsplit`, `dsplit`, `squeeze`, `ravel`, `moveaxis`,
+  `swapaxes`, `flip`, `fliplr`, `flipud`, `rot90`, `roll`, `repeat`, `tile`,
+  `pad`, `append`, `insert`, `delete`, `trim_zeros`.
 - memory checks: `shares_memory`, `may_share_memory`, contiguity helpers.
 
 monpy implementation note:

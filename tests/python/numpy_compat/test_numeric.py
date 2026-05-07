@@ -23,6 +23,43 @@ def test_creation_functions_match_numpy_shape_dtype_and_values() -> None:
   assert_same_shape_dtype(empty, numpy.empty((3, 0), dtype=numpy.float64))
 
 
+def test_like_creation_and_copy_helpers_match_numpy() -> None:
+  base = np.arange(6, dtype=np.int64).reshape(2, 3).T
+  oracle = numpy.arange(6, dtype=numpy.int64).reshape(2, 3).T
+
+  empty = np.empty_like(base, dtype=np.float32, shape=(2, 2))
+  assert_same_shape_dtype(empty, numpy.empty_like(oracle, dtype=numpy.float32, shape=(2, 2)))
+  assert_same_values(np.zeros_like(base), numpy.zeros_like(oracle))
+  assert_same_values(np.ones_like(base, dtype=np.float32), numpy.ones_like(oracle, dtype=numpy.float32))
+  assert_same_values(np.full_like(base, 7), numpy.full_like(oracle, 7))
+
+  copied = np.copy(base)
+  copied[0, 0] = -99
+  expected_copy = numpy.copy(oracle)
+  expected_copy[0, 0] = -99
+  assert_same_values(copied, expected_copy)
+  assert base[0, 0] == int(oracle[0, 0])
+
+
+def test_ascontiguousarray_materializes_only_when_needed() -> None:
+  dense = np.arange(4, dtype=np.float64)
+  assert np.ascontiguousarray(dense) is dense
+
+  scalar = np.ascontiguousarray(3.5)
+  assert_same_shape_dtype(scalar, numpy.ascontiguousarray(3.5))
+  assert_same_values(scalar, numpy.ascontiguousarray(3.5))
+
+  view = np.arange(6, dtype=np.float64).reshape(2, 3).T
+  oracle = numpy.arange(6, dtype=numpy.float64).reshape(2, 3).T
+  out = np.ascontiguousarray(view)
+  expected = numpy.ascontiguousarray(oracle)
+
+  assert out is not view
+  assert_same_shape_dtype(out, expected)
+  assert_same_values(out, expected)
+  assert out.strides == expected.strides
+
+
 def test_arange_and_linspace_match_numpy() -> None:
   assert_same_shape_dtype(np.arange(5), numpy.arange(5, dtype=numpy.int64))
   assert_same_values(np.arange(1.0, 2.0, 0.25), numpy.arange(1.0, 2.0, 0.25))

@@ -45,9 +45,9 @@ def test_nan_and_inf_follow_ieee_float_behavior() -> None:
   assert_same_values(out, expected, rtol=1e-12, atol=1e-12)
 
 
-@pytest.mark.xfail(strict=True, reason="monpy currently returns -inf for log(-inf), while NumPy returns nan")
-def test_log_negative_infinity_tracks_numpy_gap() -> None:
-  out = np.log(np.asarray([-np.inf], dtype=np.float64))
+@pytest.mark.parametrize("monpy_dtype", [np.float32, np.float64])
+def test_log_negative_infinity_matches_numpy(monpy_dtype: np.DType) -> None:
+  out = np.log(np.asarray([-np.inf], dtype=monpy_dtype))
 
   assert numpy.isnan(numpy.asarray(out)[0])
 

@@ -9,7 +9,9 @@ import statistics
 import sys
 import time
 from collections.abc import Callable, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
+import warnings
 
 import monpy as _monpy
 import monumpy as mnp
@@ -32,6 +34,7 @@ class BenchCase:
   numpy_fn: BenchFn
   rtol: float = 1e-4
   atol: float = 1e-4
+  check_values: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,12 +108,29 @@ def force_monpy(value: object) -> object:
   return value
 
 
+@contextmanager
+def suppress_known_numpy_linalg_warnings():
+  with warnings.catch_warnings():
+    warnings.filterwarnings(
+      "ignore",
+      category=RuntimeWarning,
+      message="overflow encountered in cast",
+      module=r"numpy\.linalg\._linalg",
+    )
+    yield
+
+
+def call_bench_fn(fn: BenchFn) -> object:
+  with suppress_known_numpy_linalg_warnings():
+    return fn()
+
+
 def time_call(fn: BenchFn, *, loops: int, repeats: int, force: Callable[[object], object] | None = None) -> float:
   samples: list[float] = []
   for _ in range(repeats):
     start = time.perf_counter()
     for _ in range(loops):
-      result = fn()
+      result = call_bench_fn(fn)
       if force is not None:
         result = force(result)
       if result is None:
@@ -121,6 +141,15 @@ def time_call(fn: BenchFn, *, loops: int, repeats: int, force: Callable[[object]
 
 def verify_same(monpy_value: object, numpy_value: object, *, rtol: float = 1e-5, atol: float = 1e-6) -> None:
   npt.assert_allclose(np.asarray(monpy_value), np.asarray(numpy_value), rtol=rtol, atol=atol)
+
+
+def verify_shape_dtype(monpy_value: object, numpy_value: object) -> None:
+  monpy_array = np.asarray(monpy_value)
+  numpy_array = np.asarray(numpy_value)
+  if monpy_array.shape != numpy_array.shape:
+    raise AssertionError(f"shape mismatch: {monpy_array.shape!r} != {numpy_array.shape!r}")
+  if monpy_array.dtype != numpy_array.dtype:
+    raise AssertionError(f"dtype mismatch: {monpy_array.dtype!r} != {numpy_array.dtype!r}")
 
 
 def ratio_value(monpy_us: float, numpy_us: float) -> float:
@@ -160,6 +189,16 @@ def build_cases(
   y_mp = mnp.asarray(y_np.tolist(), dtype=mnp.float32)
   add_out_np = np.empty_like(x_np)
   add_out_mp = mnp.empty(x_mp.shape, dtype=mnp.float32)
+  dtype_specs = (
+    ("bool", mnp.bool, np.bool_, (np.arange(vector_size) % 2) == 0),
+    ("i64", mnp.int64, np.int64, np.arange(vector_size, dtype=np.int64) - (vector_size // 2)),
+    ("f32", mnp.float32, np.float32, x_np),
+    ("f64", mnp.float64, np.float64, np.linspace(-2.0, 2.0, vector_size, dtype=np.float64)),
+  )
+  dtype_arrays = tuple(
+    (name, monpy_dt, numpy_dt, mnp.asarray(values, dtype=monpy_dt, copy=False), np.asarray(values, dtype=numpy_dt))
+    for name, monpy_dt, numpy_dt, values in dtype_specs
+  )
 
   def extension_binary_out_f32() -> object:
     _monpy._native.binary_into(add_out_mp._native, x_mp._native, y_mp._native, _monpy.OP_ADD)
@@ -177,14 +216,15 @@ def build_cases(
   n_mp = mnp.asarray(n_np.tolist(), dtype=mnp.float32)
   row_mp = mnp.asarray(row_np.tolist(), dtype=mnp.float32)
 
-  matmul_probe_np = scaled_matrix(max(matrix_sizes), np.float32)
+  matmul_probe_size = max(64, max(matrix_sizes))
+  matmul_probe_np = scaled_matrix(matmul_probe_size, np.float32)
   matmul_probe_mp = mnp.asarray(matmul_probe_np.tolist(), dtype=mnp.float32)
   matmul_probe = matmul_probe_mp @ matmul_probe_mp
   if not matmul_probe._native.used_accelerate():
     raise AssertionError("expected contiguous float32 matmul to exercise the Apple Accelerate path")
   verify_same(matmul_probe, matmul_probe_np @ matmul_probe_np, rtol=1e-4, atol=1e-4)
 
-  matmul_f64_probe_np = scaled_matrix(max(matrix_sizes), np.float64)
+  matmul_f64_probe_np = scaled_matrix(matmul_probe_size, np.float64)
   matmul_f64_probe_mp = mnp.asarray(matmul_f64_probe_np.tolist(), dtype=mnp.float64)
   matmul_f64_probe = matmul_f64_probe_mp @ matmul_f64_probe_mp
   if not matmul_f64_probe._native.used_accelerate():
@@ -202,6 +242,42 @@ def build_cases(
   verify_same(eager_fused_probe, np.sin(x_np) + y_np * 3.0, rtol=1e-4, atol=1e-4)
 
   cases = [
+    BenchCase(
+      "dtype",
+      "dtype_itemsize_f32",
+      lambda: mnp.float32.itemsize,
+      lambda: np.dtype(np.float32).itemsize,
+    ),
+    BenchCase(
+      "dtype",
+      "promote_types_i64_f32",
+      lambda: mnp.promote_types(mnp.int64, mnp.float32).itemsize,
+      lambda: np.promote_types(np.int64, np.float32).itemsize,
+    ),
+    BenchCase(
+      "dtype",
+      "result_type_array_scalar_f32",
+      lambda: mnp.result_type(x_mp, 1.5).itemsize,
+      lambda: np.result_type(x_np, 1.5).itemsize,
+    ),
+    BenchCase(
+      "dtype",
+      "can_cast_i64_f64_safe",
+      lambda: mnp.can_cast(mnp.int64, mnp.float64, casting="safe"),
+      lambda: np.can_cast(np.int64, np.float64, casting="safe"),
+    ),
+    BenchCase(
+      "dtype",
+      "finfo_f32_eps",
+      lambda: mnp.finfo(mnp.float32).eps,
+      lambda: float(np.finfo(np.float32).eps),
+    ),
+    BenchCase(
+      "dtype",
+      "iinfo_i64_bits",
+      lambda: mnp.iinfo(mnp.int64).bits,
+      lambda: np.iinfo(np.int64).bits,
+    ),
     BenchCase(
       "interop",
       "asarray_zero_copy_f32",
@@ -249,6 +325,98 @@ def build_cases(
       lambda: np.sin(x_np) + y_np * 3.0,
     ),
   ]
+
+  for name, monpy_dt, numpy_dt, values_mp, values_np in dtype_arrays:
+    if name != "f32":
+      cases.extend([
+        BenchCase(
+          "interop",
+          f"asarray_zero_copy_{name}",
+          lambda src=values_np, dt=monpy_dt: mnp.asarray(src, dtype=dt, copy=False),
+          lambda src=values_np: np.asarray(src),
+        ),
+        BenchCase(
+          "interop",
+          f"array_copy_{name}",
+          lambda src=values_np, dt=monpy_dt: mnp.array(src, dtype=dt, copy=True),
+          lambda src=values_np, dt=numpy_dt: np.array(src, dtype=dt, copy=True),
+        ),
+      ])
+    for dst_name, dst_monpy_dt, dst_numpy_dt, _, _ in dtype_arrays:
+      cases.append(
+        BenchCase(
+          "casts",
+          f"astype_{name}_to_{dst_name}",
+          lambda src=values_mp, dt=dst_monpy_dt: src.astype(dt),
+          lambda src=values_np, dt=dst_numpy_dt: src.astype(dt),
+        )
+      )
+
+  helper_np = np.arange(16 * 16, dtype=np.float32).reshape(16, 16).T
+  helper_mp = mnp.asarray(helper_np, dtype=mnp.float32, copy=False)
+  cases.extend([
+    BenchCase(
+      "creation",
+      "empty_like_shape_override_f32",
+      lambda: mnp.empty_like(helper_mp, dtype=mnp.float64, shape=(8, 8)),
+      lambda: np.empty_like(helper_np, dtype=np.float64, shape=(8, 8)),
+      check_values=False,
+    ),
+    BenchCase(
+      "creation",
+      "zeros_like_transpose_f32",
+      lambda: mnp.zeros_like(helper_mp),
+      lambda: np.zeros_like(helper_np),
+    ),
+    BenchCase(
+      "creation",
+      "ones_like_transpose_f32",
+      lambda: mnp.ones_like(helper_mp),
+      lambda: np.ones_like(helper_np),
+    ),
+    BenchCase(
+      "creation",
+      "full_like_transpose_f32",
+      lambda: mnp.full_like(helper_mp, 7.0),
+      lambda: np.full_like(helper_np, 7.0),
+    ),
+    BenchCase(
+      "copy",
+      "copy_transpose_f32",
+      lambda: mnp.copy(helper_mp),
+      lambda: np.copy(helper_np),
+    ),
+    BenchCase(
+      "copy",
+      "ascontiguousarray_dense_f32",
+      lambda: mnp.ascontiguousarray(x_mp),
+      lambda: np.ascontiguousarray(x_np),
+    ),
+    BenchCase(
+      "copy",
+      "ascontiguousarray_transpose_f32",
+      lambda: mnp.ascontiguousarray(helper_mp),
+      lambda: np.ascontiguousarray(helper_np),
+    ),
+    BenchCase(
+      "copy",
+      "ascontiguousarray_scalar_f64",
+      lambda: mnp.ascontiguousarray(3.5),
+      lambda: np.ascontiguousarray(3.5),
+    ),
+    BenchCase(
+      "views",
+      "newaxis_middle_f32",
+      lambda: helper_mp[:, None, :],
+      lambda: helper_np[:, None, :],
+    ),
+    BenchCase(
+      "views",
+      "expand_dims_tuple_f32",
+      lambda: mnp.expand_dims(helper_mp, axis=(0, -1)),
+      lambda: np.expand_dims(helper_np, axis=(0, -1)),
+    ),
+  ])
 
   diag_np = np.arange(64 * 64, dtype=np.float64).reshape(64, 64)
   diag_mp = mnp.asarray(diag_np.tolist(), dtype=mnp.float64)
@@ -412,9 +580,12 @@ def build_cases(
 
 
 def run_case(case: BenchCase, *, loops: int, repeats: int, round_index: int) -> BenchSample:
-  monpy_result = case.monpy_fn()
-  numpy_result = case.numpy_fn()
-  verify_same(monpy_result, numpy_result, rtol=case.rtol, atol=case.atol)
+  monpy_result = call_bench_fn(case.monpy_fn)
+  numpy_result = call_bench_fn(case.numpy_fn)
+  if case.check_values:
+    verify_same(monpy_result, numpy_result, rtol=case.rtol, atol=case.atol)
+  else:
+    verify_shape_dtype(monpy_result, numpy_result)
   monpy_us = time_call(case.monpy_fn, loops=loops, repeats=repeats, force=force_monpy) * 1_000_000
   numpy_us = time_call(case.numpy_fn, loops=loops, repeats=repeats) * 1_000_000
   return BenchSample(

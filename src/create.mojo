@@ -1,5 +1,5 @@
 from std.collections import List
-from std.math import cos, exp, isinf, isnan, log, sin
+from std.math import cos, exp, isinf, isnan, log, nan, sin
 from std.python import PythonObject
 
 from domain import (
@@ -21,6 +21,11 @@ from domain import (
     UNARY_EXP,
     UNARY_LOG,
     UNARY_SIN,
+    dtype_alignment,
+    dtype_can_cast,
+    dtype_item_size,
+    dtype_kind_code,
+    dtype_promote_types,
 )
 from elementwise import (
     apply_binary_f64,
@@ -40,6 +45,7 @@ from elementwise import (
 from array import (
     Array,
     broadcast_shape,
+    cast_copy_array,
     clone_int_list,
     copy_c_contiguous,
     fill_all_from_py,
@@ -301,13 +307,29 @@ def broadcast_to_ops(array_obj: PythonObject, shape_obj: PythonObject) raises ->
     return PythonObject(alloc=result^)
 
 
+def expand_dims_ops(array_obj: PythonObject, axis_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var axis = Int(py=axis_obj)
+    if axis < 0 or axis > len(src[].shape):
+        raise Error("axis out of bounds")
+    var shape = List[Int]()
+    var strides = List[Int]()
+    for i in range(axis):
+        shape.append(src[].shape[i])
+        strides.append(src[].strides[i])
+    shape.append(1)
+    strides.append(0)
+    for i in range(axis, len(src[].shape)):
+        shape.append(src[].shape[i])
+        strides.append(src[].strides[i])
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    return PythonObject(alloc=result^)
+
+
 def astype_ops(array_obj: PythonObject, dtype_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
     var dtype_code = Int(py=dtype_obj)
-    var shape = clone_int_list(src[].shape)
-    var result = make_empty_array(dtype_code, shape^)
-    for i in range(src[].size_value):
-        set_logical_from_f64(result, i, get_logical_as_f64(src[], i))
+    var result = cast_copy_array(src[], dtype_code)
     return PythonObject(alloc=result^)
 
 
@@ -432,7 +454,12 @@ def unary_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObj
         elif op == UNARY_EXP:
             value = exp(value)
         elif op == UNARY_LOG:
-            if not isnan(value) and not isinf(value):
+            if isnan(value):
+                pass
+            elif isinf(value):
+                if value < 0.0:
+                    value = nan[DType.float64]()
+            else:
                 value = log(value)
         else:
             raise Error("unknown unary op")
@@ -636,6 +663,30 @@ def result_dtype_for_binary_py_ops(
 
 def result_dtype_for_reduction_py_ops(dtype_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
     return PythonObject(result_dtype_for_reduction(Int(py=dtype_obj), Int(py=op_obj)))
+
+
+def dtype_item_size_py_ops(dtype_obj: PythonObject) raises -> PythonObject:
+    return PythonObject(dtype_item_size(Int(py=dtype_obj)))
+
+
+def dtype_alignment_py_ops(dtype_obj: PythonObject) raises -> PythonObject:
+    return PythonObject(dtype_alignment(Int(py=dtype_obj)))
+
+
+def dtype_kind_code_py_ops(dtype_obj: PythonObject) raises -> PythonObject:
+    return PythonObject(dtype_kind_code(Int(py=dtype_obj)))
+
+
+def dtype_promote_types_py_ops(lhs_dtype_obj: PythonObject, rhs_dtype_obj: PythonObject) raises -> PythonObject:
+    return PythonObject(dtype_promote_types(Int(py=lhs_dtype_obj), Int(py=rhs_dtype_obj)))
+
+
+def dtype_can_cast_py_ops(
+    from_dtype_obj: PythonObject,
+    to_dtype_obj: PythonObject,
+    casting_obj: PythonObject,
+) raises -> PythonObject:
+    return PythonObject(dtype_can_cast(Int(py=from_dtype_obj), Int(py=to_dtype_obj), Int(py=casting_obj)))
 
 
 def sin_add_mul_ops(

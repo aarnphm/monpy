@@ -11,10 +11,7 @@ from array import (
     make_external_array,
 )
 from domain import (
-    DTYPE_BOOL,
-    DTYPE_FLOAT32,
-    DTYPE_FLOAT64,
-    DTYPE_INT64,
+    dtype_code_from_format_char,
 )
 
 
@@ -72,26 +69,6 @@ comptime PyBuffer_Release = ExternalFunction[
     "PyBuffer_Release",
     def(_CPointer[Py_buffer, MutAnyOrigin]) thin -> None,
 ]
-
-
-def dtype_code_from_format_char(c: Int, itemsize: Int) raises -> Int:
-    # Map a numpy / Py_buffer format character to our internal dtype code.
-    # We only support the four dtypes monpy itself exposes; other codes
-    # raise so the caller can fall back to the array-interface path.
-    # 'f' = float32, 'd' = float64, '?' = bool, 'l'/'q' = int64.
-    if c == 0x66:  # 'f'
-        if itemsize == 4:
-            return DTYPE_FLOAT32
-    elif c == 0x64:  # 'd'
-        if itemsize == 8:
-            return DTYPE_FLOAT64
-    elif c == 0x3F:  # '?'
-        if itemsize == 1:
-            return DTYPE_BOOL
-    elif c == 0x6C or c == 0x71:  # 'l' or 'q'
-        if itemsize == 8:
-            return DTYPE_INT64
-    raise Error("buffer format unsupported by monpy")
 
 
 def asarray_from_buffer_ops(

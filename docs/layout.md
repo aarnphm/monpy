@@ -2,6 +2,17 @@
 
 date: 2026-05-04
 
+status: superseded by the numpy parity plan in
+`/Users/aarnphm/.claude/plans/bubbly-napping-shell.md`.
+
+the earlier note below optimized for static kernel-generation and explicitly
+skipped nested `IntTuple`, `composition`, `complement`, and `logical_divide`.
+the current parity roadmap reverses that decision: phase 2 should vendor a
+cpu-only CuTe-style algebra subset with hierarchical `IntTuple`, `Layout`,
+`composition`, `coalesce`, `complement`, `select`, `logical_divide`, and a
+stride-cursor iterator. keep this file as historical context for the perf
+argument, not as the active implementation contract.
+
 ## notes
 
 `Layout = (shape, stride, offset)` as a function `coord -> physical element offset`.

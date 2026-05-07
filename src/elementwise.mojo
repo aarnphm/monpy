@@ -1,4 +1,4 @@
-from std.math import cos, exp, isinf, isnan, log, sin
+from std.math import cos, exp, isinf, isnan, log, nan, sin
 from std.memory.unsafe_pointer import alloc
 from std.sys import CompilationTarget, simd_width_of
 
@@ -68,9 +68,13 @@ def apply_unary_f64(value: Float64, op: Int) raises -> Float64:
     if op == UNARY_EXP:
         return exp(value)
     if op == UNARY_LOG:
-        if not isnan(value) and not isinf(value):
-            return log(value)
-        return value
+        if isnan(value):
+            return value
+        if isinf(value):
+            if value < 0.0:
+                return nan[DType.float64]()
+            return value
+        return log(value)
     raise Error("unknown unary op")
 
 

@@ -54,6 +54,25 @@ def test_explicit_supported_dtype_casts_match_numpy(monpy_dtype: np.DType, numpy
   assert_same_values(arr, oracle)
 
 
+@pytest.mark.parametrize("src_monpy_dtype, src_numpy_dtype", SUPPORTED_DTYPE_PAIRS)
+@pytest.mark.parametrize("dst_monpy_dtype, dst_numpy_dtype", SUPPORTED_DTYPE_PAIRS)
+def test_astype_supported_cast_matrix_matches_numpy(
+  src_monpy_dtype: np.DType,
+  src_numpy_dtype: type[numpy.generic],
+  dst_monpy_dtype: np.DType,
+  dst_numpy_dtype: type[numpy.generic],
+) -> None:
+  values = [False, True, True] if src_monpy_dtype is np.bool else [0, 1, 2]
+  arr = np.asarray(values, dtype=src_monpy_dtype)[::-1]
+  oracle = numpy.asarray(values, dtype=src_numpy_dtype)[::-1]
+
+  cast = arr.astype(dst_monpy_dtype)
+  expected = oracle.astype(dst_numpy_dtype)
+
+  assert_same_shape_dtype(cast, expected)
+  assert_same_values(cast, expected)
+
+
 @pytest.mark.parametrize(
   ("dtype", "expected_dtype"),
   [

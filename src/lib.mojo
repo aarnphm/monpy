@@ -19,7 +19,13 @@ from create import (
     copyto_ops,
     det_ops,
     diagonal_ops,
+    dtype_alignment_py_ops,
+    dtype_can_cast_py_ops,
+    dtype_item_size_py_ops,
+    dtype_kind_code_py_ops,
+    dtype_promote_types_py_ops,
     empty_ops,
+    expand_dims_ops,
     fill_ops,
     from_external_ops,
     from_flat_ops,
@@ -91,6 +97,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[transpose_full_reverse_ops]("transpose_full_reverse")
         module.def_function[slice_ops]("slice")
         module.def_function[broadcast_to_ops]("broadcast_to")
+        module.def_function[expand_dims_ops]("expand_dims")
         module.def_function[astype_ops]("astype")
         module.def_function[materialize_c_contiguous_ops]("materialize_c_contiguous")
         module.def_function[diagonal_ops]("diagonal")
@@ -105,6 +112,11 @@ def PyInit__native() -> PythonObject:
         module.def_function[result_dtype_for_unary_py_ops]("_result_dtype_for_unary")
         module.def_function[result_dtype_for_binary_py_ops]("_result_dtype_for_binary")
         module.def_function[result_dtype_for_reduction_py_ops]("_result_dtype_for_reduction")
+        module.def_function[dtype_item_size_py_ops]("_dtype_itemsize")
+        module.def_function[dtype_alignment_py_ops]("_dtype_alignment")
+        module.def_function[dtype_kind_code_py_ops]("_dtype_kind")
+        module.def_function[dtype_promote_types_py_ops]("_promote_types")
+        module.def_function[dtype_can_cast_py_ops]("_can_cast")
         module.def_function[matmul_ops]("matmul")
         module.def_function[solve_ops]("linalg_solve")
         module.def_function[inv_ops]("linalg_inv")

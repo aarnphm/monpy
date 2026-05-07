@@ -33,28 +33,57 @@ class _NumpyArrayLike(typing.Protocol):
   def strides(self)->tuple[int,...]:...
   def astype(self,dtype:object,copy:builtins.bool=True)->_NumpyArrayLike:...
 
-# dtype codes mirror the Mojo side; identical layout there.
+# dtype, op, and casting codes mirror the Mojo side; identical layout there.
 DTYPE_BOOL,DTYPE_INT64,DTYPE_FLOAT32,DTYPE_FLOAT64=range(4)
+DTYPE_KIND_BOOL,DTYPE_KIND_SIGNED_INT,DTYPE_KIND_REAL_FLOAT=range(3)
+CASTING_NO,CASTING_EQUIV,CASTING_SAFE,CASTING_SAME_KIND,CASTING_UNSAFE=range(5)
 OP_ADD,OP_SUB,OP_MUL,OP_DIV=range(4)
 UNARY_SIN,UNARY_COS,UNARY_EXP,UNARY_LOG=range(4)
 REDUCE_SUM,REDUCE_MEAN,REDUCE_MIN,REDUCE_MAX,REDUCE_ARGMAX=range(5)
 
-@dataclass(frozen=True,slots=True)
+@dataclass(frozen=True,slots=True,eq=False)
 class DType:
-  name:str;code:int;itemsize:int;typestr:str
+  name:str;code:int;kind:str;itemsize:int;alignment:int;byteorder:str;typestr:str;format:str;scalar_type:type[object]
   def __repr__(self)->str:return f"monpy.{self.name}"
+  def __eq__(self,other:object)->builtins.bool:
+    if isinstance(other,DType):return self.code==other.code
+    nd=_np_dtype_obj(other)
+    if nd is None:return False
+    try:return self is _dtype_from_np(nd)
+    except NotImplementedError:return False
+  def __hash__(self)->int:return hash(self.code)
+  @property
+  def type(self)->type[object]:return self.scalar_type
+  @property
+  def char(self)->str:return self.format
+  @property
+  def str(self)->str:return self.typestr
 
-bool=DType("bool",0,1,"|b1")
-int64=DType("int64",1,8,"<i8")
-float32=DType("float32",2,4,"<f4")
-float64=DType("float64",3,8,"<f8")
+@dataclass(frozen=True,slots=True)
+class _FInfo:
+  dtype:DType;bits:int;eps:float;epsneg:float;max:float;min:float;smallest_normal:float;tiny:float;resolution:float;precision:int;nmant:int;iexp:int;maxexp:int;minexp:int;machep:int;negep:int
+
+@dataclass(frozen=True,slots=True)
+class _IInfo:
+  dtype:DType;bits:int;min:int;max:int
+
+bool=DType("bool",0,"b",1,1,"|","|b1","?",builtins.bool)
+int64=DType("int64",1,"i",8,8,"=","<i8","l",builtins.int)
+float32=DType("float32",2,"f",4,4,"=","<f4","f",builtins.float)
+float64=DType("float64",3,"f",8,8,"=","<f8","d",builtins.float)
+bool_=bool;int_=int64;float_=float64
 
 _DT:tuple[DType,...]=(bool,int64,float32,float64)                                                                # ordered by .code; idx == code
 _DTC:dict[int,DType]={d.code:d for d in _DT}                                                                     # code → DType
-_DTN:dict[str,DType]={d.name:d for d in _DT}                                                                     # name → DType
+_DTN:dict[str,DType]={d.name:d for d in _DT}|{"bool_":bool,"int_":int64,"float_":float64,"single":float32,"double":float64} # name → DType
 _DTNK:dict[tuple[str,int],DType]={("b",1):bool,("i",8):int64,("f",4):float32,("f",8):float64}                    # (numpy kind, itemsize) → DType
 _DTBT:dict[str,DType]={"|b1":bool}|{p+s:d for s,d in[("i8",int64),("f4",float32),("f8",float64)] for p in"<>="}  # numpy typestr (incl. byteorder prefix) → DType
+_DTK:dict[DType,int]={bool:DTYPE_KIND_BOOL,int64:DTYPE_KIND_SIGNED_INT,float32:DTYPE_KIND_REAL_FLOAT,float64:DTYPE_KIND_REAL_FLOAT}
 _NPTYPE:type[object]|None=None                                                                                   # cached numpy.ndarray type (lazy import)
+_CASTING_CODES:dict[str,int]={"no":CASTING_NO,"equiv":CASTING_EQUIV,"safe":CASTING_SAFE,"same_kind":CASTING_SAME_KIND,"unsafe":CASTING_UNSAFE}
+_ISDTYPE_KINDS:dict[str,set[DType]]={"bool":{bool},"signed integer":{int64},"unsigned integer":set(),"integral":{int64},"real floating":{float32,float64},"complex floating":set(),"numeric":{int64,float32,float64}}
+_FINFO:dict[DType,_FInfo]={float32:_FInfo(float32,32,1.1920928955078125e-07,5.960464477539063e-08,3.4028234663852886e38,-3.4028234663852886e38,1.1754943508222875e-38,1.1754943508222875e-38,1e-06,6,23,8,128,-126,-23,-24),float64:_FInfo(float64,64,2.220446049250313e-16,1.1102230246251565e-16,1.7976931348623157e308,-1.7976931348623157e308,2.2250738585072014e-308,2.2250738585072014e-308,1e-15,15,52,11,1024,-1022,-52,-53)}
+_IINFO:dict[DType,_IInfo]={int64:_IInfo(int64,64,-9223372036854775808,9223372036854775807)}
 
 # 4×4 promotion tables flattened to a 16-char digit string, indexed (lhs.code*4 + rhs.code).
 # Each char is the result DType's .code in the same _DT ordering. Numpy convention: int+float32→float64.
@@ -198,11 +227,17 @@ class ndarray:
     return self._native.get_scalar(0)
   def _view_for_key(self,key:object)->ndarray:
     parts=_expand_key(key,self.ndim);starts:list[int]=[];stops:list[int]=[];steps:list[int]=[];drops:list[int]=[]            # drops[axis]==1 → collapse axis (integer index, not slice)
-    for axis,part in enumerate(parts):
+    axis=0;result_axis=0;new_axes:list[int]=[]
+    for part in parts:
+      if part is None:new_axes.append(result_axis);result_axis+=1;continue
       d=self.shape[axis]
       if isinstance(part,slice):a,b,c=part.indices(d);starts.append(a);stops.append(b);steps.append(c);drops.append(0)
       else:i=_norm_idx(part,d);starts.append(i);stops.append(i+1);steps.append(1);drops.append(1)
-    return ndarray(_native.slice(self._native,tuple(starts),tuple(stops),tuple(steps),tuple(drops)),base=self)
+      axis+=1
+      if isinstance(part,slice):result_axis+=1
+    out=ndarray(_native.slice(self._native,tuple(starts),tuple(stops),tuple(steps),tuple(drops)),base=self)
+    for axis in new_axes:out=ndarray(_native.expand_dims(out._native,axis),base=out)
+    return out
 
 
 class _DeferredArray:
@@ -298,6 +333,58 @@ class _ScalarBinaryExpression(_DeferredArray):
 
 def dtype(value:object)->DType:return _resolve_dtype(value)
 
+def promote_types(type1:object,type2:object)->DType:
+  l=_resolve_dtype(type1);r=_resolve_dtype(type2)
+  return _DTC[builtins.int(_native._promote_types(l.code,r.code))]
+
+def result_type(*arrays_and_dtypes:object)->DType:
+  if not arrays_and_dtypes:raise TypeError("result_type() needs at least one array or dtype")
+  strong:list[DType]=[];weak:list[object]=[]
+  for value in arrays_and_dtypes:
+    d,is_strong=_dtype_for_result_type_arg(value)
+    if is_strong:strong.append(d)
+    else:weak.append(value)
+  if strong:
+    result=strong[0]
+    for d in strong[1:]:result=promote_types(result,d)
+    for value in weak:result=promote_types(result,_scalar_dtype_for_array_dtype(result,value))
+    return result
+  result=_isd(weak[0])
+  for value in weak[1:]:result=promote_types(result,_isd(value))
+  return result
+
+def can_cast(from_:object,to:object,casting:str="safe")->builtins.bool:
+  try:casting_code=_CASTING_CODES[casting]
+  except KeyError as exc:raise ValueError(f"casting must be one of {tuple(_CASTING_CODES)}") from exc
+  f=_dtype_for_can_cast_arg(from_);t=_resolve_dtype(to)
+  return builtins.bool(_native._can_cast(f.code,t.code,casting_code))
+
+def issubdtype(arg1:object,arg2:object)->builtins.bool:
+  d=_resolve_dtype(arg1)
+  abstract=_abstract_dtype_set(arg2,for_isdtype=False)
+  if abstract is not None:return d in abstract
+  try:return d==_resolve_dtype(arg2)
+  except NotImplementedError:return False
+
+def isdtype(dtype:object,kind:object)->builtins.bool:
+  d=_resolve_dtype(dtype)
+  if isinstance(kind,tuple):return any(isdtype(d,k) for k in kind)
+  abstract=_abstract_dtype_set(kind,for_isdtype=True)
+  if abstract is not None:return d in abstract
+  if kind in(builtins.bool,builtins.int,builtins.float):raise TypeError(f"kind argument must be comprised of NumPy dtypes or strings only, but is a {type(kind)!r}")
+  try:return d==_resolve_dtype(kind)
+  except NotImplementedError as exc:raise TypeError(f"kind argument must be comprised of NumPy dtypes or strings only, but is a {type(kind)!r}") from exc
+
+def finfo(dtype:object)->_FInfo:
+  d=_resolve_dtype(dtype)
+  try:return _FINFO[d]
+  except KeyError as exc:raise ValueError(f"data type {d!r} not inexact") from exc
+
+def iinfo(dtype:object)->_IInfo:
+  d=_resolve_dtype(dtype)
+  try:return _IINFO[d]
+  except KeyError as exc:raise ValueError(f"Invalid integer data type {d.kind!r}.") from exc
+
 def array(obj:object,dtype:object=None,*,copy:builtins.bool|None=True,device:object=None)->ndarray:return asarray(obj,dtype=dtype,copy=copy,device=device)
 
 def asarray(obj:object,dtype:object=None,*,copy:builtins.bool|None=None,device:object=None)->ndarray:
@@ -339,6 +426,26 @@ def full(shape:int|Sequence[int],fill_value:object,*,dtype:object=None,device:ob
   _check_cpu(device);t=_resolve_dtype(dtype) if dtype is not None else _infer_dtype([fill_value]);n=_norm_shape(shape)
   return ndarray(_native.full(n,fill_value,t.code))
 
+def empty_like(prototype:object,dtype:object=None,order:str="K",subok:builtins.bool=True,shape:int|Sequence[int]|None=None,*,device:object=None)->ndarray:
+  _check_order(order);del subok
+  arr=asarray(prototype);t=_resolve_dtype(dtype) if dtype is not None else arr.dtype
+  return empty(arr.shape if shape is None else _norm_shape(shape),dtype=t,device=device)
+
+def zeros_like(prototype:object,dtype:object=None,order:str="K",subok:builtins.bool=True,shape:int|Sequence[int]|None=None,*,device:object=None)->ndarray:
+  _check_order(order);del subok
+  arr=asarray(prototype);t=_resolve_dtype(dtype) if dtype is not None else arr.dtype
+  return zeros(arr.shape if shape is None else _norm_shape(shape),dtype=t,device=device)
+
+def ones_like(prototype:object,dtype:object=None,order:str="K",subok:builtins.bool=True,shape:int|Sequence[int]|None=None,*,device:object=None)->ndarray:
+  _check_order(order);del subok
+  arr=asarray(prototype);t=_resolve_dtype(dtype) if dtype is not None else arr.dtype
+  return ones(arr.shape if shape is None else _norm_shape(shape),dtype=t,device=device)
+
+def full_like(prototype:object,fill_value:object,dtype:object=None,order:str="K",subok:builtins.bool=True,shape:int|Sequence[int]|None=None,*,device:object=None)->ndarray:
+  _check_order(order);del subok
+  arr=asarray(prototype);t=_resolve_dtype(dtype) if dtype is not None else arr.dtype
+  return full(arr.shape if shape is None else _norm_shape(shape),fill_value,dtype=t,device=device)
+
 def arange(start:int|float,stop:int|float|None=None,step:int|float=1,*,dtype:object=None,device:object=None)->ndarray:
   _check_cpu(device);a=0 if stop is None else start;b=start if stop is None else stop                                         # 1-arg form: stop=start, start=0 (numpy convention)
   t=_resolve_dtype(dtype) if dtype is not None else (float64 if any(isinstance(v,builtins.float) for v in(a,b,step)) else int64)
@@ -352,6 +459,16 @@ def reshape(x:object,shape:int|Sequence[int])->ndarray:return asarray(x).reshape
 def transpose(x:object,axes:Sequence[int]|None=None)->ndarray:return asarray(x).transpose(axes)
 def matrix_transpose(x:object)->ndarray:return asarray(x).mT
 def broadcast_to(x:object,shape:int|Sequence[int])->ndarray:a=asarray(x);return ndarray(_native.broadcast_to(a._native,_norm_shape(shape)),base=a)
+def expand_dims(a:object,axis:int|Sequence[int])->ndarray:
+  arr=asarray(a);axes=(axis,) if isinstance(axis,builtins.int) else tuple(axis);ndim=arr.ndim+len(axes);norm:list[int]=[]
+  for ax in axes:
+    n=ax+ndim if ax<0 else ax
+    if n<0 or n>=ndim:raise ValueError("axis out of bounds")
+    norm.append(n)
+  if len(set(norm))!=len(norm):raise ValueError("repeated axis")
+  out=arr
+  for ax in sorted(norm):out=ndarray(_native.expand_dims(out._native,ax),base=out)
+  return out
 
 def add(x1:object,x2:object,*,out:ndarray|None=None)->object:return _binary(x1,x2,OP_ADD,out=out)
 def subtract(x1:object,x2:object,*,out:ndarray|None=None)->object:return _binary(x1,x2,OP_SUB,out=out)
@@ -402,6 +519,18 @@ def trace(a:object,offset:int=0,axis1:int=0,axis2:int=1,dtype:object=None,out:nd
 
 def astype(x:object,dtype:object,/,*,copy:builtins.bool=True,device:object=None)->ndarray:return asarray(x).astype(dtype,copy=copy,device=device)
 
+def copy(a:object,order:str="K",subok:builtins.bool=False)->ndarray:
+  _check_order(order);del subok
+  arr=asarray(a)
+  return arr.astype(arr.dtype,copy=True)
+
+def ascontiguousarray(a:object,dtype:object=None,*,device:object=None)->ndarray:
+  _check_cpu(device)
+  arr=asarray(a,dtype=dtype,copy=None)
+  if arr.ndim==0:return arr.reshape((1,))
+  if arr._native.is_c_contiguous():return arr
+  return arr.astype(arr.dtype,copy=True)
+
 def from_dlpack(x:object,/,*,device:object=None,copy:builtins.bool|None=None)->ndarray:
   if device is not None and device!="cpu":raise NotImplementedError("monpy v1 only supports cpu arrays")
   global _NPTYPE
@@ -410,7 +539,7 @@ def from_dlpack(x:object,/,*,device:object=None,copy:builtins.bool|None=None)->n
   return asarray(_npmod().from_dlpack(x,device=device,copy=copy),copy=copy is True)
 
 def __array_namespace_info__()->object:
-  def dts(*,device:object=None,kind:object=None)->dict[str,DType]:_check_cpu(device);return dict(_DTN)
+  def dts(*,device:object=None,kind:object=None)->dict[str,DType]:_check_cpu(device);return {d.name:d for d in _DT}
   def ddts(*,device:object=None)->dict[str,DType]:_check_cpu(device);return{"integral":int64,"real floating":float64,"bool":bool}
   return SimpleNamespace(default_device=lambda:"cpu",devices=lambda:["cpu"],dtypes=dts,default_dtypes=ddts,capabilities=lambda:{"boolean indexing":False,"data-dependent shapes":False})
 
@@ -519,12 +648,59 @@ def _isd(v:object)->DType:                                                      
   if isinstance(v,builtins.int):return int64
   return float64
 
-def _isd_arr(arr:ndarray|_DeferredArray,v:object)->DType:
-  # like _isd but biased toward the array's float dtype, so `f32_array * 2` stays f32 instead of upcasting via int64.
-  ad=arr.dtype
-  if ad in(float32,float64) and isinstance(v,(builtins.int,builtins.float)):return ad
+def _scalar_dtype_for_array_dtype(ad:DType,v:object)->DType:
+  # NumPy 2.x keeps python scalars weak around arrays: f32+1 and f32+1.5 stay f32, while int64+1.5 promotes to f64.
+  if ad in(float32,float64) and isinstance(v,(builtins.bool,builtins.int,builtins.float)):return ad
   if ad==int64 and isinstance(v,(builtins.bool,builtins.int)):return int64
   return _isd(v)
+
+def _isd_arr(arr:ndarray|_DeferredArray,v:object)->DType:
+  # like _isd but biased toward the array's float dtype, so `f32_array * 2` stays f32 instead of upcasting via int64.
+  return _scalar_dtype_for_array_dtype(arr.dtype,v)
+
+def _dtype_for_result_type_arg(v:object)->tuple[DType,builtins.bool]:
+  if isinstance(v,(ndarray,_DeferredArray)):return v.dtype,True
+  if _is_scalar(v):return _isd(v),False
+  if isinstance(v,DType):return v,True
+  if isinstance(v,str):return _resolve_dtype(v),True
+  try:
+    n=_npmod()
+    if isinstance(v,n.ndarray):return _dtype_from_np(v.dtype),True
+  except NotImplementedError:pass
+  nd=_np_dtype_obj(v)
+  if nd is not None:return _dtype_from_np(nd),True
+  try:return _infer_dtype(_flat(v)[1]),True
+  except NotImplementedError as exc:raise NotImplementedError(f"unsupported result_type argument: {v!r}") from exc
+
+def _dtype_for_can_cast_arg(v:object)->DType:
+  if _is_scalar(v):raise TypeError("can_cast() does not support Python ints, floats, and complex because the result used to depend on the value.")
+  if isinstance(v,(ndarray,_DeferredArray)):return v.dtype
+  try:
+    n=_npmod()
+    if isinstance(v,n.ndarray):return _dtype_from_np(v.dtype)
+  except NotImplementedError:pass
+  return _resolve_dtype(v)
+
+def _abstract_dtype_set(v:object,*,for_isdtype:builtins.bool)->set[DType]|None:
+  if isinstance(v,str):
+    if not for_isdtype:return None
+    if v not in _ISDTYPE_KINDS:raise ValueError(f"kind argument is a string, but {v!r} is not a known kind name.")
+    return _ISDTYPE_KINDS[v]
+  if not for_isdtype:
+    if v is builtins.bool:return{bool}
+    if v is builtins.int:return{int64}
+    if v is builtins.float:return{float64}
+  try:n=_npmod()
+  except NotImplementedError:return None
+  if not for_isdtype:
+    if v is n.bool_:return{bool}
+    if v is n.integer or v is n.signedinteger:return{int64}
+    if v is n.floating:return{float32,float64}
+    if v is n.number:return{int64,float32,float64}
+    if v is n.generic:return set(_DT)
+  elif v in(n.floating,n.integer,n.signedinteger,n.number,n.generic):
+    return set()
+  return None
 
 def _resolve_dtype(v:object)->DType:
   if v is None:return float64
@@ -712,18 +888,20 @@ def _unflat(flat:Sequence[object],sh:tuple[int,...])->object:
   return[_unflat(flat[i*step:(i+1)*step],sh[1:]) for i in range(sh[0])]
 
 def _expand_key(key:object,ndim:int)->tuple[object,...]:
-  # normalise an indexing key to a tuple of length ndim, expanding Ellipsis and rejecting newaxis.
+  # normalise an indexing key, expanding Ellipsis while preserving None axes.
   if key==():
     if ndim!=0:raise IndexError("empty index is only valid for zero-dimensional arrays")
     return()
   parts=key if isinstance(key,tuple) else(key,)
-  if any(p is None for p in parts):raise NotImplementedError("newaxis indexing is not implemented in monpy v1")
   if parts.count(Ellipsis)>1:raise IndexError("an index can only have a single ellipsis")
+  used=builtins.sum(1 for p in parts if p is not None and p is not Ellipsis)
+  if used>ndim:raise IndexError("too many indices for array")
   if Ellipsis in parts:
-    ea=parts.index(Ellipsis);missing=ndim-(len(parts)-1)
+    ea=parts.index(Ellipsis);missing=ndim-used
     parts=parts[:ea]+(slice(None),)*missing+parts[ea+1:]
-  if len(parts)>ndim:raise IndexError("too many indices for array")
-  return parts+(slice(None),)*(ndim-len(parts))
+  used=builtins.sum(1 for p in parts if p is not None)
+  if used>ndim:raise IndexError("too many indices for array")
+  return parts+(slice(None),)*(ndim-used)
 
 def _norm_idx(i:object,d:int)->int:
   if not isinstance(i,builtins.int):raise NotImplementedError("monpy v1 supports only integer and slice indexing")
@@ -744,7 +922,10 @@ def _norm_axes(axes:Sequence[int],n:int)->tuple[int,...]:
 def _check_cpu(d:object)->None:
   if d not in(None,"cpu"):raise NotImplementedError("monpy v1 only supports cpu arrays")
 
+def _check_order(order:str)->None:
+  if order not in("C","A","K"):raise NotImplementedError("monpy v1 only supports c-contiguous materialization")
+
 
 linalg=importlib.import_module(f"{__name__}.linalg")
 
-__all__=["DType","add","arange","array","asarray","argmax","astype","bool","broadcast_to","cos","diagonal","divide","dtype","e","empty","exp","float32","float64","from_dlpack","full","inf","int64","linalg","linspace","log","matmul","matrix_transpose","max","mean","min","multiply","nan","ndarray","newaxis","ones","pi","reshape","sin","sin_add_mul","subtract","sum","trace","transpose","where","zeros"]
+__all__=["DType","add","arange","array","asarray","ascontiguousarray","argmax","astype","bool","bool_","broadcast_to","can_cast","copy","cos","diagonal","divide","dtype","e","empty","empty_like","exp","expand_dims","finfo","float_","float32","float64","from_dlpack","full","full_like","iinfo","inf","int_","int64","isdtype","issubdtype","linalg","linspace","log","matmul","matrix_transpose","max","mean","min","multiply","nan","ndarray","newaxis","ones","ones_like","pi","promote_types","reshape","result_type","sin","sin_add_mul","subtract","sum","trace","transpose","where","zeros","zeros_like"]

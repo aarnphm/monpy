@@ -14,6 +14,13 @@ PROMOTION_MATCH_CASES = [
   for lhs_dtype, lhs_numpy_dtype in SUPPORTED_DTYPE_PAIRS
   for rhs_dtype, rhs_numpy_dtype in SUPPORTED_DTYPE_PAIRS
 ]
+CASTING_CODES = {
+  "no": monpy.CASTING_NO,
+  "equiv": monpy.CASTING_EQUIV,
+  "safe": monpy.CASTING_SAFE,
+  "same_kind": monpy.CASTING_SAME_KIND,
+  "unsafe": monpy.CASTING_UNSAFE,
+}
 
 
 def values_for_dtype(monpy_dtype: np.DType) -> list[bool] | list[int] | list[float]:
@@ -64,6 +71,115 @@ def test_python_scalars_are_weak_for_float32_arrays(
 def test_unsupported_promotion_dtype_families_are_explicit_blockers(dtype: object) -> None:
   with pytest.raises(NotImplementedError, match="unsupported dtype"):
     np.asarray([1], dtype=dtype)
+
+
+@pytest.mark.parametrize(("monpy_dtype", "numpy_dtype"), SUPPORTED_DTYPE_PAIRS)
+def test_supported_dtype_metadata_matches_numpy_and_native_registry(
+  monpy_dtype: np.DType,
+  numpy_dtype: type[numpy.generic],
+) -> None:
+  oracle = numpy.dtype(numpy_dtype)
+
+  assert monpy_dtype.kind == oracle.kind
+  assert monpy_dtype.itemsize == oracle.itemsize
+  assert monpy_dtype.alignment == oracle.alignment
+  assert monpy_dtype.byteorder == oracle.byteorder
+  assert monpy_dtype.typestr == oracle.str
+  assert monpy_dtype.format == oracle.char
+  assert monpy._native._dtype_itemsize(monpy_dtype.code) == oracle.itemsize
+  assert monpy._native._dtype_alignment(monpy_dtype.code) == oracle.alignment
+  assert monpy._native._dtype_kind(monpy_dtype.code) == monpy._DTK[monpy_dtype]
+
+
+@pytest.mark.parametrize(("monpy_dtype", "numpy_dtype"), SUPPORTED_DTYPE_PAIRS)
+def test_supported_dtype_objects_compare_equal_to_numpy_dtype_inputs(
+  monpy_dtype: np.DType,
+  numpy_dtype: type[numpy.generic],
+) -> None:
+  assert monpy_dtype == numpy_dtype
+  assert monpy_dtype == numpy.dtype(numpy_dtype)
+  assert monpy_dtype == monpy._dtype_from_np(numpy.dtype(numpy_dtype))
+
+
+@pytest.mark.parametrize(("lhs_dtype", "lhs_numpy_dtype", "rhs_dtype", "rhs_numpy_dtype"), PROMOTION_MATCH_CASES)
+def test_promote_types_and_result_type_match_numpy(
+  lhs_dtype: np.DType,
+  lhs_numpy_dtype: type[numpy.generic],
+  rhs_dtype: np.DType,
+  rhs_numpy_dtype: type[numpy.generic],
+) -> None:
+  expected = numpy.promote_types(lhs_numpy_dtype, rhs_numpy_dtype)
+
+  assert np.promote_types(lhs_dtype, rhs_dtype) == monpy._DTC[monpy._native._promote_types(lhs_dtype.code, rhs_dtype.code)]
+  assert MONPY_TO_NUMPY_DTYPE[np.promote_types(lhs_dtype, rhs_dtype)] == expected
+  assert MONPY_TO_NUMPY_DTYPE[np.result_type(lhs_dtype, rhs_dtype)] == numpy.result_type(lhs_numpy_dtype, rhs_numpy_dtype)
+
+
+@pytest.mark.parametrize("scalar", [True, 1, 1.5])
+@pytest.mark.parametrize(("monpy_dtype", "numpy_dtype"), SUPPORTED_DTYPE_PAIRS)
+def test_result_type_keeps_python_scalars_weak_around_arrays(
+  monpy_dtype: np.DType,
+  numpy_dtype: type[numpy.generic],
+  scalar: bool | int | float,
+) -> None:
+  arr = np.asarray([1], dtype=monpy_dtype)
+  oracle = numpy.asarray([1], dtype=numpy_dtype)
+
+  assert MONPY_TO_NUMPY_DTYPE[np.result_type(arr, scalar)] == numpy.result_type(oracle, scalar)
+
+
+@pytest.mark.parametrize("casting", list(CASTING_CODES))
+@pytest.mark.parametrize(("lhs_dtype", "lhs_numpy_dtype", "rhs_dtype", "rhs_numpy_dtype"), PROMOTION_MATCH_CASES)
+def test_can_cast_matches_numpy_for_supported_dtypes(
+  lhs_dtype: np.DType,
+  lhs_numpy_dtype: type[numpy.generic],
+  rhs_dtype: np.DType,
+  rhs_numpy_dtype: type[numpy.generic],
+  casting: str,
+) -> None:
+  expected = numpy.can_cast(lhs_numpy_dtype, rhs_numpy_dtype, casting=casting)
+
+  assert np.can_cast(lhs_dtype, rhs_dtype, casting=casting) is bool(expected)
+  assert monpy._native._can_cast(lhs_dtype.code, rhs_dtype.code, CASTING_CODES[casting]) is bool(expected)
+
+
+@pytest.mark.parametrize("scalar", [True, 1, 1.5])
+def test_can_cast_rejects_python_scalars_like_numpy(scalar: bool | int | float) -> None:
+  with pytest.raises(TypeError, match="does not support Python"):
+    np.can_cast(scalar, np.float64)
+
+
+@pytest.mark.parametrize(("monpy_dtype", "numpy_dtype"), SUPPORTED_DTYPE_PAIRS)
+def test_dtype_kind_queries_match_numpy(
+  monpy_dtype: np.DType,
+  numpy_dtype: type[numpy.generic],
+) -> None:
+  oracle = numpy.dtype(numpy_dtype)
+  for kind in ["bool", "signed integer", "unsigned integer", "integral", "real floating", "complex floating", "numeric"]:
+    assert np.isdtype(monpy_dtype, kind) is bool(numpy.isdtype(oracle, kind))
+  for supertype in [numpy.bool_, numpy.integer, numpy.signedinteger, numpy.floating, numpy.number, numpy.generic]:
+    assert np.issubdtype(monpy_dtype, supertype) is bool(numpy.issubdtype(oracle, supertype))
+
+
+def test_finfo_and_iinfo_match_numpy_for_supported_numeric_limits() -> None:
+  for monpy_dtype, numpy_dtype in [(np.float32, numpy.float32), (np.float64, numpy.float64)]:
+    out = np.finfo(monpy_dtype)
+    expected = numpy.finfo(numpy_dtype)
+    assert out.bits == expected.bits
+    assert out.eps == pytest.approx(float(expected.eps))
+    assert out.max == pytest.approx(float(expected.max))
+    assert out.tiny == pytest.approx(float(expected.tiny))
+
+  out_i = np.iinfo(np.int64)
+  expected_i = numpy.iinfo(numpy.int64)
+  assert out_i.bits == expected_i.bits
+  assert out_i.min == expected_i.min
+  assert out_i.max == expected_i.max
+
+  with pytest.raises(ValueError, match="not inexact"):
+    np.finfo(np.int64)
+  with pytest.raises(ValueError, match="Invalid integer"):
+    np.iinfo(np.float64)
 
 
 @pytest.mark.parametrize(("lhs_dtype", "lhs_numpy_dtype", "rhs_dtype", "rhs_numpy_dtype"), PROMOTION_MATCH_CASES)

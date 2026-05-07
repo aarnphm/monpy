@@ -11,9 +11,12 @@ from domain import (
     DTYPE_FLOAT32,
     DTYPE_FLOAT64,
     DTYPE_INT64,
-    OP_DIV,
-    REDUCE_MEAN,
-    REDUCE_SUM,
+    dtype_item_size,
+    dtype_result_for_binary,
+    dtype_result_for_linalg,
+    dtype_result_for_linalg_binary,
+    dtype_result_for_reduction,
+    dtype_result_for_unary,
 )
 from storage import (
     Storage,
@@ -147,15 +150,7 @@ struct Array(Movable, Writable):
 
 
 def item_size(dtype_code: Int) raises -> Int:
-    if dtype_code == DTYPE_BOOL:
-        return 1
-    if dtype_code == DTYPE_INT64:
-        return 8
-    if dtype_code == DTYPE_FLOAT32:
-        return 4
-    if dtype_code == DTYPE_FLOAT64:
-        return 8
-    raise Error("unsupported dtype code")
+    return dtype_item_size(dtype_code)
 
 
 def validate_shape(shape: List[Int]) raises:
@@ -513,52 +508,47 @@ def copy_c_contiguous(src: Array) raises -> Array:
     return result^
 
 
+def cast_copy_array(src: Array, dtype_code: Int) raises -> Array:
+    if src.dtype_code == dtype_code:
+        return copy_c_contiguous(src)
+    var shape = clone_int_list(src.shape)
+    var result = make_empty_array(dtype_code, shape^)
+    for i in range(src.size_value):
+        var physical = physical_offset(src, i)
+        if src.dtype_code == DTYPE_BOOL:
+            if get_physical_bool(src, physical):
+                set_logical_from_i64(result, i, 1)
+            else:
+                set_logical_from_i64(result, i, 0)
+        elif src.dtype_code == DTYPE_INT64:
+            set_logical_from_i64(result, i, get_physical_i64(src, physical))
+        elif src.dtype_code == DTYPE_FLOAT32:
+            set_logical_from_f64(result, i, Float64(get_physical_f32(src, physical)))
+        elif src.dtype_code == DTYPE_FLOAT64:
+            set_logical_from_f64(result, i, get_physical_f64(src, physical))
+        else:
+            raise Error("unsupported dtype code")
+    return result^
+
+
 def result_dtype_for_unary(dtype_code: Int) -> Int:
-    if dtype_code == DTYPE_FLOAT32:
-        return DTYPE_FLOAT32
-    return DTYPE_FLOAT64
+    return dtype_result_for_unary(dtype_code)
 
 
 def result_dtype_for_binary(lhs_dtype: Int, rhs_dtype: Int, op: Int) -> Int:
-    if op == OP_DIV:
-        if lhs_dtype == DTYPE_FLOAT32 and (rhs_dtype == DTYPE_FLOAT32 or rhs_dtype == DTYPE_BOOL):
-            return DTYPE_FLOAT32
-        if rhs_dtype == DTYPE_FLOAT32 and (lhs_dtype == DTYPE_FLOAT32 or lhs_dtype == DTYPE_BOOL):
-            return DTYPE_FLOAT32
-        return DTYPE_FLOAT64
-    if lhs_dtype == DTYPE_FLOAT64 or rhs_dtype == DTYPE_FLOAT64:
-        return DTYPE_FLOAT64
-    if (lhs_dtype == DTYPE_INT64 and rhs_dtype == DTYPE_FLOAT32) or (
-        lhs_dtype == DTYPE_FLOAT32 and rhs_dtype == DTYPE_INT64
-    ):
-        return DTYPE_FLOAT64
-    if lhs_dtype == DTYPE_FLOAT32 or rhs_dtype == DTYPE_FLOAT32:
-        return DTYPE_FLOAT32
-    if lhs_dtype == DTYPE_INT64 or rhs_dtype == DTYPE_INT64:
-        return DTYPE_INT64
-    return DTYPE_BOOL
+    return dtype_result_for_binary(lhs_dtype, rhs_dtype, op)
 
 
 def result_dtype_for_reduction(dtype_code: Int, op: Int) -> Int:
-    if op == REDUCE_MEAN:
-        if dtype_code == DTYPE_FLOAT32:
-            return DTYPE_FLOAT32
-        return DTYPE_FLOAT64
-    if op == REDUCE_SUM and dtype_code == DTYPE_BOOL:
-        return DTYPE_INT64
-    return dtype_code
+    return dtype_result_for_reduction(dtype_code, op)
 
 
 def result_dtype_for_linalg(dtype_code: Int) -> Int:
-    if dtype_code == DTYPE_FLOAT32:
-        return DTYPE_FLOAT32
-    return DTYPE_FLOAT64
+    return dtype_result_for_linalg(dtype_code)
 
 
 def result_dtype_for_linalg_binary(lhs_dtype: Int, rhs_dtype: Int) -> Int:
-    if lhs_dtype == DTYPE_FLOAT32 and rhs_dtype == DTYPE_FLOAT32:
-        return DTYPE_FLOAT32
-    return DTYPE_FLOAT64
+    return dtype_result_for_linalg_binary(lhs_dtype, rhs_dtype)
 
 
 def broadcast_shape(lhs: Array, rhs: Array) raises -> List[Int]:
