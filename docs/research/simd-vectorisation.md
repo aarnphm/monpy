@@ -257,7 +257,14 @@ the good:
 
 the mixed:
 
-- LLVM's autovectoriser handles simple loops well but bails on complex patterns. the complex multiply $$(a + bi)(c + di) = (ac - bd) + (ad + bc)i$$ requires a lane shuffle (interleave the real and imaginary parts) that LLVM doesn't recognise unless you write it with explicit `__builtin_shufflevector` (or Mojo's `SIMD.shuffle`). Mojo's autovectoriser inherits this limitation. monpy's complex paths are hand-written SIMD with explicit shuffle patterns.
+- LLVM's autovectoriser handles simple loops well but bails on complex patterns. the complex multiply
+
+  $$
+  (a + bi)(c + di) = (ac - bd) + (ad + bc)i
+  $$
+
+  requires a lane shuffle (interleave the real and imaginary parts) that LLVM doesn't recognise unless you write it with explicit `__builtin_shufflevector` (or Mojo's `SIMD.shuffle`). Mojo's autovectoriser inherits this limitation. monpy's complex paths are hand-written SIMD with explicit shuffle patterns.
+
 - branchy code with SIMD comparisons sometimes generates per-lane scalar code where SIMD `select` would work. the fix is to write `select(mask, then_val, else_val)` explicitly rather than `if mask: then_val else else_val`.
 - `f16` lowering on macOS hits the libm hole described in §6. workaround is the f32 cast path.
 

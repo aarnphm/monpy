@@ -567,35 +567,37 @@ def strided_binary_walk_typed[
             var op_ = result_data + result_offset
             var i = 0
             while i + width <= inner_size:
-                op_.store(
-                    i,
-                    apply_binary_typed_vec[dtype, width](
-                        lp.load[width=width](i),
-                        rp.load[width=width](i),
-                        op,
-                    ),
-                )
+                var lvec = lp.load[width=width](i)
+                var rvec = rp.load[width=width](i)
+                if op == OP_ADD:
+                    op_.store(i, lvec + rvec)
+                else:
+                    op_.store(i, apply_binary_typed_vec[dtype, width](lvec, rvec, op))
                 i += width
             while i < inner_size:
-                op_[i] = apply_binary_typed_vec[dtype, 1](SIMD[dtype, 1](lp[i]), SIMD[dtype, 1](rp[i]), op)[0]
+                if op == OP_ADD:
+                    op_[i] = lp[i] + rp[i]
+                else:
+                    op_[i] = apply_binary_typed_vec[dtype, 1](SIMD[dtype, 1](lp[i]), SIMD[dtype, 1](rp[i]), op)[0]
                 i += 1
         elif inner_kind == 2:
             var lp = lhs_data + lhs_offset
             var rp = rhs_data + rhs_offset
             var i = 0
             while i + width <= inner_size:
-                var ovec = apply_binary_typed_vec[dtype, width](
-                    lp.load[width=width](i),
-                    rp.load[width=width](i),
-                    op,
-                )
+                var lvec = lp.load[width=width](i)
+                var rvec = rp.load[width=width](i)
+                var ovec = lvec + rvec if op == OP_ADD else apply_binary_typed_vec[dtype, width](lvec, rvec, op)
                 comptime for k in range(width):
                     result_data[result_offset + (i + k) * inner_result_stride] = ovec[k]
                 i += width
             while i < inner_size:
-                result_data[result_offset + i * inner_result_stride] = apply_binary_typed_vec[dtype, 1](
-                    SIMD[dtype, 1](lp[i]), SIMD[dtype, 1](rp[i]), op
-                )[0]
+                if op == OP_ADD:
+                    result_data[result_offset + i * inner_result_stride] = lp[i] + rp[i]
+                else:
+                    result_data[result_offset + i * inner_result_stride] = apply_binary_typed_vec[dtype, 1](
+                        SIMD[dtype, 1](lp[i]), SIMD[dtype, 1](rp[i]), op
+                    )[0]
                 i += 1
         elif inner_kind == 3:
             # lhs/rhs stride -1, result stride +/-1. Logical position i
@@ -608,26 +610,36 @@ def strided_binary_walk_typed[
             while i + width <= inner_size:
                 var lvec = (lhs_data + lhs_offset - i - width + 1).load[width=width](0).reversed()
                 var rvec = (rhs_data + rhs_offset - i - width + 1).load[width=width](0).reversed()
-                var ovec = apply_binary_typed_vec[dtype, width](lvec, rvec, op)
+                var ovec = lvec + rvec if op == OP_ADD else apply_binary_typed_vec[dtype, width](lvec, rvec, op)
                 if inner_result_stride == 1:
                     (result_data + result_offset + i).store(0, ovec)
                 else:
                     (result_data + result_offset - i - width + 1).store(0, ovec.reversed())
                 i += width
             while i < inner_size:
-                result_data[result_offset + i * inner_result_stride] = apply_binary_typed_vec[dtype, 1](
-                    SIMD[dtype, 1](lhs_data[lhs_offset - i]),
-                    SIMD[dtype, 1](rhs_data[rhs_offset - i]),
-                    op,
-                )[0]
+                if op == OP_ADD:
+                    result_data[result_offset + i * inner_result_stride] = (
+                        lhs_data[lhs_offset - i] + rhs_data[rhs_offset - i]
+                    )
+                else:
+                    result_data[result_offset + i * inner_result_stride] = apply_binary_typed_vec[dtype, 1](
+                        SIMD[dtype, 1](lhs_data[lhs_offset - i]),
+                        SIMD[dtype, 1](rhs_data[rhs_offset - i]),
+                        op,
+                    )[0]
                 i += 1
         else:
             for i in range(inner_size):
-                result_data[result_offset + i * inner_result_stride] = apply_binary_typed_vec[dtype, 1](
-                    SIMD[dtype, 1](lhs_data[lhs_offset + i * inner_lhs_stride]),
-                    SIMD[dtype, 1](rhs_data[rhs_offset + i * inner_rhs_stride]),
-                    op,
-                )[0]
+                var lval = lhs_data[lhs_offset + i * inner_lhs_stride]
+                var rval = rhs_data[rhs_offset + i * inner_rhs_stride]
+                if op == OP_ADD:
+                    result_data[result_offset + i * inner_result_stride] = lval + rval
+                else:
+                    result_data[result_offset + i * inner_result_stride] = apply_binary_typed_vec[dtype, 1](
+                        SIMD[dtype, 1](lval),
+                        SIMD[dtype, 1](rval),
+                        op,
+                    )[0]
         if outer_ndim == 0:
             break
         var idx = outer_ndim - 1
@@ -670,7 +682,9 @@ def binary_row_broadcast_contig_typed[
             var matrix_index = i * cols + j
             var matrix_vec = matrix_ptr.load[width=width](matrix_index)
             var row_vec = row_ptr.load[width=width](j)
-            if row_on_left:
+            if op == OP_ADD:
+                out_ptr.store(matrix_index, matrix_vec + row_vec)
+            elif row_on_left:
                 out_ptr.store(
                     matrix_index,
                     apply_binary_typed_vec[dtype, width](row_vec, matrix_vec, op),
@@ -685,7 +699,9 @@ def binary_row_broadcast_contig_typed[
             var matrix_index = i * cols + j
             var lhs_v = SIMD[dtype, 1](matrix_ptr[matrix_index])
             var rhs_v = SIMD[dtype, 1](row_ptr[j])
-            if row_on_left:
+            if op == OP_ADD:
+                out_ptr[matrix_index] = matrix_ptr[matrix_index] + row_ptr[j]
+            elif row_on_left:
                 out_ptr[matrix_index] = apply_binary_typed_vec[dtype, 1](rhs_v, lhs_v, op)[0]
             else:
                 out_ptr[matrix_index] = apply_binary_typed_vec[dtype, 1](lhs_v, rhs_v, op)[0]
@@ -1019,6 +1035,80 @@ def maybe_unary_contiguous(src: Array, mut result: Array, op: Int) raises -> Boo
             src.size_value,
             op,
         )
+        return True
+    return False
+
+
+def unary_rank2_strided_typed[
+    dtype: DType
+](src: Array, mut result: Array, op: Int) raises where dtype.is_floating_point():
+    var rows = src.shape[0]
+    var cols = src.shape[1]
+    var src_row_stride = src.strides[0]
+    var src_col_stride = src.strides[1]
+    var result_row_stride = result.strides[0]
+    var result_col_stride = result.strides[1]
+    var src_data = src.data.bitcast[Scalar[dtype]]()
+    var result_data = result.data.bitcast[Scalar[dtype]]()
+    comptime tile = 8
+    var row_block = 0
+    while row_block < rows:
+        var row_end = row_block + tile
+        if row_end > rows:
+            row_end = rows
+        var col_block = 0
+        while col_block < cols:
+            var col_end = col_block + tile
+            if col_end > cols:
+                col_end = cols
+            if src_row_stride == 1:
+                var col = col_block
+                while col < col_end:
+                    var row = row_block
+                    var src_index = src.offset_elems + row * src_row_stride + col * src_col_stride
+                    var result_index = result.offset_elems + row * result_row_stride + col * result_col_stride
+                    while row < row_end:
+                        if op == UNARY_SIN:
+                            result_data[result_index] = sin(SIMD[dtype, 1](src_data[src_index]))[0]
+                        else:
+                            result_data[result_index] = apply_unary_typed_vec[dtype, 1](
+                                SIMD[dtype, 1](src_data[src_index]), op
+                            )[0]
+                        row += 1
+                        src_index += src_row_stride
+                        result_index += result_row_stride
+                    col += 1
+            else:
+                var row = row_block
+                while row < row_end:
+                    var col = col_block
+                    var src_index = src.offset_elems + row * src_row_stride + col * src_col_stride
+                    var result_index = result.offset_elems + row * result_row_stride + col * result_col_stride
+                    while col < col_end:
+                        if op == UNARY_SIN:
+                            result_data[result_index] = sin(SIMD[dtype, 1](src_data[src_index]))[0]
+                        else:
+                            result_data[result_index] = apply_unary_typed_vec[dtype, 1](
+                                SIMD[dtype, 1](src_data[src_index]), op
+                            )[0]
+                        col += 1
+                        src_index += src_col_stride
+                        result_index += result_col_stride
+                    row += 1
+            col_block += tile
+        row_block += tile
+
+
+def maybe_unary_rank2_strided(src: Array, mut result: Array, op: Int) raises -> Bool:
+    if len(src.shape) != 2 or src.dtype_code != result.dtype_code or not is_c_contiguous(result):
+        return False
+    if src.dtype_code == DTYPE_FLOAT32:
+        unary_rank2_strided_typed[DType.float32](src, result, op)
+        result.backend_code = BACKEND_FUSED
+        return True
+    if src.dtype_code == DTYPE_FLOAT64:
+        unary_rank2_strided_typed[DType.float64](src, result, op)
+        result.backend_code = BACKEND_FUSED
         return True
     return False
 
@@ -1938,10 +2028,10 @@ def maybe_binary_rank2_transposed_tile[
             var r1 = (rhs_data + i + (j + 1) * rhs_col_stride).load[width=tile](0)
             var r2 = (rhs_data + i + (j + 2) * rhs_col_stride).load[width=tile](0)
             var r3 = (rhs_data + i + (j + 3) * rhs_col_stride).load[width=tile](0)
-            var s0 = apply_binary_typed_vec[dtype, tile](l0, r0, op)
-            var s1 = apply_binary_typed_vec[dtype, tile](l1, r1, op)
-            var s2 = apply_binary_typed_vec[dtype, tile](l2, r2, op)
-            var s3 = apply_binary_typed_vec[dtype, tile](l3, r3, op)
+            var s0 = l0 + r0 if op == OP_ADD else apply_binary_typed_vec[dtype, tile](l0, r0, op)
+            var s1 = l1 + r1 if op == OP_ADD else apply_binary_typed_vec[dtype, tile](l1, r1, op)
+            var s2 = l2 + r2 if op == OP_ADD else apply_binary_typed_vec[dtype, tile](l2, r2, op)
+            var s3 = l3 + r3 if op == OP_ADD else apply_binary_typed_vec[dtype, tile](l3, r3, op)
             # 4x4 in-register transpose. The two-step zip pattern:
             # step 1 zips paired SIMD vectors, step 2 zips the 64-bit lanes
             # of the result. Mojo's `shuffle[*mask]` lowers to NEON's
@@ -1964,9 +2054,12 @@ def maybe_binary_rank2_transposed_tile[
             comptime for k in range(tile):
                 var lv = lhs_data[i + k + j * lhs_col_stride]
                 var rv = rhs_data[i + k + j * rhs_col_stride]
-                result_data[(i + k) * result_row_stride + j] = apply_binary_typed_vec[dtype, 1](
-                    SIMD[dtype, 1](lv), SIMD[dtype, 1](rv), op
-                )[0]
+                if op == OP_ADD:
+                    result_data[(i + k) * result_row_stride + j] = lv + rv
+                else:
+                    result_data[(i + k) * result_row_stride + j] = apply_binary_typed_vec[dtype, 1](
+                        SIMD[dtype, 1](lv), SIMD[dtype, 1](rv), op
+                    )[0]
             j += 1
         i += tile
     # row tail: scalar walk for residual rows
@@ -1975,11 +2068,15 @@ def maybe_binary_rank2_transposed_tile[
         while j < cols:
             var lv = lhs_data[i + j * lhs_col_stride]
             var rv = rhs_data[i + j * rhs_col_stride]
-            result_data[i * result_row_stride + j] = apply_binary_typed_vec[dtype, 1](
-                SIMD[dtype, 1](lv), SIMD[dtype, 1](rv), op
-            )[0]
+            if op == OP_ADD:
+                result_data[i * result_row_stride + j] = lv + rv
+            else:
+                result_data[i * result_row_stride + j] = apply_binary_typed_vec[dtype, 1](
+                    SIMD[dtype, 1](lv), SIMD[dtype, 1](rv), op
+                )[0]
             j += 1
         i += 1
+    result.backend_code = BACKEND_FUSED
     return True
 
 

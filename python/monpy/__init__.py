@@ -761,18 +761,7 @@ def indices(dimensions:Sequence[int],dtype:object=None,sparse:builtins.bool=Fals
   if t!=int64:raise NotImplementedError("indices dtype must be int64 in monpy v1")
   dims=tuple(dimensions);n=len(dims)
   if n==0:return zeros((0,),dtype=t)
-  axes=[arange(d,dtype=t) for d in dims]
-  grid=meshgrid(*axes,indexing="ij",sparse=False,copy=False)
-  # Each grid plane is a stride-0-broadcast view; materialise via
-  # ascontiguousarray before reshape (reshape on stride-0 views is
-  # unsupported in monpy v1).
-  flat:list[int]=[]
-  for k in range(n):
-    arr=ascontiguousarray(grid[k])
-    n_elems=arr.size
-    flat_view=arr.reshape((n_elems,))
-    for i in range(n_elems):flat.append(builtins.int(flat_view[i]))
-  return ndarray(_native.from_flat(flat,(n,*dims),t.code))
+  return ndarray(_native.indices(dims,t.code))
 
 def ix_(*args:object)->tuple[ndarray,...]:
   arrs=[asarray(a) for a in args];n=len(arrs)

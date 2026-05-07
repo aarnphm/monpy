@@ -59,7 +59,9 @@ some implementations (notably OpenBLAS built with the Fortran-2003 `BIND(C)` int
 
 NumPy and monpy are row-major by default. the standard workaround is the GEMM transposition identity:
 
-$$ C = \alpha A B + \beta C \;\Longleftrightarrow\; C^\top = \alpha B^\top A^\top + \beta C^\top, $$
+$$
+C = \alpha A B + \beta C \;\Longleftrightarrow\; C^\top = \alpha B^\top A^\top + \beta C^\top,
+$$
 
 which lets us pretend our row-major buffers are column-major versions of the transposed matrices. concretely, to compute `C += A @ B` on row-major $A \in \mathbb{R}^{m \times k}$, $B \in \mathbb{R}^{k \times n}$, $C \in \mathbb{R}^{m \times n}$, monpy invokes
 
@@ -154,19 +156,25 @@ panel 1 | □  | □  | □  | □  | □  |   m_r rows
 
 **3.3 the microkernel as a rank-1 update.** inside the microkernel we accumulate
 
-$$ C*t \mathrel{+}= \sum*{p=0}^{k_c - 1} a_p b_p^\top, $$
+$$
+C*t \mathrel{+}= \sum*{p=0}^{k_c - 1} a_p b_p^\top,
+$$
 
 where $a_p \in \mathbb{R}^{m_r}$ is the $p$-th column of the packed $A$-block (in registers across $m_r/V$ vector registers, where $V$ is the SIMD width — 4 for NEON `f64`, 16 for AVX-512 `f32`) and $b_p \in \mathbb{R}^{n_r}$ is the $p$-th row of the packed $B$-panel (broadcast-loaded one element at a time). each iteration of the inner $p$-loop emits $m_r n_r / V$ FMA instructions and performs $2 m_r n_r$ FLOPs; with NEON's 1-cycle FMA throughput per pipe and 4-pipe issue on M4[^applem4], the kernel hits ~$2 \cdot 8 \cdot 6 \cdot 4 = 384$ FLOPs/cycle at peak.
 
 **3.4 arithmetic intensity argument.** GEMM moves $m k + k n + 2 m n$ words and performs $2 m n k$ FLOPs, giving an arithmetic intensity of
 
-$$ \mathrm{AI} = \frac{2 m n k}{m k + k n + 2 m n}. $$
+$$
+\mathrm{AI} = \frac{2 m n k}{m k + k n + 2 m n}.
+$$
 
 for square $m = n = k = N$, $\mathrm{AI} = N/2$ words, growing linearly. above the roofline kink — about 32 FLOPs/word on Apple M4 with 100 GB/s LPDDR5X and ~3 TFLOPs FP32 — GEMM is compute-bound. below it (small $N$, or rectangular cases with one small dimension), it's bandwidth-bound and packing overhead becomes a real cost. this is why monpy maintains a native small-matrix path in `maybe_matmul_*`: for $N \lesssim 32$ the dispatch overhead and packing cost outweigh any benefit from the optimised kernel.
 
 **3.5 complex GEMM.** the complex multiplication $(a + bi)(c + di) = (ac - bd) + (ad + bc)i$ requires 4 real multiplies and 2 real adds per complex multiply (the Karatsuba 3-multiply variant trades 1 multiply for 5 adds and is rarely worthwhile in vector kernels because the adds also cost cycles), so
 
-$$ \mathrm{FLOPs}(\text{cgemm}) = 8 m n k. $$
+$$
+\mathrm{FLOPs}(\text{cgemm}) = 8 m n k.
+$$
 
 the interleaved memory layout `(re, im, re, im, …)` aligns naturally with `_Complex` on every C ABI we care about (x86-64 SysV, AArch64 AAPCS, Apple ARM64), so monpy can pass a `Float32 *` cast of its `complex64` buffer with no marshalling. `alpha` and `beta` are passed as 2-element float arrays (real then imaginary part); we materialise them as `var alpha_re_im: SIMD[DType.float32, 2]` and pass `UnsafePointer.address_of(alpha_re_im).bitcast[Float32]()`.
 
@@ -188,7 +196,9 @@ total cost: $\frac{2}{3} n^3 + O(n^2)$ for square $A$.
 
 the factorisation $A = QR$ with $Q$ orthogonal and $R$ upper-triangular is computed by applying $\min(m, n)$ Householder reflectors
 
-$$ H_k = I - \tau_k v_k v_k^\*, \qquad v_k \in \mathbb{C}^{m - k + 1}, $$
+$$
+H_k = I - \tau_k v_k v_k^\*, \qquad v_k \in \mathbb{C}^{m - k + 1},
+$$
 
 each of which zeros the entries below the diagonal in column $k$ of the (transformed) matrix. the reflectors are stored in compact form: $v_k$'s normalisation is chosen so that $v_k(1) = 1$ implicitly, freeing the diagonal slot and letting the _strictly lower triangular_ part of $A$ overwrite-store $v_2, v_3, \ldots$ the scalars $\tau_k$ go in a separate `TAU` array of length $\min(m, n)$.
 
@@ -196,7 +206,9 @@ each of which zeros the entries below the diagonal in column $k$ of the (transfo
 
 **Proposition (WY representation).** given $k$ Householder reflectors $H_1, \ldots, H_k$ stored as $(v_i, \tau_i)$, there exist a unit-lower-trapezoidal $V \in \mathbb{R}^{m \times k}$ (column $i$ is $v_i$ padded with zeros above) and an upper-triangular $T \in \mathbb{R}^{k \times k}$ such that
 
-$$ H_1 H_2 \cdots H_k = I - V T V^\*. $$
+$$
+H_1 H_2 \cdots H_k = I - V T V^\*.
+$$
 
 $T$ is determined by the recursion $T_{ii} = \tau_i$, $T_{ij} = -\tau_i (V^* V)_{ij} \tau_j$ for $i < j$, $T_{ij} = 0$ for $i > j$.
 
@@ -239,15 +251,21 @@ the algorithm:
 
 **the conjugate-pair compressed format.** real $A$ can have complex eigenvalues, but only in conjugate pairs: $\lambda_k, \lambda_{k+1} = a \pm bi$. the corresponding right eigenvectors are also complex conjugates: $v_k, v_{k+1} = u \pm i w$ with $u, w \in \mathbb{R}^n$. storing them as complex would double the output size for what is essentially redundant information; LAPACK's solution is to pack:
 
-$$ \mathrm{WR}[k] = a, \quad \mathrm{WI}[k] = b, \quad \mathrm{WR}[k+1] = a, \quad \mathrm{WI}[k+1] = -b, $$
+$$
+\mathrm{WR}[k] = a, \quad \mathrm{WI}[k] = b, \quad \mathrm{WR}[k+1] = a, \quad \mathrm{WI}[k+1] = -b,
+$$
 
 and
 
-$$ \mathrm{VR}[:, k] = u, \quad \mathrm{VR}[:, k+1] = w, $$
+$$
+\mathrm{VR}[:, k] = u, \quad \mathrm{VR}[:, k+1] = w,
+$$
 
 with the convention that the eigenvalue with positive imaginary part comes first. the actual complex eigenvectors are reconstructed as
 
-$$ v*k = u + i w, \qquad v*{k+1} = u - i w = \overline{v_k}. $$
+$$
+v*k = u + i w, \qquad v*{k+1} = u - i w = \overline{v_k}.
+$$
 
 **Theorem (correctness of conjugate-pair unpacking).** let $A \in \mathbb{R}^{n \times n}$ have a complex eigenvalue pair $\lambda_\pm = a \pm bi$ with $b > 0$, and let $u, w \in \mathbb{R}^n$ satisfy $A u = a u - b w$ and $A w = b u + a w$ (equivalently, $u + iw$ is in the kernel of $A - \lambda_+ I$ over $\mathbb{C}$). then $v_+ = u + iw$ and $v_- = u - iw$ are right eigenvectors of $A$ with eigenvalues $\lambda_+$ and $\lambda_-$ respectively.
 

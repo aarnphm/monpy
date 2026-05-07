@@ -781,6 +781,252 @@ def set_contiguous_from_f64(mut array: Array, index: Int, value: Float64) raises
         set_physical_from_f64(array, array.offset_elems + index, value)
 
 
+def _copy_rank2_strided_typed[dtype: DType](src: Array, mut result: Array) raises:
+    var rows = src.shape[0]
+    var cols = src.shape[1]
+    var src_row_stride = src.strides[0]
+    var src_col_stride = src.strides[1]
+    var result_row_stride = result.strides[0]
+    var result_col_stride = result.strides[1]
+    var src_data = src.data.bitcast[Scalar[dtype]]()
+    var result_data = result.data.bitcast[Scalar[dtype]]()
+    comptime tile = 8
+    var row_block = 0
+    while row_block < rows:
+        var row_end = row_block + tile
+        if row_end > rows:
+            row_end = rows
+        var col_block = 0
+        while col_block < cols:
+            var col_end = col_block + tile
+            if col_end > cols:
+                col_end = cols
+            if src_row_stride == 1:
+                var col = col_block
+                while col < col_end:
+                    var row = row_block
+                    var src_index = src.offset_elems + row * src_row_stride + col * src_col_stride
+                    var result_index = result.offset_elems + row * result_row_stride + col * result_col_stride
+                    while row < row_end:
+                        result_data[result_index] = src_data[src_index]
+                        row += 1
+                        src_index += src_row_stride
+                        result_index += result_row_stride
+                    col += 1
+            else:
+                var row = row_block
+                while row < row_end:
+                    var col = col_block
+                    var src_index = src.offset_elems + row * src_row_stride + col * src_col_stride
+                    var result_index = result.offset_elems + row * result_row_stride + col * result_col_stride
+                    while col < col_end:
+                        result_data[result_index] = src_data[src_index]
+                        col += 1
+                        src_index += src_col_stride
+                        result_index += result_col_stride
+                    row += 1
+            col_block += tile
+        row_block += tile
+
+
+def _copy_rank2_strided_bool(src: Array, mut result: Array) raises:
+    var rows = src.shape[0]
+    var cols = src.shape[1]
+    var src_row_stride = src.strides[0]
+    var src_col_stride = src.strides[1]
+    var result_row_stride = result.strides[0]
+    var result_col_stride = result.strides[1]
+    var src_data = src.data.bitcast[Bool]()
+    var result_data = result.data.bitcast[Bool]()
+    comptime tile = 8
+    var row_block = 0
+    while row_block < rows:
+        var row_end = row_block + tile
+        if row_end > rows:
+            row_end = rows
+        var col_block = 0
+        while col_block < cols:
+            var col_end = col_block + tile
+            if col_end > cols:
+                col_end = cols
+            if src_row_stride == 1:
+                var col = col_block
+                while col < col_end:
+                    var row = row_block
+                    var src_index = src.offset_elems + row * src_row_stride + col * src_col_stride
+                    var result_index = result.offset_elems + row * result_row_stride + col * result_col_stride
+                    while row < row_end:
+                        result_data[result_index] = src_data[src_index]
+                        row += 1
+                        src_index += src_row_stride
+                        result_index += result_row_stride
+                    col += 1
+            else:
+                var row = row_block
+                while row < row_end:
+                    var col = col_block
+                    var src_index = src.offset_elems + row * src_row_stride + col * src_col_stride
+                    var result_index = result.offset_elems + row * result_row_stride + col * result_col_stride
+                    while col < col_end:
+                        result_data[result_index] = src_data[src_index]
+                        col += 1
+                        src_index += src_col_stride
+                        result_index += result_col_stride
+                    row += 1
+            col_block += tile
+        row_block += tile
+
+
+def _copy_rank2_strided_complex32(src: Array, mut result: Array) raises:
+    var rows = src.shape[0]
+    var cols = src.shape[1]
+    var src_row_stride = src.strides[0]
+    var src_col_stride = src.strides[1]
+    var result_row_stride = result.strides[0]
+    var result_col_stride = result.strides[1]
+    var src_data = src.data.bitcast[Float32]()
+    var result_data = result.data.bitcast[Float32]()
+    comptime tile = 8
+    var row_block = 0
+    while row_block < rows:
+        var row_end = row_block + tile
+        if row_end > rows:
+            row_end = rows
+        var col_block = 0
+        while col_block < cols:
+            var col_end = col_block + tile
+            if col_end > cols:
+                col_end = cols
+            if src_row_stride == 1:
+                var col = col_block
+                while col < col_end:
+                    var row = row_block
+                    var src_index = src.offset_elems + row * src_row_stride + col * src_col_stride
+                    var result_index = result.offset_elems + row * result_row_stride + col * result_col_stride
+                    while row < row_end:
+                        result_data[result_index * 2] = src_data[src_index * 2]
+                        result_data[result_index * 2 + 1] = src_data[src_index * 2 + 1]
+                        row += 1
+                        src_index += src_row_stride
+                        result_index += result_row_stride
+                    col += 1
+            else:
+                var row = row_block
+                while row < row_end:
+                    var col = col_block
+                    var src_index = src.offset_elems + row * src_row_stride + col * src_col_stride
+                    var result_index = result.offset_elems + row * result_row_stride + col * result_col_stride
+                    while col < col_end:
+                        result_data[result_index * 2] = src_data[src_index * 2]
+                        result_data[result_index * 2 + 1] = src_data[src_index * 2 + 1]
+                        col += 1
+                        src_index += src_col_stride
+                        result_index += result_col_stride
+                    row += 1
+            col_block += tile
+        row_block += tile
+
+
+def _copy_rank2_strided_complex64(src: Array, mut result: Array) raises:
+    var rows = src.shape[0]
+    var cols = src.shape[1]
+    var src_row_stride = src.strides[0]
+    var src_col_stride = src.strides[1]
+    var result_row_stride = result.strides[0]
+    var result_col_stride = result.strides[1]
+    var src_data = src.data.bitcast[Float64]()
+    var result_data = result.data.bitcast[Float64]()
+    comptime tile = 8
+    var row_block = 0
+    while row_block < rows:
+        var row_end = row_block + tile
+        if row_end > rows:
+            row_end = rows
+        var col_block = 0
+        while col_block < cols:
+            var col_end = col_block + tile
+            if col_end > cols:
+                col_end = cols
+            if src_row_stride == 1:
+                var col = col_block
+                while col < col_end:
+                    var row = row_block
+                    var src_index = src.offset_elems + row * src_row_stride + col * src_col_stride
+                    var result_index = result.offset_elems + row * result_row_stride + col * result_col_stride
+                    while row < row_end:
+                        result_data[result_index * 2] = src_data[src_index * 2]
+                        result_data[result_index * 2 + 1] = src_data[src_index * 2 + 1]
+                        row += 1
+                        src_index += src_row_stride
+                        result_index += result_row_stride
+                    col += 1
+            else:
+                var row = row_block
+                while row < row_end:
+                    var col = col_block
+                    var src_index = src.offset_elems + row * src_row_stride + col * src_col_stride
+                    var result_index = result.offset_elems + row * result_row_stride + col * result_col_stride
+                    while col < col_end:
+                        result_data[result_index * 2] = src_data[src_index * 2]
+                        result_data[result_index * 2 + 1] = src_data[src_index * 2 + 1]
+                        col += 1
+                        src_index += src_col_stride
+                        result_index += result_col_stride
+                    row += 1
+            col_block += tile
+        row_block += tile
+
+
+def _maybe_copy_rank2_strided(src: Array, mut result: Array) raises -> Bool:
+    if len(src.shape) != 2:
+        return False
+    if src.size_value == 0:
+        return True
+    if src.dtype_code == DTYPE_BOOL:
+        _copy_rank2_strided_bool(src, result)
+        return True
+    if src.dtype_code == DTYPE_INT8:
+        _copy_rank2_strided_typed[DType.int8](src, result)
+        return True
+    if src.dtype_code == DTYPE_INT16:
+        _copy_rank2_strided_typed[DType.int16](src, result)
+        return True
+    if src.dtype_code == DTYPE_INT32:
+        _copy_rank2_strided_typed[DType.int32](src, result)
+        return True
+    if src.dtype_code == DTYPE_INT64:
+        _copy_rank2_strided_typed[DType.int64](src, result)
+        return True
+    if src.dtype_code == DTYPE_UINT8:
+        _copy_rank2_strided_typed[DType.uint8](src, result)
+        return True
+    if src.dtype_code == DTYPE_UINT16:
+        _copy_rank2_strided_typed[DType.uint16](src, result)
+        return True
+    if src.dtype_code == DTYPE_UINT32:
+        _copy_rank2_strided_typed[DType.uint32](src, result)
+        return True
+    if src.dtype_code == DTYPE_UINT64:
+        _copy_rank2_strided_typed[DType.uint64](src, result)
+        return True
+    if src.dtype_code == DTYPE_FLOAT16:
+        _copy_rank2_strided_typed[DType.float16](src, result)
+        return True
+    if src.dtype_code == DTYPE_FLOAT32:
+        _copy_rank2_strided_typed[DType.float32](src, result)
+        return True
+    if src.dtype_code == DTYPE_FLOAT64:
+        _copy_rank2_strided_typed[DType.float64](src, result)
+        return True
+    if src.dtype_code == DTYPE_COMPLEX64:
+        _copy_rank2_strided_complex32(src, result)
+        return True
+    if src.dtype_code == DTYPE_COMPLEX128:
+        _copy_rank2_strided_complex64(src, result)
+        return True
+    return False
+
+
 def copy_c_contiguous(src: Array) raises -> Array:
     var shape = clone_int_list(src.shape)
     var result = make_empty_array(src.dtype_code, shape^)
@@ -793,6 +1039,8 @@ def copy_c_contiguous(src: Array) raises -> Array:
             src=src.data + src_byte_offset,
             count=byte_count,
         )
+        return result^
+    if _maybe_copy_rank2_strided(src, result):
         return result^
     for i in range(src.size_value):
         var physical = physical_offset(src, i)
@@ -810,14 +1058,93 @@ def copy_c_contiguous(src: Array) raises -> Array:
     return result^
 
 
+def _maybe_cast_contiguous_core_dtypes(src: Array, mut result: Array) raises -> Bool:
+    if not is_c_contiguous(src) or not is_c_contiguous(result):
+        return False
+    if src.dtype_code == DTYPE_BOOL:
+        var src_ptr = src.data + src.offset_elems
+        if result.dtype_code == DTYPE_INT64:
+            var out = contiguous_i64_ptr(result)
+            for i in range(src.size_value):
+                out[i] = Int64(1) if src_ptr[i] != UInt8(0) else Int64(0)
+            return True
+        if result.dtype_code == DTYPE_FLOAT32:
+            var out = contiguous_f32_ptr(result)
+            for i in range(src.size_value):
+                out[i] = Float32(1.0) if src_ptr[i] != UInt8(0) else Float32(0.0)
+            return True
+        if result.dtype_code == DTYPE_FLOAT64:
+            var out = contiguous_f64_ptr(result)
+            for i in range(src.size_value):
+                out[i] = 1.0 if src_ptr[i] != UInt8(0) else 0.0
+            return True
+    if src.dtype_code == DTYPE_INT64:
+        var src_ptr = contiguous_i64_ptr(src)
+        if result.dtype_code == DTYPE_BOOL:
+            var out = result.data + result.offset_elems
+            for i in range(src.size_value):
+                out[i] = UInt8(1) if src_ptr[i] != Int64(0) else UInt8(0)
+            return True
+        if result.dtype_code == DTYPE_FLOAT32:
+            var out = contiguous_f32_ptr(result)
+            for i in range(src.size_value):
+                out[i] = Float32(Float64(src_ptr[i]))
+            return True
+        if result.dtype_code == DTYPE_FLOAT64:
+            var out = contiguous_f64_ptr(result)
+            for i in range(src.size_value):
+                out[i] = Float64(src_ptr[i])
+            return True
+    if src.dtype_code == DTYPE_FLOAT32:
+        var src_ptr = contiguous_f32_ptr(src)
+        if result.dtype_code == DTYPE_BOOL:
+            var out = result.data + result.offset_elems
+            for i in range(src.size_value):
+                out[i] = UInt8(1) if src_ptr[i] != Float32(0.0) else UInt8(0)
+            return True
+        if result.dtype_code == DTYPE_INT64:
+            var out = contiguous_i64_ptr(result)
+            for i in range(src.size_value):
+                out[i] = Int64(Float64(src_ptr[i]))
+            return True
+        if result.dtype_code == DTYPE_FLOAT64:
+            var out = contiguous_f64_ptr(result)
+            for i in range(src.size_value):
+                out[i] = Float64(src_ptr[i])
+            return True
+    if src.dtype_code == DTYPE_FLOAT64:
+        var src_ptr = contiguous_f64_ptr(src)
+        if result.dtype_code == DTYPE_BOOL:
+            var out = result.data + result.offset_elems
+            for i in range(src.size_value):
+                out[i] = UInt8(1) if src_ptr[i] != 0.0 else UInt8(0)
+            return True
+        if result.dtype_code == DTYPE_INT64:
+            var out = contiguous_i64_ptr(result)
+            for i in range(src.size_value):
+                out[i] = Int64(src_ptr[i])
+            return True
+        if result.dtype_code == DTYPE_FLOAT32:
+            var out = contiguous_f32_ptr(result)
+            for i in range(src.size_value):
+                out[i] = Float32(src_ptr[i])
+            return True
+    return False
+
+
 def cast_copy_array(src: Array, dtype_code: Int) raises -> Array:
     if src.dtype_code == dtype_code:
         return copy_c_contiguous(src)
     var shape = clone_int_list(src.shape)
     var result = make_empty_array(dtype_code, shape^)
+    if _maybe_cast_contiguous_core_dtypes(src, result):
+        return result^
     var dst_is_complex = dtype_code == DTYPE_COMPLEX64 or dtype_code == DTYPE_COMPLEX128
+    var src_is_c = is_c_contiguous(src)
     for i in range(src.size_value):
-        var physical = physical_offset(src, i)
+        var physical = src.offset_elems + i
+        if not src_is_c:
+            physical = physical_offset(src, i)
         if src.dtype_code == DTYPE_COMPLEX64:
             var re = Float64(get_physical_c64_real(src, physical))
             var im = Float64(get_physical_c64_imag(src, physical))

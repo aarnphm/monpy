@@ -16,13 +16,26 @@ this note grounds the design of `einsum`, `tensordot`, `tensorinv`, and `tensors
 Einstein summation, in its pre-machine form, is a stenographic convention: any index appearing twice in a product of factors is summed over, with the summation symbol elided. the convention sits at the boundary between notation and semantics. repurposing it as an array-language operator (Daniel et al. did this in NumPy as a generalisation of `tensordot`) requires removing the implicit "appears twice" rule and replacing it with an explicit _output specification_. the modern einsum is thus a small DSL: a left-hand side (operand label lists) and a right-hand side (output label list), separated by `->`.
 
 **Definition (einsum expression).** fix a finite alphabet $\Sigma$ of _labels_ and a dimension assignment $d : \Sigma \to \mathbb{N}_{>0}$. an einsum expression on $n$ tensors is a tuple
-$$ \mathcal{E} = (\Sigma_1, \Sigma_2, \ldots, \Sigma_n; \Sigma_{\text{out}}) $$ where each $\Sigma_k$ is a _finite sequence_ (not a set) of labels — order matters because it pins each label to a specific tensor axis — and $\Sigma_{\text{out}}$ is a sequence of labels with $\Sigma_{\text{out}} \subseteq \bigcup_k \mathrm{set}(\Sigma_k)$. the shape of operand $T_k$ is $(d(\ell))_{\ell \in \Sigma_k}$.
+
+$$
+\mathcal{E} = (\Sigma_1, \Sigma_2, \ldots, \Sigma_n; \Sigma_{\text{out}})
+$$
+
+where each $\Sigma_k$ is a _finite sequence_ (not a set) of labels — order matters because it pins each label to a specific tensor axis — and $\Sigma_{\text{out}}$ is a sequence of labels with $\Sigma_{\text{out}} \subseteq \bigcup_k \mathrm{set}(\Sigma_k)$. the shape of operand $T_k$ is $(d(\ell))_{\ell \in \Sigma_k}$.
 
 the set of _contracted labels_ is
-$$ C(\mathcal{E}) = \Big(\bigcup_k \mathrm{set}(\Sigma_k)\Big) \setminus \mathrm{set}(\Sigma_{\text{out}}). $$
+
+$$
+C(\mathcal{E}) = \Big(\bigcup_k \mathrm{set}(\Sigma_k)\Big) \setminus \mathrm{set}(\Sigma_{\text{out}}).
+$$
 
 the _value_ of $\mathcal{E}$ on tensors $T_1, \ldots, T_n$ is the tensor $R$ of shape $(d(\ell))_{\ell \in \Sigma_{\text{out}}}$ defined componentwise by
-$$ R[\,(x_\ell)_{\ell \in \Sigma_{\text{out}}}\,] \;=\; \sum_{(y_\ell)_{\ell \in C(\mathcal{E})}} \;\prod_{k=1}^{n} T_k\!\left[\,(z^{(k)}_\ell)_{\ell \in \Sigma_k}\,\right] $$ where $z^{(k)}_\ell = x_\ell$ if $\ell \in \Sigma_{\text{out}}$ and $z^{(k)}_\ell = y_\ell$ otherwise. the case $\ell$ appearing more than once in $\Sigma_k$ — a _self-trace_ — is handled by extracting the diagonal first; see §5.
+
+$$
+R[\,(x_\ell)_{\ell \in \Sigma_{\text{out}}}\,] \;=\; \sum_{(y_\ell)_{\ell \in C(\mathcal{E})}} \;\prod_{k=1}^{n} T_k\!\left[\,(z^{(k)}_\ell)_{\ell \in \Sigma_k}\,\right]
+$$
+
+where $z^{(k)}_\ell = x_\ell$ if $\ell \in \Sigma_{\text{out}}$ and $z^{(k)}_\ell = y_\ell$ otherwise. the case $\ell$ appearing more than once in $\Sigma_k$ — a _self-trace_ — is handled by extracting the diagonal first; see §5.
 
 **implicit output mode.** when `->` is omitted, NumPy (and monpy) computes the output label sequence as the labels appearing exactly once across all operands, sorted alphabetically.[^alphabetical] thus `'i,j'` becomes `'i,j->ij'` (every label appears once) and `'ij,jk'` becomes `'ij,jk->ik'` (`j` appears twice, hence contracted). the implicit rule is occasionally surprising: `'ij,ji'` collapses to scalar (no free labels), while `'ij,ji->ij'` is a Hadamard product after one transpose.
 
@@ -91,7 +104,12 @@ if users want full path optimisation, expose an `optimize=` keyword that defers 
 this is the load-bearing optimisation. every binary einsum contraction can be expressed as one BLAS gemm call, modulo transposes and reshapes. the proof is a finger exercise but worth doing carefully because the bookkeeping is where bugs hide.
 
 **Theorem (gemm reduction).** let $A$ have label sequence $\Sigma_A$ and $B$ have $\Sigma_B$. let $C = \mathrm{set}(\Sigma_A) \cap \mathrm{set}(\Sigma_B)$ be the contracted labels. let $F_A = \mathrm{set}(\Sigma_A) \setminus C$ and $F_B = \mathrm{set}(\Sigma_B) \setminus C$ be the free labels. then the einsum with output $\Sigma_{\text{out}} = \langle F_A, F_B \rangle$ (some ordering) equals
-$$ \mathrm{reshape}\bigl( \mathrm{matmul}(\hat A, \hat B), \; \mathrm{shape}(\Sigma_{\text{out}}) \bigr) $$ where $\hat A$ is $A$ transposed to put $F_A$ axes first and $C$ axes last, then reshaped to $(|F_A|, |C|)$ where $|S| = \prod_{\ell \in S} d(\ell)$, and $\hat B$ is $B$ transposed to put $C$ first and $F_B$ last, then reshaped to $(|C|, |F_B|)$. a final transpose realigns to the user-requested $\Sigma_{\text{out}}$ order.
+
+$$
+\mathrm{reshape}\bigl( \mathrm{matmul}(\hat A, \hat B), \; \mathrm{shape}(\Sigma_{\text{out}}) \bigr)
+$$
+
+where $\hat A$ is $A$ transposed to put $F_A$ axes first and $C$ axes last, then reshaped to $(|F_A|, |C|)$ where $|S| = \prod_{\ell \in S} d(\ell)$, and $\hat B$ is $B$ transposed to put $C$ first and $F_B$ last, then reshaped to $(|C|, |F_B|)$. a final transpose realigns to the user-requested $\Sigma_{\text{out}}$ order.
 
 **worked example.** `'ijk,jkl->il'` with $A.\mathrm{shape} = (2, 3, 4)$, $B.\mathrm{shape} = (3, 4, 5)$.
 
@@ -163,7 +181,10 @@ monpy should detect batched-matmul einsums and dispatch to a tight loop with GCD
 ## 8. tensordot
 
 `tensordot(A, B, axes=k)` is einsum's positional cousin: contract the last $k$ axes of $A$ with the first $k$ axes of $B$:
-$$ C^{i_1\ldots i_{p-k},\, j_{k+1}\ldots j_q} = \sum_{l_1 \ldots l_k} A^{i_1\ldots i_{p-k},\, l_1 \ldots l_k}\, B^{l_1 \ldots l_k,\, j_{k+1} \ldots j_q}. $$
+
+$$
+C^{i_1\ldots i_{p-k},\, j_{k+1}\ldots j_q} = \sum_{l_1 \ldots l_k} A^{i_1\ldots i_{p-k},\, l_1 \ldots l_k}\, B^{l_1 \ldots l_k,\, j_{k+1} \ldots j_q}.
+$$
 
 the general form `tensordot(A, B, axes=([a_1, ..., a_k], [b_1, ..., b_k]))` lets the user pick which axes of $A$ contract with which of $B$ — in particular, the contracted axes need not be at the boundary. NumPy implements it by transposing both operands to bring the contracted axes to the appropriate boundary, reshaping to 2D, calling matmul, and reshaping back.
 
@@ -182,7 +203,10 @@ these are the under-appreciated cousins: NumPy ports them, almost no Python code
 let $A$ have shape $(s_1, \ldots, s_p, t_1, \ldots, t_q)$ with $\prod s_i = \prod t_j = N$. reshape $A$ to a matrix $\tilde A \in \mathbb{R}^{N \times N}$ by flattening the first $p$ axes into rows and the last $q$ axes into columns. `tensorinv(A, ind=p)` computes $\tilde A^{-1}$ and reshapes the result to $(t_1, \ldots, t_q, s_1, \ldots, s_p)$ — note the _swap_ of leading and trailing groups, because the inverse swaps row and column indices.
 
 **the isomorphism.** a linear map $\mathcal{L} : \mathbb{R}^{s_1 \times \cdots \times s_p} \to \mathbb{R}^{t_1 \times \cdots \times t_q}$ is, after flattening, an $N \times N$ matrix. the tensor $A$ is the kernel of $\mathcal{L}$; `tensorinv` computes the kernel of $\mathcal{L}^{-1}$. concretely:
-$$ \sum_{i_1\ldots i_p} A^{j_1\ldots j_q,\, i_1\ldots i_p}\, [\mathrm{tensorinv}(A)]^{i_1\ldots i_p,\, k_1 \ldots k_q} = \delta^{j_1 k_1} \cdots \delta^{j_q k_q}. $$
+
+$$
+\sum_{i_1\ldots i_p} A^{j_1\ldots j_q,\, i_1\ldots i_p}\, [\mathrm{tensorinv}(A)]^{i_1\ldots i_p,\, k_1 \ldots k_q} = \delta^{j_1 k_1} \cdots \delta^{j_q k_q}.
+$$
 
 this is the identity tensor in $\mathbb{R}^{t \times t}$, where $t = (t_1, \ldots, t_q)$ flattened.
 
@@ -193,7 +217,10 @@ the `ind=p` parameter says "the first $p$ axes are the input, the rest are the o
 `tensorsolve(A, B)` solves $A \cdot X = B$ where $A$ has shape $B.\mathrm{shape} + X.\mathrm{shape}$ — the leading axes of $A$ match $B$'s shape (the "row" indices), the trailing match $X$'s shape (the "column" indices). after flattening, this is a standard linear system $\tilde A \tilde X = \tilde B$ with $\tilde A \in \mathbb{R}^{|B| \times |X|}$, $\tilde X \in \mathbb{R}^{|X|}$, $\tilde B \in \mathbb{R}^{|B|}$. the solver delegates to `linalg.solve` post-flatten.
 
 **the system in einsum notation.** let $\Sigma_A = \langle i_1, \ldots, i_q, j_1, \ldots, j_p \rangle$ split into $B$-shape labels and $X$-shape labels. then
-$$ \sum_{j_1 \ldots j_p} A^{i_1 \ldots i_q,\, j_1 \ldots j_p}\, X^{j_1 \ldots j_p} = B^{i_1 \ldots i_q}. $$
+
+$$
+\sum_{j_1 \ldots j_p} A^{i_1 \ldots i_q,\, j_1 \ldots j_p}\, X^{j_1 \ldots j_p} = B^{i_1 \ldots i_q}.
+$$
 
 **determinacy.** the system is square iff $|B| = |X|$ (i.e., $\prod \mathrm{shape}(B) = \prod \mathrm{shape}(X)$). NumPy's `tensorsolve` allows non-square via least-squares; monpy should follow suit, dispatching to `linalg.lstsq` when $\tilde A$ isn't square.
 
@@ -236,8 +263,18 @@ each gap is a 50–200-line fix. the first three deliver the bulk of the practic
 ## 11. numerical precision
 
 a contraction of summed dimension $K$ accumulates $K$ floating-point products. the standard bound (Higham 2002, _Accuracy and Stability_, Ch. 3) is
-$$ |\hat C - C| \leq \gamma_K \, \|A\|_\infty \, \|B\|_\infty $$ for componentwise error, where
-$$ \gamma_K = \frac{K \varepsilon}{1 - K \varepsilon} \approx K \varepsilon $$ and $\varepsilon$ is the unit roundoff ($2^{-24} \approx 6 \times 10^{-8}$ for f32, $2^{-53} \approx 10^{-16}$ for f64).
+
+$$
+|\hat C - C| \leq \gamma_K \, \|A\|_\infty \, \|B\|_\infty
+$$
+
+for componentwise error, where
+
+$$
+\gamma_K = \frac{K \varepsilon}{1 - K \varepsilon} \approx K \varepsilon
+$$
+
+and $\varepsilon$ is the unit roundoff ($2^{-24} \approx 6 \times 10^{-8}$ for f32, $2^{-53} \approx 10^{-16}$ for f64).
 
 **concrete numbers.** for f32 with $K = 10^6$: $\gamma_K \approx 6 \times 10^{-2}$ — about 1.5 decimal digits of accuracy in the result, regardless of operand magnitudes. for $K = 10^4$: $\gamma_K \approx 6 \times 10^{-4}$, about 3.5 digits. the bound is tight for adversarial inputs but loose for random inputs where errors partially cancel; in practice f32 contractions over $K = 10^6$ deliver $\sim 4$ digits, not 1.5 — but that's still bad.
 

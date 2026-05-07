@@ -88,6 +88,7 @@ from elementwise import (
     maybe_reduce_contiguous,
     maybe_sin_add_mul_contiguous,
     maybe_unary_contiguous,
+    maybe_unary_rank2_strided,
 )
 from array import (
     Array,
@@ -95,6 +96,9 @@ from array import (
     broadcast_shape,
     cast_copy_array,
     clone_int_list,
+    contiguous_f32_ptr,
+    contiguous_f64_ptr,
+    contiguous_i64_ptr,
     copy_c_contiguous,
     fill_all_from_py,
     get_broadcast_as_bool,
@@ -258,6 +262,37 @@ def linspace_ops(
     var step = (stop - start) / Float64(num - 1)
     for i in range(num):
         set_logical_from_f64(result, i, start + step * Float64(i))
+    return PythonObject(alloc=result^)
+
+
+def indices_ops(dimensions_obj: PythonObject, dtype_obj: PythonObject) raises -> PythonObject:
+    var dtype_code = Int(py=dtype_obj)
+    if dtype_code != DTYPE_INT64:
+        raise Error("indices() native kernel only supports int64")
+    var dims = int_list_from_py(dimensions_obj)
+    var rank = len(dims)
+    var out_shape = List[Int]()
+    out_shape.append(rank)
+    var strides = List[Int]()
+    for axis in range(rank):
+        if dims[axis] < 0:
+            raise Error("indices() dimensions must be non-negative")
+        out_shape.append(dims[axis])
+        strides.append(1)
+    var plane_size = 1
+    for axis in range(rank - 1, -1, -1):
+        strides[axis] = plane_size
+        plane_size *= dims[axis]
+    var result = make_empty_array(DTYPE_INT64, out_shape^)
+    if rank == 0 or plane_size == 0:
+        return PythonObject(alloc=result^)
+    var out = contiguous_i64_ptr(result)
+    for axis in range(rank):
+        var stride = strides[axis]
+        var dim = dims[axis]
+        var base = axis * plane_size
+        for logical in range(plane_size):
+            out[base + logical] = Int64((logical // stride) % dim)
     return PythonObject(alloc=result^)
 
 
@@ -554,6 +589,8 @@ def unary_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObj
             _complex_store(result, i, out_re, out_im)
         return PythonObject(alloc=result^)
     if maybe_unary_contiguous(src[], result, op):
+        return PythonObject(alloc=result^)
+    if maybe_unary_rank2_strided(src[], result, op):
         return PythonObject(alloc=result^)
     # Strided fallback: walk via LayoutIter so the divmod amortizes
     # across the iteration instead of paying physical_offset per element.
@@ -1018,10 +1055,9 @@ def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonOb
 
 
 def unary_preserve_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
-    """Preserve-dtype unary ops (negate/abs/square/positive/floor/ceil/
-    trunc/rint/logical_not). Output dtype = input dtype (with bool→int64
-    promotion). Typed-vec contig fast path for f32/f64/i32/i64/u32/u64;
-    other paths fall through to the f64 round-trip.
+    """Preserve-dtype unary ops (negate/abs/square/positive/floor/ceil/ trunc/rint/logical_not).
+    Output dtype = input dtype (with bool→int64 promotion).
+    Typed-vec contig fast path for f32/f64/i32/i64/u32/u64; other paths fall through to the f64 round-trip.
     """
     var src = array_obj.downcast_value_ptr[Array]()
     var op = Int(py=op_obj)
@@ -1810,6 +1846,30 @@ def tril_ops(array_obj: PythonObject, k_obj: PythonObject) raises -> PythonObjec
     var batch = 1
     for d in range(ndim - 2):
         batch *= src[].shape[d]
+    if src[].dtype_code == DTYPE_FLOAT32 and is_c_contiguous(src[]):
+        var src_ptr = contiguous_f32_ptr(src[])
+        var out_ptr = contiguous_f32_ptr(result)
+        for b in range(batch):
+            for r in range(rows):
+                for c in range(cols):
+                    var idx = b * rows * cols + r * cols + c
+                    if c <= r + k:
+                        out_ptr[idx] = src_ptr[idx]
+                    else:
+                        out_ptr[idx] = Float32(0.0)
+        return PythonObject(alloc=result^)
+    if src[].dtype_code == DTYPE_FLOAT64 and is_c_contiguous(src[]):
+        var src_ptr = contiguous_f64_ptr(src[])
+        var out_ptr = contiguous_f64_ptr(result)
+        for b in range(batch):
+            for r in range(rows):
+                for c in range(cols):
+                    var idx = b * rows * cols + r * cols + c
+                    if c <= r + k:
+                        out_ptr[idx] = src_ptr[idx]
+                    else:
+                        out_ptr[idx] = 0.0
+        return PythonObject(alloc=result^)
     for b in range(batch):
         for r in range(rows):
             for c in range(cols):
@@ -1837,6 +1897,30 @@ def triu_ops(array_obj: PythonObject, k_obj: PythonObject) raises -> PythonObjec
     var batch = 1
     for d in range(ndim - 2):
         batch *= src[].shape[d]
+    if src[].dtype_code == DTYPE_FLOAT32 and is_c_contiguous(src[]):
+        var src_ptr = contiguous_f32_ptr(src[])
+        var out_ptr = contiguous_f32_ptr(result)
+        for b in range(batch):
+            for r in range(rows):
+                for c in range(cols):
+                    var idx = b * rows * cols + r * cols + c
+                    if c >= r + k:
+                        out_ptr[idx] = src_ptr[idx]
+                    else:
+                        out_ptr[idx] = Float32(0.0)
+        return PythonObject(alloc=result^)
+    if src[].dtype_code == DTYPE_FLOAT64 and is_c_contiguous(src[]):
+        var src_ptr = contiguous_f64_ptr(src[])
+        var out_ptr = contiguous_f64_ptr(result)
+        for b in range(batch):
+            for r in range(rows):
+                for c in range(cols):
+                    var idx = b * rows * cols + r * cols + c
+                    if c >= r + k:
+                        out_ptr[idx] = src_ptr[idx]
+                    else:
+                        out_ptr[idx] = 0.0
+        return PythonObject(alloc=result^)
     for b in range(batch):
         for r in range(rows):
             for c in range(cols):
@@ -1864,6 +1948,34 @@ def eye_ops(
     shape.append(n)
     shape.append(m)
     var result = make_empty_array(dtype_code, shape^)
+    if dtype_code == DTYPE_FLOAT32:
+        var out_ptr = contiguous_f32_ptr(result)
+        for i in range(n * m):
+            out_ptr[i] = Float32(0.0)
+        var start_i = 0 if k >= 0 else -k
+        var max_diag = n if (m - k) > n else (m - k)
+        var end_i = max_diag if max_diag > 0 else 0
+        if end_i > n:
+            end_i = n
+        for i in range(start_i, end_i):
+            var col = i + k
+            if col >= 0 and col < m:
+                out_ptr[i * m + col] = Float32(1.0)
+        return PythonObject(alloc=result^)
+    if dtype_code == DTYPE_FLOAT64:
+        var out_ptr = contiguous_f64_ptr(result)
+        for i in range(n * m):
+            out_ptr[i] = 0.0
+        var start_i = 0 if k >= 0 else -k
+        var max_diag = n if (m - k) > n else (m - k)
+        var end_i = max_diag if max_diag > 0 else 0
+        if end_i > n:
+            end_i = n
+        for i in range(start_i, end_i):
+            var col = i + k
+            if col >= 0 and col < m:
+                out_ptr[i * m + col] = 1.0
+        return PythonObject(alloc=result^)
     # Zero out first.
     for i in range(n * m):
         set_logical_from_f64(result, i, 0.0)
@@ -1894,6 +2006,34 @@ def tri_ops(
     shape.append(n)
     shape.append(m)
     var result = make_empty_array(dtype_code, shape^)
+    if dtype_code == DTYPE_FLOAT32:
+        var out_ptr = contiguous_f32_ptr(result)
+        for r in range(n):
+            var row_limit = r + k + 1
+            if row_limit < 0:
+                row_limit = 0
+            if row_limit > m:
+                row_limit = m
+            for c in range(m):
+                if c < row_limit:
+                    out_ptr[r * m + c] = Float32(1.0)
+                else:
+                    out_ptr[r * m + c] = Float32(0.0)
+        return PythonObject(alloc=result^)
+    if dtype_code == DTYPE_FLOAT64:
+        var out_ptr = contiguous_f64_ptr(result)
+        for r in range(n):
+            var row_limit = r + k + 1
+            if row_limit < 0:
+                row_limit = 0
+            if row_limit > m:
+                row_limit = m
+            for c in range(m):
+                if c < row_limit:
+                    out_ptr[r * m + c] = 1.0
+                else:
+                    out_ptr[r * m + c] = 0.0
+        return PythonObject(alloc=result^)
     for r in range(n):
         var row_limit = r + k + 1
         if row_limit < 0:

@@ -15,23 +15,31 @@ monpy's complex types are interleaved 2-component layouts: `complex64` packs $2\
 
 the algebraic definition is the schoolbook form
 
-$$ (a + bi)(c + di) = (ac - bd) + (ad + bc)\,i $$
+$$
+(a + bi)(c + di) = (ac - bd) + (ad + bc)\,i
+$$
 
 four real multiplies, two real adds. for half a century numerical-analysis textbooks have offered Karatsuba's three-multiply trick as an alternative:
 
-$$ k_1 = ac, \quad k_2 = bd, \quad k_3 = (a+b)(c+d), \quad \mathrm{re} = k_1 - k_2, \quad \mathrm{im} = k_3 - k_1 - k_2. $$
+$$
+k_1 = ac, \quad k_2 = bd, \quad k_3 = (a+b)(c+d), \quad \mathrm{re} = k_1 - k_2, \quad \mathrm{im} = k_3 - k_1 - k_2.
+$$
 
 three multiplies and five adds. on paper this trades one $\mu_{\text{op}}$ for three $\alpha_{\text{op}}$, which looks like a win whenever a multiply is more than three times the cost of an add. on a 1985 VAX it sometimes was. on Apple Silicon's NEON, on Intel AVX-512, on NVIDIA's tensor cores — it isn't, and hasn't been since the late 1990s. modern FPUs issue an FMA every cycle on every pipe; the multiplier and the adder are the _same circuit_, the latency is _identical_, the throughput is one fused mul-add per port per cycle. counting multiplies separately stopped reflecting the hardware around the time MMX shipped.
 
 worse, Karatsuba's form fights FMA. the four-multiply form lets us write
 
-$$ \mathrm{re} = \mathrm{fma}(a, c, -bd) $$
+$$
+\mathrm{re} = \mathrm{fma}(a, c, -bd)
+$$
 
 with one rounding error in $\mathrm{re}$ rather than two — provided the compiler honors the FMA contract. Karatsuba's $k_3 - k_1 - k_2$ has three rounding sites and no FMA opportunity, so it is _both slower and less accurate_ on the contig kernel hot path. monpy's `complex_binary_contig_typed[dtype]` MUL branch consequently uses the schoolbook form, fused where the backend exposes FMA semantics.
 
 the precision question is sharper than it looks. Kahan's compensated-product lemma: if hardware provides a fused multiply-add, then for any $a, b, c, d$ the expression
 
-$$ \texttt{fma}(-b, d, \texttt{fma}(a, c, 0)) $$
+$$
+\texttt{fma}(-b, d, \texttt{fma}(a, c, 0))
+$$
 
 computes $ac - bd$ with a single rounding in the final FMA — accurate to $\frac{1}{2}$ ulp of the true real part _whenever_ $|ac - bd|$ is not catastrophically smaller than $\max(|ac|, |bd|)$. without FMA, $a c$ rounds, $b d$ rounds, and the subtraction rounds, accumulating up to $\frac{3}{2}\varepsilon \max(|ac|, |bd|)$. in the cancellation regime where $ac \approx bd$ the relative error blows up: you can lose every significant digit of the real part in a single instruction, with no warning.[^1]
 
@@ -41,7 +49,9 @@ the kernel emits the schoolbook form because numpy semantics demand bit-level re
 
 the naive expression for $z_1 / z_2$ rationalizes the denominator:
 
-$$ \frac{a + bi}{c + di} = \frac{(a + bi)(c - di)}{c^2 + d^2} = \frac{ac + bd}{c^2 + d^2} + \frac{bc - ad}{c^2 + d^2}\, i. $$
+$$
+\frac{a + bi}{c + di} = \frac{(a + bi)(c - di)}{c^2 + d^2} = \frac{ac + bd}{c^2 + d^2} + \frac{bc - ad}{c^2 + d^2}\, i.
+$$
 
 the failure mode is $c^2 + d^2$. if $\max(|c|, |d|) \approx \Omega^{1/2}$, where $\Omega$ is the overflow threshold ($\approx 3.4 \times 10^{38}$ for `f32`, $\approx 1.8 \times 10^{308}$ for `f64`), then $c^2 + d^2$ overflows to $+\infty$ even when the true quotient is a perfectly modest number. the spurious infinity propagates: $1 / \infty = 0$, and the answer comes back zero or NaN.
 
@@ -111,7 +121,9 @@ the bottom row is subtle: $\log 0$ is mathematically $-\infty$, but the _imagina
 
 the practical consequence: `apply_unary_complex_f64` should never normalize a signed zero away. monpy's SQRT branch hand-codes the magnitude $|z| = \mathrm{hypot}(a, b)$, then computes the components
 
-$$ \sqrt{a + bi} = \sqrt{\frac{|z| + a}{2}} + i\,\mathrm{sign}(b)\,\sqrt{\frac{|z| - a}{2}}, $$
+$$
+\sqrt{a + bi} = \sqrt{\frac{|z| + a}{2}} + i\,\mathrm{sign}(b)\,\sqrt{\frac{|z| - a}{2}},
+$$
 
 where $\mathrm{sign}(b)$ uses the signed-zero-aware variant `copysign(1, b)` so that $\sqrt{-1 - 0i} = 0 - i$ comes through correctly. the `a < 0` and `b = 0` corner is handled by the $\mathrm{copysign}$ path: $|z| = |a|$, the first square root is $0$, the second is $\sqrt{|a|}$, and the sign of $b$ — even when $b = -0$ — chooses the lower half-plane.
 
@@ -121,13 +133,17 @@ every complex transcendental in monpy reduces to one or two real transcendentals
 
 ### 4a. exp
 
-$$ e^{a + bi} = e^a (\cos b + i \sin b). $$
+$$
+e^{a + bi} = e^a (\cos b + i \sin b).
+$$
 
 implementation: `e_a = exp(a); s, c = sincos(b); return (e_a*c, e_a*s)`. one transcendental times one trig pair. error: each of `exp` and `sincos` is correctly rounded (or faithfully rounded) on platform libms, and the two multiplications add at most one ulp each. total: $\le 4 \varepsilon$ in the well-scaled regime; can blow up if $a > 700$ since $e^a$ overflows even when only one component of the result does. correct handling defers to the libm — `exp(710)` returns $+\infty$, and $+\infty \cdot \cos(b)$ propagates the infinity, which is what numpy does.
 
 ### 4b. log
 
-$$ \log(a + bi) = \log|z| + i\,\arg z = \tfrac{1}{2}\log(a^2 + b^2) + i\,\mathrm{atan2}(b, a). $$
+$$
+\log(a + bi) = \log|z| + i\,\arg z = \tfrac{1}{2}\log(a^2 + b^2) + i\,\mathrm{atan2}(b, a).
+$$
 
 the naive form computes $a^2 + b^2$ — same overflow trap as complex division. correct form: $\log\,\mathrm{hypot}(a, b)$, where $\mathrm{hypot}$ avoids overflow by scaling. monpy uses `log(hypot(a, b))`.
 
@@ -137,14 +153,21 @@ error: $\le 5\varepsilon$ in the standard regime, $\le 2\varepsilon$ in the unit
 
 ### 4c. sin, cos, tan
 
-$$ \sin(a + bi) = \sin a \cosh b + i \cos a \sinh b, $$
-$$ \cos(a + bi) = \cos a \cosh b - i \sin a \sinh b. $$
+$$
+\sin(a + bi) = \sin a \cosh b + i \cos a \sinh b,
+$$
+
+$$
+\cos(a + bi) = \cos a \cosh b - i \sin a \sinh b.
+$$
 
 `sincos(a)` and `sinh, cosh` of `b` together give all four reals; then four multiplies and one negation produce both outputs. error: $\le 6\varepsilon$. note $\cosh b$ overflows for $|b| > \log(\Omega) \approx 710$ in `f64`, which propagates correctly to $\pm\infty$.
 
 tangent is the trap. the naive approach is $\tan z = \sin z / \cos z$, dividing two complex numbers — that's a Smith division on top of two trig evaluations. the elegant identity:
 
-$$ \tan(a + bi) = \frac{\sin(2a) + i\,\sinh(2b)}{\cos(2a) + \cosh(2b)}. $$
+$$
+\tan(a + bi) = \frac{\sin(2a) + i\,\sinh(2b)}{\cos(2a) + \cosh(2b)}.
+$$
 
 denominator is _real_, so we get one real division per component instead of a complex division. the denominator $\cos(2a) + \cosh(2b)$ is bounded below by $\cosh(2b) - 1 \ge 0$, equality only at $b = 0, \cos(2a) = -1$ — which is exactly where $\tan$ has a pole, so the infinity is correctly produced. error: $\le 7\varepsilon$ away from poles, controlled blow-up at poles.
 
@@ -152,19 +175,31 @@ denominator is _real_, so we get one real division per component instead of a co
 
 mirror identities via $\sinh z = -i \sin(iz) = \sin(b) \cos(a)\cdot 0 + \dots$. concretely:
 
-$$ \sinh(a + bi) = \sinh a \cos b + i \cosh a \sin b, $$
-$$ \cosh(a + bi) = \cosh a \cos b + i \sinh a \sin b, $$
-$$ \tanh(a + bi) = \frac{\sinh(2a) + i\,\sin(2b)}{\cosh(2a) + \cos(2b)}. $$
+$$
+\sinh(a + bi) = \sinh a \cos b + i \cosh a \sin b,
+$$
+
+$$
+\cosh(a + bi) = \cosh a \cos b + i \sinh a \sin b,
+$$
+
+$$
+\tanh(a + bi) = \frac{\sinh(2a) + i\,\sin(2b)}{\cosh(2a) + \cos(2b)}.
+$$
 
 same pattern as the trig set, same error bound, same pole structure (now along the imaginary axis at $b = \pi/2 + k\pi$).
 
 ### 4e. sqrt
 
-$$ \sqrt{a + bi} = \sqrt{\frac{|z| + a}{2}} + i\,\mathrm{sign}(b)\sqrt{\frac{|z| - a}{2}}, \qquad |z| = \mathrm{hypot}(a, b). $$
+$$
+\sqrt{a + bi} = \sqrt{\frac{|z| + a}{2}} + i\,\mathrm{sign}(b)\sqrt{\frac{|z| - a}{2}}, \qquad |z| = \mathrm{hypot}(a, b).
+$$
 
 avoid the obvious $\exp(\frac{1}{2} \log z)$ form — it has two transcendentals where two square roots suffice. the cancellation case is $a < 0$ and $b$ small: $|z| - a \approx 2|a|$ is fine, but $|z| + a$ is the difference of nearly-equal positives. resolution: when $a < 0$, swap roles via the identity
 
-$$ \sqrt{a + bi} = \frac{|b|}{2 v} + i\,\mathrm{sign}(b) v, \qquad v = \sqrt{\frac{|z| - a}{2}}, $$
+$$
+\sqrt{a + bi} = \frac{|b|}{2 v} + i\,\mathrm{sign}(b) v, \qquad v = \sqrt{\frac{|z| - a}{2}},
+$$
 
 which trades the cancellation in $|z| + a$ for a division by $v$ — well-conditioned because $v$ is bounded away from zero whenever $z \ne 0$. the branch-cut continuity at $b = \pm 0$ is preserved by `copysign`.
 
@@ -172,7 +207,9 @@ which trades the cancellation in $|z| + a$ for a division by $v$ — well-condit
 
 real `cbrt(x) = sign(x) |x|^{1/3}` is built into libm. complex cbrt has no direct identity that beats the general-power form
 
-$$ \sqrt[3]{z} = \exp\!\left(\tfrac{1}{3} \log z\right), $$
+$$
+\sqrt[3]{z} = \exp\!\left(\tfrac{1}{3} \log z\right),
+$$
 
 so monpy uses that. four transcendentals (one log, one exp, one sincos, one cbrt of magnitude) — the most expensive complex transcendental in the set. error: $\le 10\varepsilon$.
 
@@ -182,15 +219,21 @@ an alternative would be to compute $|z|^{1/3}$ via `cbrt(hypot(a,b))` and the an
 
 $\log(1 + z) = \mathrm{log1p}(z)$ for real `z`, exists to preserve precision when $|z| \ll 1$. for complex: when $|z|$ is small,
 
-$$ \log(1 + z) = \log\,|1 + z| + i\,\arg(1 + z) = \tfrac{1}{2}\,\mathrm{log1p}(2a + a^2 + b^2) + i\,\mathrm{atan2}(b, 1 + a). $$
+$$
+\log(1 + z) = \log\,|1 + z| + i\,\arg(1 + z) = \tfrac{1}{2}\,\mathrm{log1p}(2a + a^2 + b^2) + i\,\mathrm{atan2}(b, 1 + a).
+$$
 
 the `log1p` argument is $2a + a^2 + b^2$, which we compute by FMA — `fma(a, a, fma(b, b, 2a))` — and feed to the real `log1p` to recover the precision that the naive $\log\,\mathrm{hypot}$ form loses for $z$ near zero. similarly for `expm1`:
 
-$$ e^z - 1 = e^a(\cos b + i \sin b) - 1 = (e^a \cos b - 1) + i e^a \sin b. $$
+$$
+e^z - 1 = e^a(\cos b + i \sin b) - 1 = (e^a \cos b - 1) + i e^a \sin b.
+$$
 
 the real part has cancellation when $a \approx 0$ and $\cos b \approx 1$. resolution: use the identity
 
-$$ e^a \cos b - 1 = \mathrm{expm1}(a)\cos b - 2 \sin^2(b/2), $$
+$$
+e^a \cos b - 1 = \mathrm{expm1}(a)\cos b - 2 \sin^2(b/2),
+$$
 
 which keeps both terms small when $z$ is small. monpy implements this trick in the EXPM1 branch of `apply_unary_complex_f64`.
 
@@ -221,7 +264,9 @@ the case for split:
 - **SIMT lane mapping**: on GPU SIMT models where each lane holds one scalar, split lets a warp process 32 real components and 32 imaginary components in parallel without shuffles. interleaved would force a shuffle every cycle.
 - **wider SIMD multiplies**: with split storage on a NEON `float32x4_t`, you load four reals into one register and four imaginaries into another, and the multiply is
 
-$$ (\mathbf{a} + \mathbf{b}\,i)(\mathbf{c} + \mathbf{d}\,i) = (\mathbf{a}\odot\mathbf{c} - \mathbf{b}\odot\mathbf{d}) + (\mathbf{a}\odot\mathbf{d} + \mathbf{b}\odot\mathbf{c})\,i, $$
+$$
+(\mathbf{a} + \mathbf{b}\,i)(\mathbf{c} + \mathbf{d}\,i) = (\mathbf{a}\odot\mathbf{c} - \mathbf{b}\odot\mathbf{d}) + (\mathbf{a}\odot\mathbf{d} + \mathbf{b}\odot\mathbf{c})\,i,
+$$
 
 four FMAs, no shuffles. with interleaved you need a shuffle to decouple re from im.
 

@@ -64,7 +64,7 @@ comptime OP_ADD = 0
 comptime OP_SUB = 1
 comptime OP_MUL = 2
 comptime OP_DIV = 3
-# Phase-3 binary ops (all numeric; promotion handled in dtype_result_for_binary).
+# binary ops (all numeric; promotion handled in dtype_result_for_binary).
 comptime OP_FLOOR_DIV = 4
 comptime OP_MOD = 5
 comptime OP_POWER = 6
@@ -80,7 +80,7 @@ comptime UNARY_SIN = 0
 comptime UNARY_COS = 1
 comptime UNARY_EXP = 2
 comptime UNARY_LOG = 3
-# Phase-3 unary transcendentals (all float-only; promote int → float64).
+# unary transcendentals (all float-only; promote int → float64).
 comptime UNARY_TAN = 4
 comptime UNARY_ARCSIN = 5
 comptime UNARY_ARCCOS = 6
@@ -98,7 +98,7 @@ comptime UNARY_CBRT = 17
 comptime UNARY_DEG2RAD = 18
 comptime UNARY_RAD2DEG = 19
 comptime UNARY_RECIPROCAL = 20
-# Phase-3 unary arith (preserves dtype kind: int → int, float → float).
+# unary arith (preserves dtype kind: int → int, float → float).
 comptime UNARY_NEGATE = 30
 comptime UNARY_POSITIVE = 31
 comptime UNARY_ABS = 32
@@ -109,7 +109,7 @@ comptime UNARY_CEIL = 36
 comptime UNARY_TRUNC = 37
 comptime UNARY_RINT = 38
 comptime UNARY_LOGICAL_NOT = 39
-# Phase-5d complex-only unary ops. CONJ flips imag sign; REAL/IMAG/ANGLE
+# complex-only unary ops. CONJ flips imag sign; REAL/IMAG/ANGLE
 # return a real-valued result (handled at python level).
 comptime UNARY_CONJUGATE = 40
 
@@ -250,9 +250,10 @@ def dtype_result_for_unary(dtype_code: Int) -> Int:
 
 
 def dtype_result_for_unary_preserve(dtype_code: Int) -> Int:
-    """Preserve-dtype unary ops (negate/abs/square/positive/floor/ceil/
-    trunc/rint). bool inputs get promoted to int64 because numpy treats
-    `~bool_arr` style ops as integer transforms; same pattern for negate.
+    """
+    - preserve-dtype unary ops (negate/abs/square/positive/floor/ceil/trunc/rint).
+    - bool inputs get promoted to int64 because numpy treats `~bool_arr` style ops as integer transforms;
+    - same pattern for negate.
     """
     if dtype_code == DTYPE_BOOL:
         return DTYPE_INT64
@@ -315,12 +316,13 @@ def _signed_unsigned_promote(signed_code: Int, unsigned_code: Int) raises -> Int
 
 
 def dtype_result_for_binary(lhs_dtype: Int, rhs_dtype: Int, op: Int) -> Int:
-    """Numpy 2.x binary promotion. Covers the 13-dtype matrix plus any
-    operator-specific overrides (always-float transcendentals, division).
     """
-    # Complex absorbs everything: any pair with at least one complex side
-    # promotes to the wider of the two complex types (or complex64 for
-    # complex64+anything-non-complex128).
+    Numpy 2.x binary promotion.
+    - 13-dtype matrix plus any operator-specific overrides (always-float transcendentals, division).
+    """
+    # Complex will absorbs everything: any pair with at least
+    # one complex side promotes to the wider of the two complex types
+    # (or complex64 for complex64+anything-non-complex128).
     if _is_complex_code(lhs_dtype) or _is_complex_code(rhs_dtype):
         if lhs_dtype == DTYPE_COMPLEX128 or rhs_dtype == DTYPE_COMPLEX128:
             return DTYPE_COMPLEX128
