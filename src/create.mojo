@@ -47,6 +47,20 @@ from domain import (
 from elementwise import (
     apply_binary_f64,
     apply_unary_f64,
+    lapack_cholesky_f32_into,
+    lapack_cholesky_f64_into,
+    lapack_eig_f32_real_into,
+    lapack_eig_f64_real_into,
+    lapack_eigh_f32_into,
+    lapack_eigh_f64_into,
+    lapack_lstsq_f32_into,
+    lapack_lstsq_f64_into,
+    lapack_qr_r_only_f32_into,
+    lapack_qr_r_only_f64_into,
+    lapack_qr_reduced_f32_into,
+    lapack_qr_reduced_f64_into,
+    lapack_svd_f32_into,
+    lapack_svd_f64_into,
     maybe_argmax_contiguous,
     maybe_binary_contiguous,
     maybe_binary_same_shape_contiguous,
@@ -1306,6 +1320,486 @@ def det_ops(array_obj: PythonObject) raises -> PythonObject:
     var result = make_empty_array(result_dtype_for_linalg(src[].dtype_code), shape^)
     lu_det_into(src[], result)
     return PythonObject(alloc=result^)
+
+
+# ============================================================
+# Phase-6d LAPACK-backed decomposition entry points.
+#
+# Each ops returns a Python list (or single Array) so the Python
+# wrappers in `monpy.linalg` can pull individual outputs by index. The
+# heavy lifting (allocation + LAPACK call + col→row transpose) happens
+# entirely in mojo; the python side only pays the dtype-resolve and
+# wrap costs.
+# ============================================================
+
+
+def qr_ops(
+    array_obj: PythonObject, mode_obj: PythonObject
+) raises -> PythonObject:
+    from std.python import Python
+    var src = array_obj.downcast_value_ptr[Array]()
+    if len(src[].shape) != 2:
+        raise Error("linalg.qr: input must be rank-2")
+    var m = src[].shape[0]
+    var n = src[].shape[1]
+    var k = m if m < n else n
+    var dtype_code = result_dtype_for_linalg(src[].dtype_code)
+    var mode = Int(py=mode_obj)  # 0=reduced, 1=complete, 2=r, 3=raw
+    if mode == 0:
+        # Q is (m, k), R is (k, n)
+        var q_shape = List[Int]()
+        q_shape.append(m)
+        q_shape.append(k)
+        var r_shape = List[Int]()
+        r_shape.append(k)
+        r_shape.append(n)
+        var q = make_empty_array(dtype_code, q_shape^)
+        var r = make_empty_array(dtype_code, r_shape^)
+        if dtype_code == DTYPE_FLOAT32:
+            lapack_qr_reduced_f32_into(src[], q, r)
+        else:
+            lapack_qr_reduced_f64_into(src[], q, r)
+        var out = Python.evaluate("[]")
+        _ = out.append(PythonObject(alloc=q^))
+        _ = out.append(PythonObject(alloc=r^))
+        return out
+    if mode == 1:
+        # mode='complete': Q is (m, m), R is (m, n). Numpy uses sgeqrf
+        # then sorgqr to build full Q (m × m) — pad with extra columns
+        # via `sorgqr(m, m, k, ...)` once the first k columns are set.
+        # For simplicity in v1: error if m > n (would need extra work).
+        if m < n:
+            raise Error(
+                "linalg.qr: mode='complete' for m < n requires extra work — use mode='reduced'"
+            )
+        var q_shape = List[Int]()
+        q_shape.append(m)
+        q_shape.append(m)
+        var r_shape = List[Int]()
+        r_shape.append(m)
+        r_shape.append(n)
+        var q = make_empty_array(dtype_code, q_shape^)
+        var r = make_empty_array(dtype_code, r_shape^)
+        if dtype_code == DTYPE_FLOAT32:
+            lapack_qr_reduced_f32_into(src[], q, r)
+        else:
+            lapack_qr_reduced_f64_into(src[], q, r)
+        var out = Python.evaluate("[]")
+        _ = out.append(PythonObject(alloc=q^))
+        _ = out.append(PythonObject(alloc=r^))
+        return out
+    if mode == 2:
+        # mode='r': just R, shape (k, n)
+        var r_shape = List[Int]()
+        r_shape.append(k)
+        r_shape.append(n)
+        var r = make_empty_array(dtype_code, r_shape^)
+        if dtype_code == DTYPE_FLOAT32:
+            lapack_qr_r_only_f32_into(src[], r)
+        else:
+            lapack_qr_r_only_f64_into(src[], r)
+        return PythonObject(alloc=r^)
+    raise Error("linalg.qr: unsupported mode")
+
+
+def cholesky_ops(array_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    if len(src[].shape) != 2 or src[].shape[0] != src[].shape[1]:
+        raise Error("linalg.cholesky: input must be square rank-2")
+    var n = src[].shape[0]
+    var dtype_code = result_dtype_for_linalg(src[].dtype_code)
+    var shape = List[Int]()
+    shape.append(n)
+    shape.append(n)
+    var result = make_empty_array(dtype_code, shape^)
+    if dtype_code == DTYPE_FLOAT32:
+        lapack_cholesky_f32_into(src[], result)
+    else:
+        lapack_cholesky_f64_into(src[], result)
+    return PythonObject(alloc=result^)
+
+
+def eigh_ops(
+    array_obj: PythonObject, compute_eigenvectors_obj: PythonObject
+) raises -> PythonObject:
+    from std.python import Python
+    var src = array_obj.downcast_value_ptr[Array]()
+    if len(src[].shape) != 2 or src[].shape[0] != src[].shape[1]:
+        raise Error("linalg.eigh: input must be square rank-2")
+    var n = src[].shape[0]
+    var compute_v = Bool(py=compute_eigenvectors_obj)
+    var dtype_code = result_dtype_for_linalg(src[].dtype_code)
+    var w_shape = List[Int]()
+    w_shape.append(n)
+    var w = make_empty_array(dtype_code, w_shape^)
+    var v_shape = List[Int]()
+    if compute_v:
+        v_shape.append(n)
+        v_shape.append(n)
+    else:
+        # Allocate a 0-element placeholder — caller ignores it for eigvalsh.
+        v_shape.append(0)
+    var v = make_empty_array(dtype_code, v_shape^)
+    if dtype_code == DTYPE_FLOAT32:
+        lapack_eigh_f32_into(src[], w, v, compute_v)
+    else:
+        lapack_eigh_f64_into(src[], w, v, compute_v)
+    var out = Python.evaluate("[]")
+    _ = out.append(PythonObject(alloc=w^))
+    _ = out.append(PythonObject(alloc=v^))
+    return out
+
+
+def eig_ops(
+    array_obj: PythonObject, compute_eigenvectors_obj: PythonObject
+) raises -> PythonObject:
+    from std.python import Python
+    var src = array_obj.downcast_value_ptr[Array]()
+    if len(src[].shape) != 2 or src[].shape[0] != src[].shape[1]:
+        raise Error("linalg.eig: input must be square rank-2")
+    var n = src[].shape[0]
+    var compute_v = Bool(py=compute_eigenvectors_obj)
+    var dtype_code = result_dtype_for_linalg(src[].dtype_code)
+    var w_shape = List[Int]()
+    w_shape.append(n)
+    var wr = make_empty_array(dtype_code, w_shape^)
+    var wi_shape = List[Int]()
+    wi_shape.append(n)
+    var wi = make_empty_array(dtype_code, wi_shape^)
+    var v_shape = List[Int]()
+    if compute_v:
+        v_shape.append(n)
+        v_shape.append(n)
+    else:
+        v_shape.append(0)
+    var v = make_empty_array(dtype_code, v_shape^)
+    var all_real: Bool
+    if dtype_code == DTYPE_FLOAT32:
+        all_real = lapack_eig_f32_real_into(src[], wr, wi, v, compute_v)
+    else:
+        all_real = lapack_eig_f64_real_into(src[], wr, wi, v, compute_v)
+    var out = Python.evaluate("[]")
+    _ = out.append(PythonObject(alloc=wr^))
+    _ = out.append(PythonObject(alloc=wi^))
+    _ = out.append(PythonObject(alloc=v^))
+    _ = out.append(PythonObject(all_real))
+    return out
+
+
+def svd_ops(
+    array_obj: PythonObject,
+    full_matrices_obj: PythonObject,
+    compute_uv_obj: PythonObject,
+) raises -> PythonObject:
+    from std.python import Python
+    var src = array_obj.downcast_value_ptr[Array]()
+    if len(src[].shape) != 2:
+        raise Error("linalg.svd: input must be rank-2")
+    var m = src[].shape[0]
+    var n = src[].shape[1]
+    var k = m if m < n else n
+    var full_matrices = Bool(py=full_matrices_obj)
+    var compute_uv = Bool(py=compute_uv_obj)
+    var dtype_code = result_dtype_for_linalg(src[].dtype_code)
+    var s_shape = List[Int]()
+    s_shape.append(k)
+    var s = make_empty_array(dtype_code, s_shape^)
+    var u_shape = List[Int]()
+    var vt_shape = List[Int]()
+    if compute_uv:
+        u_shape.append(m)
+        if full_matrices:
+            u_shape.append(m)
+            vt_shape.append(n)
+        else:
+            u_shape.append(k)
+            vt_shape.append(k)
+        vt_shape.append(n)
+    else:
+        u_shape.append(0)
+        vt_shape.append(0)
+    var u = make_empty_array(dtype_code, u_shape^)
+    var vt = make_empty_array(dtype_code, vt_shape^)
+    if dtype_code == DTYPE_FLOAT32:
+        lapack_svd_f32_into(src[], u, s, vt, full_matrices, compute_uv)
+    else:
+        lapack_svd_f64_into(src[], u, s, vt, full_matrices, compute_uv)
+    var out = Python.evaluate("[]")
+    _ = out.append(PythonObject(alloc=u^))
+    _ = out.append(PythonObject(alloc=s^))
+    _ = out.append(PythonObject(alloc=vt^))
+    return out
+
+
+def concatenate_ops(
+    arrays_obj: PythonObject, axis_obj: PythonObject, dtype_code_obj: PythonObject
+) raises -> PythonObject:
+    # Native concatenation. Replaces the python flat-write path which was
+    # ~58000× slower than numpy at N=256.
+    from std.memory import memcpy as _memcpy
+    var n_arrays = Int(py=len(arrays_obj))
+    if n_arrays == 0:
+        raise Error("concatenate: need at least one array")
+    var axis = Int(py=axis_obj)
+    var dtype_code = Int(py=dtype_code_obj)
+    # Pull rank from first input.
+    var first = arrays_obj[0].downcast_value_ptr[Array]()
+    var ndim = len(first[].shape)
+    if axis < 0:
+        axis = axis + ndim
+    if axis < 0 or axis >= ndim:
+        raise Error("concatenate: axis out of range")
+    # Build out_shape; check shape consistency across arrays.
+    var out_shape = List[Int]()
+    for d in range(ndim):
+        out_shape.append(first[].shape[d])
+    out_shape[axis] = 0
+    var all_c_contig = True
+    for i in range(n_arrays):
+        var a = arrays_obj[i].downcast_value_ptr[Array]()
+        if len(a[].shape) != ndim:
+            raise Error("concatenate: arrays must have same ndim")
+        for d in range(ndim):
+            if d == axis:
+                out_shape[axis] = out_shape[axis] + a[].shape[d]
+            elif a[].shape[d] != first[].shape[d]:
+                raise Error("concatenate: shape mismatch")
+        if a[].dtype_code != dtype_code:
+            raise Error("concatenate: dtype mismatch (caller must pre-cast)")
+        if not is_c_contiguous(a[]):
+            all_c_contig = False
+    var out_shape_clone = List[Int]()
+    for d in range(ndim):
+        out_shape_clone.append(out_shape[d])
+    var result = make_empty_array(dtype_code, out_shape_clone^)
+    var outer_size = 1
+    for d in range(axis):
+        outer_size *= out_shape[d]
+    var inner_size = 1
+    for d in range(axis + 1, ndim):
+        inner_size *= out_shape[d]
+    var item_bytes = item_size(dtype_code)
+    var out_axis_size = out_shape[axis]
+    var out_row_size = out_axis_size * inner_size
+    var axis_offset = 0
+    for i in range(n_arrays):
+        var a = arrays_obj[i].downcast_value_ptr[Array]()
+        var a_axis = a[].shape[axis]
+        var a_slab_size = a_axis * inner_size
+        if all_c_contig:
+            var src_byte_offset = a[].offset_elems * item_bytes
+            for outer in range(outer_size):
+                var src_off_bytes = src_byte_offset + outer * a_slab_size * item_bytes
+                var dst_off_bytes = (
+                    outer * out_row_size + axis_offset * inner_size
+                ) * item_bytes
+                _memcpy(
+                    dest=result.data + dst_off_bytes,
+                    src=a[].data + src_off_bytes,
+                    count=a_slab_size * item_bytes,
+                )
+        else:
+            for outer in range(outer_size):
+                var src_base = outer * a_slab_size
+                var dst_base = outer * out_row_size + axis_offset * inner_size
+                for k in range(a_slab_size):
+                    set_logical_from_f64(
+                        result, dst_base + k, get_logical_as_f64(a[], src_base + k)
+                    )
+        axis_offset = axis_offset + a_axis
+    return PythonObject(alloc=result^)
+
+
+def tril_ops(
+    array_obj: PythonObject, k_obj: PythonObject
+) raises -> PythonObject:
+    # Native lower-triangular: copy values where col <= row + k, zero otherwise.
+    var src = array_obj.downcast_value_ptr[Array]()
+    if len(src[].shape) < 2:
+        raise Error("tril: requires rank >= 2 input")
+    var k = Int(py=k_obj)
+    var ndim = len(src[].shape)
+    var rows = src[].shape[ndim - 2]
+    var cols = src[].shape[ndim - 1]
+    var out_shape = List[Int]()
+    for d in range(ndim):
+        out_shape.append(src[].shape[d])
+    var result = make_empty_array(src[].dtype_code, out_shape^)
+    var batch = 1
+    for d in range(ndim - 2):
+        batch *= src[].shape[d]
+    for b in range(batch):
+        for r in range(rows):
+            for c in range(cols):
+                var idx = b * rows * cols + r * cols + c
+                if c <= r + k:
+                    set_logical_from_f64(result, idx, get_logical_as_f64(src[], idx))
+                else:
+                    set_logical_from_f64(result, idx, 0.0)
+    return PythonObject(alloc=result^)
+
+
+def triu_ops(
+    array_obj: PythonObject, k_obj: PythonObject
+) raises -> PythonObject:
+    # Native upper-triangular: copy values where col >= row + k, zero otherwise.
+    var src = array_obj.downcast_value_ptr[Array]()
+    if len(src[].shape) < 2:
+        raise Error("triu: requires rank >= 2 input")
+    var k = Int(py=k_obj)
+    var ndim = len(src[].shape)
+    var rows = src[].shape[ndim - 2]
+    var cols = src[].shape[ndim - 1]
+    var out_shape = List[Int]()
+    for d in range(ndim):
+        out_shape.append(src[].shape[d])
+    var result = make_empty_array(src[].dtype_code, out_shape^)
+    var batch = 1
+    for d in range(ndim - 2):
+        batch *= src[].shape[d]
+    for b in range(batch):
+        for r in range(rows):
+            for c in range(cols):
+                var idx = b * rows * cols + r * cols + c
+                if c >= r + k:
+                    set_logical_from_f64(result, idx, get_logical_as_f64(src[], idx))
+                else:
+                    set_logical_from_f64(result, idx, 0.0)
+    return PythonObject(alloc=result^)
+
+
+def eye_ops(
+    n_obj: PythonObject,
+    m_obj: PythonObject,
+    k_obj: PythonObject,
+    dtype_code_obj: PythonObject,
+) raises -> PythonObject:
+    # Native diagonal-fill identity. Replaces python loop that was
+    # ~100-250× slower than numpy at N=64.
+    var n = Int(py=n_obj)
+    var m = Int(py=m_obj)
+    var k = Int(py=k_obj)
+    var dtype_code = Int(py=dtype_code_obj)
+    var shape = List[Int]()
+    shape.append(n)
+    shape.append(m)
+    var result = make_empty_array(dtype_code, shape^)
+    # Zero out first.
+    for i in range(n * m):
+        set_logical_from_f64(result, i, 0.0)
+    # Walk diagonal.
+    var start_i = 0 if k >= 0 else -k
+    var max_diag = n if (m - k) > n else (m - k)
+    var end_i = max_diag if max_diag > 0 else 0
+    if end_i > n:
+        end_i = n
+    for i in range(start_i, end_i):
+        var col = i + k
+        if col >= 0 and col < m:
+            set_logical_from_f64(result, i * m + col, 1.0)
+    return PythonObject(alloc=result^)
+
+
+def pad_constant_ops(
+    array_obj: PythonObject,
+    pad_before_obj: PythonObject,
+    pad_after_obj: PythonObject,
+    constant_value_obj: PythonObject,
+) raises -> PythonObject:
+    # Native constant-mode pad. pad_before/pad_after are tuples of length ndim.
+    var src = array_obj.downcast_value_ptr[Array]()
+    var ndim = len(src[].shape)
+    var pad_before = List[Int]()
+    var pad_after = List[Int]()
+    for d in range(ndim):
+        pad_before.append(Int(py=pad_before_obj[d]))
+        pad_after.append(Int(py=pad_after_obj[d]))
+    var out_shape = List[Int]()
+    for d in range(ndim):
+        out_shape.append(src[].shape[d] + pad_before[d] + pad_after[d])
+    var out_shape_clone = List[Int]()
+    for d in range(ndim):
+        out_shape_clone.append(out_shape[d])
+    var result = make_empty_array(src[].dtype_code, out_shape_clone^)
+    var constant_f64 = Float64(py=constant_value_obj)
+    # Fill with constant first.
+    var out_size = 1
+    for d in range(ndim):
+        out_size *= out_shape[d]
+    for i in range(out_size):
+        set_logical_from_f64(result, i, constant_f64)
+    # Compute strides for source and result.
+    var src_strides = List[Int]()
+    var out_strides = List[Int]()
+    for _ in range(ndim):
+        src_strides.append(0)
+        out_strides.append(0)
+    var s = 1
+    var o = 1
+    for d in range(ndim - 1, -1, -1):
+        src_strides[d] = s
+        s = s * src[].shape[d]
+        out_strides[d] = o
+        o = o * out_shape[d]
+    # Copy source into result with offset.
+    var src_size = 1
+    for d in range(ndim):
+        src_size *= src[].shape[d]
+    for i in range(src_size):
+        # Decode source coordinate.
+        var remainder = i
+        var dst_idx = 0
+        for d in range(ndim):
+            var coord = remainder // src_strides[d]
+            remainder = remainder % src_strides[d]
+            dst_idx += (coord + pad_before[d]) * out_strides[d]
+        set_logical_from_f64(result, dst_idx, get_logical_as_f64(src[], i))
+    return PythonObject(alloc=result^)
+
+
+def lstsq_ops(
+    a_obj: PythonObject, b_obj: PythonObject, rcond_obj: PythonObject
+) raises -> PythonObject:
+    from std.python import Python
+    var a = a_obj.downcast_value_ptr[Array]()
+    var b = b_obj.downcast_value_ptr[Array]()
+    if len(a[].shape) != 2:
+        raise Error("linalg.lstsq: a must be rank-2")
+    var m = a[].shape[0]
+    var n = a[].shape[1]
+    var dtype_code = result_dtype_for_linalg_binary(a[].dtype_code, b[].dtype_code)
+    var k = m if m < n else n
+    var b_is_vec = len(b[].shape) == 1
+    var nrhs = 1
+    if not b_is_vec:
+        if len(b[].shape) != 2:
+            raise Error("linalg.lstsq: b must be rank-1 or rank-2")
+        nrhs = b[].shape[1]
+    if (b_is_vec and b[].shape[0] != m) or (not b_is_vec and b[].shape[0] != m):
+        raise Error("linalg.lstsq: shape mismatch on first axis of b")
+    var x_shape = List[Int]()
+    x_shape.append(n)
+    if not b_is_vec:
+        x_shape.append(nrhs)
+    var x = make_empty_array(dtype_code, x_shape^)
+    var s_shape = List[Int]()
+    s_shape.append(k)
+    var s = make_empty_array(dtype_code, s_shape^)
+    var rank_buf = Int(0)
+    var rank_ptr = rebind[UnsafePointer[Int, MutExternalOrigin]](
+        UnsafePointer(to=rank_buf)
+    )
+    if dtype_code == DTYPE_FLOAT32:
+        var rcond_f32 = Float32(Float64(py=rcond_obj))
+        lapack_lstsq_f32_into(a[], b[], x, s, rcond_f32, rank_ptr)
+    else:
+        var rcond_f64 = Float64(py=rcond_obj)
+        lapack_lstsq_f64_into(a[], b[], x, s, rcond_f64, rank_ptr)
+    var out = Python.evaluate("[]")
+    _ = out.append(PythonObject(alloc=x^))
+    _ = out.append(PythonObject(alloc=s^))
+    _ = out.append(PythonObject(rank_buf))
+    return out
 
 
 def fill_ops(array_obj: PythonObject, value_obj: PythonObject) raises -> PythonObject:

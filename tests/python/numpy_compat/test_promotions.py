@@ -66,13 +66,41 @@ def test_python_scalars_are_weak_for_float32_arrays(
 
 @pytest.mark.parametrize(
   "dtype",
-  # int8 moved to phase-5a registry-without-kernels — see
-  # test_array_coercion.py::test_phase5a_unimplemented_allocation_blockers.
-  ["uint64", "complex128", "object", "str", "uint8", numpy.complex128, numpy.dtype("uint64")],
+  # uint family + float16 moved to phase-5b/5c — see
+  # test_array_coercion.py::test_phase5b_unsigned_int_dtype_allocation_works
+  # and ::test_phase5c_float16_dtype_allocation_works.
+  ["complex128", "object", "str", numpy.complex128],
 )
 def test_unsupported_promotion_dtype_families_are_explicit_blockers(dtype: object) -> None:
   with pytest.raises(NotImplementedError, match="unsupported dtype"):
     np.asarray([1], dtype=dtype)
+
+
+@pytest.mark.parametrize(
+  ("lhs", "rhs", "expected"),
+  [
+    (np.uint8, np.uint16, np.uint16),
+    (np.uint16, np.uint32, np.uint32),
+    (np.uint32, np.uint64, np.uint64),
+    (np.uint8, np.int8, np.int16),
+    (np.uint16, np.int16, np.int32),
+    (np.uint32, np.int32, np.int64),
+    (np.uint64, np.int64, np.float64),
+    (np.uint8, np.float32, np.float32),
+    (np.uint32, np.float32, np.float64),
+    (np.float16, np.float32, np.float32),
+    (np.float16, np.uint8, np.float16),
+    (np.float16, np.int16, np.float32),
+  ],
+)
+def test_phase5b_phase5c_promotion_matches_numpy(lhs: object, rhs: object, expected: object) -> None:
+  # Mirror numpy's promotion rules at the python boundary; the underlying
+  # dispatch falls back to `_native._result_dtype_for_binary` for any pair
+  # outside the original 4×4 fast-path table.
+  out = np.result_type(lhs, rhs)
+  assert out == expected
+  oracle = numpy.result_type(numpy.dtype(lhs.name), numpy.dtype(rhs.name))
+  assert out == oracle
 
 
 @pytest.mark.parametrize(("monpy_dtype", "numpy_dtype"), SUPPORTED_DTYPE_PAIRS)

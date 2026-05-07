@@ -633,6 +633,134 @@ def build_cases(
         ),
       ])
 
+  # Phase-6d LAPACK-backed decompositions: qr / cholesky / eigh / svd /
+  # lstsq / pinv. Sizes use a subset of linalg_sizes; SVD/EIG are quadratic
+  # so we cap at 64 to keep runtime reasonable.
+  decomp_sizes = tuple(s for s in linalg_sizes if s <= 64) or linalg_sizes[:1]
+  for size in decomp_sizes:
+    for dtype in (np.float32, np.float64):
+      suffix = dtype_name(dtype)
+      target = monpy_dtype(dtype)
+      qr_np = np.linspace(1.0, 4.0, size * size, dtype=dtype).reshape(size, size)
+      qr_mp = mnp.asarray(qr_np, dtype=target, copy=True)
+      psd_np = qr_np @ qr_np.T + size * np.eye(size, dtype=dtype)
+      psd_mp = mnp.asarray(psd_np, dtype=target, copy=True)
+      sym_np = (qr_np + qr_np.T) / 2
+      sym_mp = mnp.asarray(sym_np, dtype=target, copy=True)
+      tolerance = 1e-3 if dtype is np.float32 else 1e-8
+
+      cases.extend([
+        BenchCase(
+          "decomp",
+          f"qr_{size}_{suffix}",
+          lambda x=qr_mp: mnp.linalg.qr(x),
+          lambda x=qr_np: np.linalg.qr(x),
+          check_values=False,
+        ),
+        BenchCase(
+          "decomp",
+          f"cholesky_{size}_{suffix}",
+          lambda x=psd_mp: mnp.linalg.cholesky(x),
+          lambda x=psd_np: np.linalg.cholesky(x),
+          rtol=tolerance,
+          atol=tolerance,
+        ),
+        BenchCase(
+          "decomp",
+          f"eigh_{size}_{suffix}",
+          lambda x=sym_mp: mnp.linalg.eigvalsh(x),
+          lambda x=sym_np: np.linalg.eigvalsh(x),
+          check_values=False,
+        ),
+        BenchCase(
+          "decomp",
+          f"svd_{size}_{suffix}",
+          lambda x=qr_mp: mnp.linalg.svdvals(x),
+          lambda x=qr_np: np.linalg.svd(x, compute_uv=False),
+          check_values=False,
+        ),
+        BenchCase(
+          "decomp",
+          f"pinv_{size}_{suffix}",
+          lambda x=qr_mp: mnp.linalg.pinv(x),
+          lambda x=qr_np: np.linalg.pinv(x),
+          rtol=tolerance,
+          atol=tolerance,
+        ),
+      ])
+
+  # Phase-5b unsigned int + phase-5c float16 dtype family coverage.
+  # These are wrapper-bound for now (dispatch goes through the f64 round-trip
+  # path); the bench rows surface that and will track typed-kernel work.
+  ext_dtype_specs = (
+    ("u8", mnp.uint8, np.uint8, np.arange(vector_size, dtype=np.uint8) % 251),
+    ("u16", mnp.uint16, np.uint16, np.arange(vector_size, dtype=np.uint16) % 65500),
+    ("u32", mnp.uint32, np.uint32, np.arange(vector_size, dtype=np.uint32)),
+    ("u64", mnp.uint64, np.uint64, np.arange(vector_size, dtype=np.uint64)),
+    ("f16", mnp.float16, np.float16, np.linspace(0.1, 10.0, vector_size, dtype=np.float16)),
+    ("i32", mnp.int32, np.int32, np.arange(vector_size, dtype=np.int32) - (vector_size // 2)),
+  )
+  for name, monpy_dt, numpy_dt, values in ext_dtype_specs:
+    a_mp = mnp.asarray(values, dtype=monpy_dt, copy=True)
+    a_np = np.asarray(values, dtype=numpy_dt)
+    cases.extend([
+      BenchCase(
+        "ext_dtypes",
+        f"binary_add_{name}",
+        lambda lhs=a_mp: lhs + lhs,
+        lambda lhs=a_np: lhs + lhs,
+        check_values=False,
+      ),
+      BenchCase(
+        "ext_dtypes",
+        f"reduce_sum_{name}",
+        lambda src=a_mp: mnp.sum(src),
+        lambda src=a_np: np.sum(src),
+        check_values=False,
+      ),
+    ])
+
+  # Phase-6 native creation kernels (eye/tril/triu/concatenate/pad).
+  ec_n = 64
+  ec_a_np = np.arange(ec_n * ec_n, dtype=np.float64).reshape(ec_n, ec_n)
+  ec_a_mp = mnp.asarray(ec_a_np, dtype=mnp.float64, copy=True)
+  ec_concat_inputs_mp = [mnp.zeros((128,), dtype=mnp.float64) for _ in range(8)]
+  ec_concat_inputs_np = [np.zeros((128,), dtype=np.float64) for _ in range(8)]
+  ec_pad_mp = mnp.asarray(np.arange(64, dtype=np.float64), dtype=mnp.float64)
+  ec_pad_np = np.arange(64, dtype=np.float64)
+  cases.extend([
+    BenchCase(
+      "native_kernels",
+      "eye_64_native_f64",
+      lambda: mnp.eye(64, dtype=mnp.float64),
+      lambda: np.eye(64, dtype=np.float64),
+    ),
+    BenchCase(
+      "native_kernels",
+      "tril_64_native_f64",
+      lambda lhs=ec_a_mp: mnp.tril(lhs),
+      lambda lhs=ec_a_np: np.tril(lhs),
+    ),
+    BenchCase(
+      "native_kernels",
+      "triu_64_native_f64",
+      lambda lhs=ec_a_mp: mnp.triu(lhs),
+      lambda lhs=ec_a_np: np.triu(lhs),
+    ),
+    BenchCase(
+      "native_kernels",
+      "concatenate_axis0_8x128_f64",
+      lambda inp=ec_concat_inputs_mp: mnp.concatenate(inp),
+      lambda inp=ec_concat_inputs_np: np.concatenate(inp),
+    ),
+    BenchCase(
+      "native_kernels",
+      "pad_constant_5_5_f64",
+      lambda inp=ec_pad_mp: mnp.pad(inp, 5),
+      lambda inp=ec_pad_np: np.pad(inp, 5),
+    ),
+  ])
+
   return cases
 
 

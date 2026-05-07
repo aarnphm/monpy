@@ -15,7 +15,9 @@ from create import (
     binary_ops,
     binary_scalar_ops,
     broadcast_to_ops,
+    cholesky_ops,
     compare_ops,
+    concatenate_ops,
     copy_from_external_ops,
     copyto_ops,
     det_ops,
@@ -25,8 +27,11 @@ from create import (
     dtype_item_size_py_ops,
     dtype_kind_code_py_ops,
     dtype_promote_types_py_ops,
+    eig_ops,
+    eigh_ops,
     empty_ops,
     expand_dims_ops,
+    eye_ops,
     fill_ops,
     flip_ops,
     from_external_ops,
@@ -35,9 +40,12 @@ from create import (
     inv_ops,
     linspace_ops,
     logical_ops,
+    lstsq_ops,
     materialize_c_contiguous_ops,
     matmul_ops,
+    pad_constant_ops,
     predicate_ops,
+    qr_ops,
     reduce_axis_ops,
     reduce_ops,
     reshape_ops,
@@ -48,9 +56,12 @@ from create import (
     slice_1d_ops,
     slice_ops,
     solve_ops,
+    svd_ops,
     trace_ops,
     transpose_full_reverse_ops,
     transpose_ops,
+    tril_ops,
+    triu_ops,
     unary_ops,
     unary_preserve_ops,
     where_ops,
@@ -133,6 +144,17 @@ def PyInit__native() -> PythonObject:
         module.def_function[solve_ops]("linalg_solve")
         module.def_function[inv_ops]("linalg_inv")
         module.def_function[det_ops]("linalg_det")
+        module.def_function[qr_ops]("linalg_qr")
+        module.def_function[cholesky_ops]("linalg_cholesky")
+        module.def_function[eigh_ops]("linalg_eigh")
+        module.def_function[eig_ops]("linalg_eig")
+        module.def_function[svd_ops]("linalg_svd")
+        module.def_function[lstsq_ops]("linalg_lstsq")
+        module.def_function[concatenate_ops]("concatenate")
+        module.def_function[tril_ops]("tril")
+        module.def_function[triu_ops]("triu")
+        module.def_function[eye_ops]("eye")
+        module.def_function[pad_constant_ops]("pad_constant")
         module.def_function[fill_ops]("fill")
         module.def_function[copyto_ops]("copyto")
         module.def_function[slice_1d_ops]("slice_1d")

@@ -209,6 +209,120 @@ def case_meshgrid_64() -> tuple[float, float]:
     return mp_us, np_us
 
 
+# Phase-6d LAPACK decomp benches. Cover qr / cholesky / eigvalsh / svdvals /
+# pinv on a 32×32 conditioned matrix. lstsq runs on a tall-skinny system.
+def case_qr_32_f64() -> tuple[float, float]:
+    np_a = np.random.rand(32, 32).astype(np.float64) + np.eye(32)
+    mp_a = mp.asarray(np_a, dtype=mp.float64)
+    np_us = _time(lambda: np.linalg.qr(np_a))
+    mp_us = _time(lambda: mp.linalg.qr(mp_a))
+    return mp_us, np_us
+
+
+def case_cholesky_32_f64() -> tuple[float, float]:
+    base = np.random.rand(32, 32).astype(np.float64)
+    np_a = base @ base.T + 32 * np.eye(32)
+    mp_a = mp.asarray(np_a, dtype=mp.float64)
+    np_us = _time(lambda: np.linalg.cholesky(np_a))
+    mp_us = _time(lambda: mp.linalg.cholesky(mp_a))
+    return mp_us, np_us
+
+
+def case_eigvalsh_32_f64() -> tuple[float, float]:
+    base = np.random.rand(32, 32).astype(np.float64)
+    np_a = (base + base.T) / 2
+    mp_a = mp.asarray(np_a, dtype=mp.float64)
+    np_us = _time(lambda: np.linalg.eigvalsh(np_a))
+    mp_us = _time(lambda: mp.linalg.eigvalsh(mp_a))
+    return mp_us, np_us
+
+
+def case_svdvals_32_f64() -> tuple[float, float]:
+    np_a = np.random.rand(32, 32).astype(np.float64)
+    mp_a = mp.asarray(np_a, dtype=mp.float64)
+    np_us = _time(lambda: np.linalg.svd(np_a, compute_uv=False))
+    mp_us = _time(lambda: mp.linalg.svdvals(mp_a))
+    return mp_us, np_us
+
+
+def case_pinv_32_f64() -> tuple[float, float]:
+    np_a = np.random.rand(32, 32).astype(np.float64) + np.eye(32)
+    mp_a = mp.asarray(np_a, dtype=mp.float64)
+    np_us = _time(lambda: np.linalg.pinv(np_a))
+    mp_us = _time(lambda: mp.linalg.pinv(mp_a))
+    return mp_us, np_us
+
+
+def case_lstsq_64x32_f64() -> tuple[float, float]:
+    np_a = np.random.rand(64, 32).astype(np.float64)
+    np_b = np.random.rand(64).astype(np.float64)
+    mp_a = mp.asarray(np_a, dtype=mp.float64)
+    mp_b = mp.asarray(np_b, dtype=mp.float64)
+    np_us = _time(lambda: np.linalg.lstsq(np_a, np_b, rcond=None))
+    mp_us = _time(lambda: mp.linalg.lstsq(mp_a, mp_b))
+    return mp_us, np_us
+
+
+# Phase-5b/5c dtype family benches. Wrapper-bound until typed-vec int /
+# half kernels land. These rows track the gap.
+def case_uint8_add_1024() -> tuple[float, float]:
+    np_a = np.arange(1024, dtype=np.uint8)
+    mp_a = mp.asarray(np_a, dtype=mp.uint8)
+    np_us = _time(lambda: np_a + np_a)
+    mp_us = _time(lambda: mp_a + mp_a)
+    return mp_us, np_us
+
+
+def case_uint32_add_1024() -> tuple[float, float]:
+    np_a = np.arange(1024, dtype=np.uint32)
+    mp_a = mp.asarray(np_a, dtype=mp.uint32)
+    np_us = _time(lambda: np_a + np_a)
+    mp_us = _time(lambda: mp_a + mp_a)
+    return mp_us, np_us
+
+
+def case_float16_add_1024() -> tuple[float, float]:
+    np_a = np.linspace(0.0, 1.0, 1024, dtype=np.float16)
+    mp_a = mp.asarray(np_a, dtype=mp.float16)
+    np_us = _time(lambda: np_a + np_a)
+    mp_us = _time(lambda: mp_a + mp_a)
+    return mp_us, np_us
+
+
+# Phase-6 native creation kernels. These were ~58000× / ~250× / ~100× slower
+# pre-native; rows here track the post-native speedup.
+def case_native_concatenate_4x256() -> tuple[float, float]:
+    np_xs = [np.zeros(256, dtype=np.float64) for _ in range(4)]
+    mp_xs = [mp.zeros((256,), dtype=mp.float64) for _ in range(4)]
+    np_us = _time(lambda: np.concatenate(np_xs))
+    mp_us = _time(lambda: mp.concatenate(mp_xs))
+    return mp_us, np_us
+
+
+def case_native_tril_64x64() -> tuple[float, float]:
+    np_a = np.arange(64 * 64, dtype=np.float64).reshape(64, 64)
+    mp_a = mp.asarray(np_a, dtype=mp.float64)
+    np_us = _time(lambda: np.tril(np_a))
+    mp_us = _time(lambda: mp.tril(mp_a))
+    return mp_us, np_us
+
+
+def case_native_triu_64x64() -> tuple[float, float]:
+    np_a = np.arange(64 * 64, dtype=np.float64).reshape(64, 64)
+    mp_a = mp.asarray(np_a, dtype=mp.float64)
+    np_us = _time(lambda: np.triu(np_a))
+    mp_us = _time(lambda: mp.triu(mp_a))
+    return mp_us, np_us
+
+
+def case_native_pad_constant() -> tuple[float, float]:
+    np_a = np.arange(64, dtype=np.float64)
+    mp_a = mp.asarray(np_a, dtype=mp.float64)
+    np_us = _time(lambda: np.pad(np_a, 5))
+    mp_us = _time(lambda: mp.pad(mp_a, 5))
+    return mp_us, np_us
+
+
 CASES: list[tuple[str, Callable[[], tuple[float, float]]]] = [
     ("strided_add_f32_256", case_strided_add_f32),
     ("broadcast_add_f32_256", case_broadcast_add_f32),
@@ -225,6 +339,22 @@ CASES: list[tuple[str, Callable[[], tuple[float, float]]]] = [
     ("moveaxis_f32_2x3x4x5", case_moveaxis_f32),
     ("eye_64_f32", case_eye_64_f32),
     ("meshgrid_64", case_meshgrid_64),
+    # Phase-6d LAPACK
+    ("qr_32_f64", case_qr_32_f64),
+    ("cholesky_32_f64", case_cholesky_32_f64),
+    ("eigvalsh_32_f64", case_eigvalsh_32_f64),
+    ("svdvals_32_f64", case_svdvals_32_f64),
+    ("pinv_32_f64", case_pinv_32_f64),
+    ("lstsq_64x32_f64", case_lstsq_64x32_f64),
+    # Phase-5b/5c dtype families
+    ("uint8_add_1024", case_uint8_add_1024),
+    ("uint32_add_1024", case_uint32_add_1024),
+    ("float16_add_1024", case_float16_add_1024),
+    # Phase-6 native kernels
+    ("native_concatenate_4x256", case_native_concatenate_4x256),
+    ("native_tril_64x64", case_native_tril_64x64),
+    ("native_triu_64x64", case_native_triu_64x64),
+    ("native_pad_constant", case_native_pad_constant),
 ]
 
 

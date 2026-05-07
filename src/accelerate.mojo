@@ -1,5 +1,6 @@
 from std.ffi import _get_dylib_function as _ffi_get_dylib_function
 from std.ffi import _Global, OwnedDLHandle
+from std.memory.unsafe_pointer import alloc
 from std.sys import CompilationTarget
 
 
@@ -136,6 +137,200 @@ comptime lapack_dgetrf_type = def(
     UnsafePointer[Int32, MutAnyOrigin],
     UnsafePointer[Float64, MutAnyOrigin],
     UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+) thin -> None
+
+
+# Phase-6d LAPACK additions: QR, Cholesky, eigendecompositions, SVD,
+# least-squares. F77 ABI is column-major; everything goes by pointer.
+# Character params (JOBZ, UPLO etc.) are single ASCII bytes passed via
+# UnsafePointer[Int8].
+
+comptime lapack_sgeqrf_type = def(
+    UnsafePointer[Int32, MutAnyOrigin],         # M
+    UnsafePointer[Int32, MutAnyOrigin],         # N
+    UnsafePointer[Float32, MutAnyOrigin],       # A[lda*n]
+    UnsafePointer[Int32, MutAnyOrigin],         # LDA
+    UnsafePointer[Float32, MutAnyOrigin],       # TAU[min(M,N)]
+    UnsafePointer[Float32, MutAnyOrigin],       # WORK[lwork]
+    UnsafePointer[Int32, MutAnyOrigin],         # LWORK
+    UnsafePointer[Int32, MutAnyOrigin],         # INFO
+) thin -> None
+
+comptime lapack_dgeqrf_type = def(
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+) thin -> None
+
+comptime lapack_sorgqr_type = def(
+    UnsafePointer[Int32, MutAnyOrigin],         # M
+    UnsafePointer[Int32, MutAnyOrigin],         # N
+    UnsafePointer[Int32, MutAnyOrigin],         # K
+    UnsafePointer[Float32, MutAnyOrigin],       # A
+    UnsafePointer[Int32, MutAnyOrigin],         # LDA
+    UnsafePointer[Float32, MutAnyOrigin],       # TAU
+    UnsafePointer[Float32, MutAnyOrigin],       # WORK
+    UnsafePointer[Int32, MutAnyOrigin],         # LWORK
+    UnsafePointer[Int32, MutAnyOrigin],         # INFO
+) thin -> None
+
+comptime lapack_dorgqr_type = def(
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+) thin -> None
+
+comptime lapack_spotrf_type = def(
+    UnsafePointer[Int8, MutAnyOrigin],          # UPLO ('U'/'L')
+    UnsafePointer[Int32, MutAnyOrigin],         # N
+    UnsafePointer[Float32, MutAnyOrigin],       # A
+    UnsafePointer[Int32, MutAnyOrigin],         # LDA
+    UnsafePointer[Int32, MutAnyOrigin],         # INFO
+) thin -> None
+
+comptime lapack_dpotrf_type = def(
+    UnsafePointer[Int8, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+) thin -> None
+
+comptime lapack_ssyev_type = def(
+    UnsafePointer[Int8, MutAnyOrigin],          # JOBZ ('N'/'V')
+    UnsafePointer[Int8, MutAnyOrigin],          # UPLO
+    UnsafePointer[Int32, MutAnyOrigin],         # N
+    UnsafePointer[Float32, MutAnyOrigin],       # A
+    UnsafePointer[Int32, MutAnyOrigin],         # LDA
+    UnsafePointer[Float32, MutAnyOrigin],       # W[N]
+    UnsafePointer[Float32, MutAnyOrigin],       # WORK
+    UnsafePointer[Int32, MutAnyOrigin],         # LWORK
+    UnsafePointer[Int32, MutAnyOrigin],         # INFO
+) thin -> None
+
+comptime lapack_dsyev_type = def(
+    UnsafePointer[Int8, MutAnyOrigin],
+    UnsafePointer[Int8, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+) thin -> None
+
+comptime lapack_sgesdd_type = def(
+    UnsafePointer[Int8, MutAnyOrigin],          # JOBZ
+    UnsafePointer[Int32, MutAnyOrigin],         # M
+    UnsafePointer[Int32, MutAnyOrigin],         # N
+    UnsafePointer[Float32, MutAnyOrigin],       # A
+    UnsafePointer[Int32, MutAnyOrigin],         # LDA
+    UnsafePointer[Float32, MutAnyOrigin],       # S
+    UnsafePointer[Float32, MutAnyOrigin],       # U
+    UnsafePointer[Int32, MutAnyOrigin],         # LDU
+    UnsafePointer[Float32, MutAnyOrigin],       # VT
+    UnsafePointer[Int32, MutAnyOrigin],         # LDVT
+    UnsafePointer[Float32, MutAnyOrigin],       # WORK
+    UnsafePointer[Int32, MutAnyOrigin],         # LWORK
+    UnsafePointer[Int32, MutAnyOrigin],         # IWORK[8*min(M,N)]
+    UnsafePointer[Int32, MutAnyOrigin],         # INFO
+) thin -> None
+
+comptime lapack_dgesdd_type = def(
+    UnsafePointer[Int8, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+) thin -> None
+
+comptime lapack_sgelsd_type = def(
+    UnsafePointer[Int32, MutAnyOrigin],         # M
+    UnsafePointer[Int32, MutAnyOrigin],         # N
+    UnsafePointer[Int32, MutAnyOrigin],         # NRHS
+    UnsafePointer[Float32, MutAnyOrigin],       # A
+    UnsafePointer[Int32, MutAnyOrigin],         # LDA
+    UnsafePointer[Float32, MutAnyOrigin],       # B
+    UnsafePointer[Int32, MutAnyOrigin],         # LDB
+    UnsafePointer[Float32, MutAnyOrigin],       # S[min(M,N)]
+    UnsafePointer[Float32, MutAnyOrigin],       # RCOND
+    UnsafePointer[Int32, MutAnyOrigin],         # RANK
+    UnsafePointer[Float32, MutAnyOrigin],       # WORK
+    UnsafePointer[Int32, MutAnyOrigin],         # LWORK
+    UnsafePointer[Int32, MutAnyOrigin],         # IWORK
+    UnsafePointer[Int32, MutAnyOrigin],         # INFO
+) thin -> None
+
+comptime lapack_dgelsd_type = def(
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+) thin -> None
+
+comptime lapack_sgeev_type = def(
+    UnsafePointer[Int8, MutAnyOrigin],          # JOBVL
+    UnsafePointer[Int8, MutAnyOrigin],          # JOBVR
+    UnsafePointer[Int32, MutAnyOrigin],         # N
+    UnsafePointer[Float32, MutAnyOrigin],       # A
+    UnsafePointer[Int32, MutAnyOrigin],         # LDA
+    UnsafePointer[Float32, MutAnyOrigin],       # WR[N]
+    UnsafePointer[Float32, MutAnyOrigin],       # WI[N]
+    UnsafePointer[Float32, MutAnyOrigin],       # VL
+    UnsafePointer[Int32, MutAnyOrigin],         # LDVL
+    UnsafePointer[Float32, MutAnyOrigin],       # VR
+    UnsafePointer[Int32, MutAnyOrigin],         # LDVR
+    UnsafePointer[Float32, MutAnyOrigin],       # WORK
+    UnsafePointer[Int32, MutAnyOrigin],         # LWORK
+    UnsafePointer[Int32, MutAnyOrigin],         # INFO
+) thin -> None
+
+comptime lapack_dgeev_type = def(
+    UnsafePointer[Int8, MutAnyOrigin],
+    UnsafePointer[Int8, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    UnsafePointer[Int32, MutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
     UnsafePointer[Int32, MutAnyOrigin],
     UnsafePointer[Int32, MutAnyOrigin],
 ) thin -> None
@@ -613,3 +808,865 @@ def cblas_dgemv_row_major_ld(
         rebind[UnsafePointer[Float64, MutAnyOrigin]](y_ptr),
         Int32(1),
     )
+
+
+# ============================================================
+# Phase-6d LAPACK call wrappers.
+#
+# Each wrapper handles the F77 ABI ceremony (every argument by pointer,
+# even scalars), runs LAPACK's workspace query (LWORK = -1 returns the
+# optimal size in WORK[0]), allocates the workspace, runs the real call,
+# frees the workspace, and returns INFO. Callers stay in pointer-land so
+# the surrounding kernel code can keep working with col-major scratch.
+# ============================================================
+
+
+@always_inline
+def get_lapack_sgeqrf_function() raises -> lapack_sgeqrf_type:
+    return get_lapack_function["sgeqrf_", lapack_sgeqrf_type]()
+
+
+@always_inline
+def get_lapack_dgeqrf_function() raises -> lapack_dgeqrf_type:
+    return get_lapack_function["dgeqrf_", lapack_dgeqrf_type]()
+
+
+@always_inline
+def get_lapack_sorgqr_function() raises -> lapack_sorgqr_type:
+    return get_lapack_function["sorgqr_", lapack_sorgqr_type]()
+
+
+@always_inline
+def get_lapack_dorgqr_function() raises -> lapack_dorgqr_type:
+    return get_lapack_function["dorgqr_", lapack_dorgqr_type]()
+
+
+@always_inline
+def get_lapack_spotrf_function() raises -> lapack_spotrf_type:
+    return get_lapack_function["spotrf_", lapack_spotrf_type]()
+
+
+@always_inline
+def get_lapack_dpotrf_function() raises -> lapack_dpotrf_type:
+    return get_lapack_function["dpotrf_", lapack_dpotrf_type]()
+
+
+@always_inline
+def get_lapack_ssyev_function() raises -> lapack_ssyev_type:
+    return get_lapack_function["ssyev_", lapack_ssyev_type]()
+
+
+@always_inline
+def get_lapack_dsyev_function() raises -> lapack_dsyev_type:
+    return get_lapack_function["dsyev_", lapack_dsyev_type]()
+
+
+@always_inline
+def get_lapack_sgesdd_function() raises -> lapack_sgesdd_type:
+    return get_lapack_function["sgesdd_", lapack_sgesdd_type]()
+
+
+@always_inline
+def get_lapack_dgesdd_function() raises -> lapack_dgesdd_type:
+    return get_lapack_function["dgesdd_", lapack_dgesdd_type]()
+
+
+@always_inline
+def get_lapack_sgelsd_function() raises -> lapack_sgelsd_type:
+    return get_lapack_function["sgelsd_", lapack_sgelsd_type]()
+
+
+@always_inline
+def get_lapack_dgelsd_function() raises -> lapack_dgelsd_type:
+    return get_lapack_function["dgelsd_", lapack_dgelsd_type]()
+
+
+@always_inline
+def get_lapack_sgeev_function() raises -> lapack_sgeev_type:
+    return get_lapack_function["sgeev_", lapack_sgeev_type]()
+
+
+@always_inline
+def get_lapack_dgeev_function() raises -> lapack_dgeev_type:
+    return get_lapack_function["dgeev_", lapack_dgeev_type]()
+
+
+@always_inline
+def lapack_sgeqrf(
+    m_value: Int,
+    n_value: Int,
+    a_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    tau_ptr: UnsafePointer[Float32, MutExternalOrigin],
+) raises -> Int:
+    var function = get_lapack_sgeqrf_function()
+    var m = Int32(m_value)
+    var n = Int32(n_value)
+    var lda = Int32(m_value)
+    var info = Int32(0)
+    # Workspace query: LWORK = -1, single-element scratch, optimal size in WORK[0].
+    var query_lwork = Int32(-1)
+    var query_work = Float32(0)
+    function(
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=m)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](tau_ptr),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](UnsafePointer(to=query_work)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=query_lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    if info != 0:
+        return Int(info)
+    var lwork_int = Int(query_work)
+    if lwork_int < 1:
+        lwork_int = 1
+    var lwork = Int32(lwork_int)
+    var work = alloc[Float32](lwork_int)
+    function(
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=m)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](tau_ptr),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](work),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    work.free()
+    return Int(info)
+
+
+@always_inline
+def lapack_dgeqrf(
+    m_value: Int,
+    n_value: Int,
+    a_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    tau_ptr: UnsafePointer[Float64, MutExternalOrigin],
+) raises -> Int:
+    var function = get_lapack_dgeqrf_function()
+    var m = Int32(m_value)
+    var n = Int32(n_value)
+    var lda = Int32(m_value)
+    var info = Int32(0)
+    var query_lwork = Int32(-1)
+    var query_work = Float64(0)
+    function(
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=m)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](tau_ptr),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](UnsafePointer(to=query_work)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=query_lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    if info != 0:
+        return Int(info)
+    var lwork_int = Int(query_work)
+    if lwork_int < 1:
+        lwork_int = 1
+    var lwork = Int32(lwork_int)
+    var work = alloc[Float64](lwork_int)
+    function(
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=m)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](tau_ptr),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](work),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    work.free()
+    return Int(info)
+
+
+@always_inline
+def lapack_sorgqr(
+    m_value: Int,
+    n_value: Int,
+    k_value: Int,
+    a_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    tau_ptr: UnsafePointer[Float32, MutExternalOrigin],
+) raises -> Int:
+    var function = get_lapack_sorgqr_function()
+    var m = Int32(m_value)
+    var n = Int32(n_value)
+    var k = Int32(k_value)
+    var lda = Int32(m_value)
+    var info = Int32(0)
+    var query_lwork = Int32(-1)
+    var query_work = Float32(0)
+    function(
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=m)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=k)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](tau_ptr),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](UnsafePointer(to=query_work)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=query_lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    if info != 0:
+        return Int(info)
+    var lwork_int = Int(query_work)
+    if lwork_int < 1:
+        lwork_int = 1
+    var lwork = Int32(lwork_int)
+    var work = alloc[Float32](lwork_int)
+    function(
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=m)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=k)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](tau_ptr),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](work),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    work.free()
+    return Int(info)
+
+
+@always_inline
+def lapack_dorgqr(
+    m_value: Int,
+    n_value: Int,
+    k_value: Int,
+    a_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    tau_ptr: UnsafePointer[Float64, MutExternalOrigin],
+) raises -> Int:
+    var function = get_lapack_dorgqr_function()
+    var m = Int32(m_value)
+    var n = Int32(n_value)
+    var k = Int32(k_value)
+    var lda = Int32(m_value)
+    var info = Int32(0)
+    var query_lwork = Int32(-1)
+    var query_work = Float64(0)
+    function(
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=m)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=k)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](tau_ptr),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](UnsafePointer(to=query_work)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=query_lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    if info != 0:
+        return Int(info)
+    var lwork_int = Int(query_work)
+    if lwork_int < 1:
+        lwork_int = 1
+    var lwork = Int32(lwork_int)
+    var work = alloc[Float64](lwork_int)
+    function(
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=m)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=k)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](tau_ptr),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](work),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    work.free()
+    return Int(info)
+
+
+@always_inline
+def lapack_spotrf(
+    n_value: Int,
+    a_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    upper: Bool,
+) raises -> Int:
+    var function = get_lapack_spotrf_function()
+    var n = Int32(n_value)
+    var lda = Int32(n_value)
+    var info = Int32(0)
+    var uplo_byte = Int8(85) if upper else Int8(76)  # 'U' = 0x55, 'L' = 0x4C
+    function(
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=uplo_byte)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    return Int(info)
+
+
+@always_inline
+def lapack_dpotrf(
+    n_value: Int,
+    a_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    upper: Bool,
+) raises -> Int:
+    var function = get_lapack_dpotrf_function()
+    var n = Int32(n_value)
+    var lda = Int32(n_value)
+    var info = Int32(0)
+    var uplo_byte = Int8(85) if upper else Int8(76)
+    function(
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=uplo_byte)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    return Int(info)
+
+
+@always_inline
+def lapack_ssyev(
+    n_value: Int,
+    a_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    w_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    compute_eigenvectors: Bool,
+    upper: Bool,
+) raises -> Int:
+    var function = get_lapack_ssyev_function()
+    var n = Int32(n_value)
+    var lda = Int32(n_value)
+    var info = Int32(0)
+    var jobz_byte = Int8(86) if compute_eigenvectors else Int8(78)  # 'V' or 'N'
+    var uplo_byte = Int8(85) if upper else Int8(76)
+    var query_lwork = Int32(-1)
+    var query_work = Float32(0)
+    function(
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=jobz_byte)),
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=uplo_byte)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](w_ptr),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](UnsafePointer(to=query_work)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=query_lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    if info != 0:
+        return Int(info)
+    var lwork_int = Int(query_work)
+    if lwork_int < 1:
+        lwork_int = 1
+    var lwork = Int32(lwork_int)
+    var work = alloc[Float32](lwork_int)
+    function(
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=jobz_byte)),
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=uplo_byte)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](w_ptr),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](work),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    work.free()
+    return Int(info)
+
+
+@always_inline
+def lapack_dsyev(
+    n_value: Int,
+    a_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    w_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    compute_eigenvectors: Bool,
+    upper: Bool,
+) raises -> Int:
+    var function = get_lapack_dsyev_function()
+    var n = Int32(n_value)
+    var lda = Int32(n_value)
+    var info = Int32(0)
+    var jobz_byte = Int8(86) if compute_eigenvectors else Int8(78)
+    var uplo_byte = Int8(85) if upper else Int8(76)
+    var query_lwork = Int32(-1)
+    var query_work = Float64(0)
+    function(
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=jobz_byte)),
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=uplo_byte)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](w_ptr),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](UnsafePointer(to=query_work)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=query_lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    if info != 0:
+        return Int(info)
+    var lwork_int = Int(query_work)
+    if lwork_int < 1:
+        lwork_int = 1
+    var lwork = Int32(lwork_int)
+    var work = alloc[Float64](lwork_int)
+    function(
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=jobz_byte)),
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=uplo_byte)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](w_ptr),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](work),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    work.free()
+    return Int(info)
+
+
+@always_inline
+def lapack_sgesdd(
+    m_value: Int,
+    n_value: Int,
+    a_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    s_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    u_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    vt_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    full_matrices: Bool,
+    compute_uv: Bool,
+) raises -> Int:
+    # JOBZ = 'A' (full U/VT), 'S' (thin U/VT), 'N' (singular values only).
+    var function = get_lapack_sgesdd_function()
+    var m = Int32(m_value)
+    var n = Int32(n_value)
+    var lda = Int32(m_value)
+    var ldu = Int32(m_value)
+    var ldvt: Int32
+    if not compute_uv:
+        ldvt = Int32(1)
+    elif full_matrices:
+        ldvt = Int32(n_value)
+    else:
+        var thin = m_value if m_value < n_value else n_value
+        ldvt = Int32(thin)
+    var info = Int32(0)
+    var jobz_byte: Int8
+    if not compute_uv:
+        jobz_byte = Int8(78)  # 'N'
+    elif full_matrices:
+        jobz_byte = Int8(65)  # 'A'
+    else:
+        jobz_byte = Int8(83)  # 'S'
+    var min_mn = m_value if m_value < n_value else n_value
+    if min_mn < 1:
+        min_mn = 1
+    var iwork = alloc[Int32](8 * min_mn)
+    var query_lwork = Int32(-1)
+    var query_work = Float32(0)
+    function(
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=jobz_byte)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=m)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](s_ptr),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](u_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldu)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](vt_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldvt)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](UnsafePointer(to=query_work)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=query_lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](iwork),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    if info != 0:
+        iwork.free()
+        return Int(info)
+    var lwork_int = Int(query_work)
+    if lwork_int < 1:
+        lwork_int = 1
+    var lwork = Int32(lwork_int)
+    var work = alloc[Float32](lwork_int)
+    function(
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=jobz_byte)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=m)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](s_ptr),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](u_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldu)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](vt_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldvt)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](work),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](iwork),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    work.free()
+    iwork.free()
+    return Int(info)
+
+
+@always_inline
+def lapack_dgesdd(
+    m_value: Int,
+    n_value: Int,
+    a_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    s_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    u_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    vt_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    full_matrices: Bool,
+    compute_uv: Bool,
+) raises -> Int:
+    var function = get_lapack_dgesdd_function()
+    var m = Int32(m_value)
+    var n = Int32(n_value)
+    var lda = Int32(m_value)
+    var ldu = Int32(m_value)
+    var ldvt: Int32
+    if not compute_uv:
+        ldvt = Int32(1)
+    elif full_matrices:
+        ldvt = Int32(n_value)
+    else:
+        var thin = m_value if m_value < n_value else n_value
+        ldvt = Int32(thin)
+    var info = Int32(0)
+    var jobz_byte: Int8
+    if not compute_uv:
+        jobz_byte = Int8(78)
+    elif full_matrices:
+        jobz_byte = Int8(65)
+    else:
+        jobz_byte = Int8(83)
+    var min_mn = m_value if m_value < n_value else n_value
+    if min_mn < 1:
+        min_mn = 1
+    var iwork = alloc[Int32](8 * min_mn)
+    var query_lwork = Int32(-1)
+    var query_work = Float64(0)
+    function(
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=jobz_byte)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=m)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](s_ptr),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](u_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldu)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](vt_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldvt)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](UnsafePointer(to=query_work)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=query_lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](iwork),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    if info != 0:
+        iwork.free()
+        return Int(info)
+    var lwork_int = Int(query_work)
+    if lwork_int < 1:
+        lwork_int = 1
+    var lwork = Int32(lwork_int)
+    var work = alloc[Float64](lwork_int)
+    function(
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=jobz_byte)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=m)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](s_ptr),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](u_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldu)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](vt_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldvt)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](work),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](iwork),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    work.free()
+    iwork.free()
+    return Int(info)
+
+
+@always_inline
+def lapack_sgelsd(
+    m_value: Int,
+    n_value: Int,
+    nrhs_value: Int,
+    a_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    b_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    s_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    rcond_value: Float32,
+    rank_out: UnsafePointer[Int, MutExternalOrigin],
+) raises -> Int:
+    # Returns (info, rank). LDB must be >= max(M, N) since LAPACK overwrites
+    # B with the result; caller is responsible for that allocation.
+    var function = get_lapack_sgelsd_function()
+    var m = Int32(m_value)
+    var n = Int32(n_value)
+    var nrhs = Int32(nrhs_value)
+    var lda = Int32(m_value)
+    var ldb_int = m_value if m_value > n_value else n_value
+    var ldb = Int32(ldb_int)
+    var rank = Int32(0)
+    var info = Int32(0)
+    var rcond = rcond_value
+    var min_mn = m_value if m_value < n_value else n_value
+    if min_mn < 1:
+        min_mn = 1
+    # IWORK conservative size per LAPACK 3.x: 3*min_mn*nlvl + 11*min_mn,
+    # nlvl = max(0, log2(min_mn/26) + 1). Allocate generous slab.
+    var iwork_size = 3 * min_mn * 32 + 11 * min_mn
+    if iwork_size < 1:
+        iwork_size = 1
+    var iwork = alloc[Int32](iwork_size)
+    var query_lwork = Int32(-1)
+    var query_work = Float32(0)
+    function(
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=m)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=nrhs)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](b_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldb)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](s_ptr),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](UnsafePointer(to=rcond)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=rank)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](UnsafePointer(to=query_work)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=query_lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](iwork),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    if info != 0:
+        iwork.free()
+        rank_out[] = 0
+        return Int(info)
+    var lwork_int = Int(query_work)
+    if lwork_int < 1:
+        lwork_int = 1
+    var lwork = Int32(lwork_int)
+    var work = alloc[Float32](lwork_int)
+    function(
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=m)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=nrhs)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](b_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldb)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](s_ptr),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](UnsafePointer(to=rcond)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=rank)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](work),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](iwork),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    work.free()
+    iwork.free()
+    rank_out[] = Int(rank)
+    return Int(info)
+
+
+@always_inline
+def lapack_dgelsd(
+    m_value: Int,
+    n_value: Int,
+    nrhs_value: Int,
+    a_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    b_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    s_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    rcond_value: Float64,
+    rank_out: UnsafePointer[Int, MutExternalOrigin],
+) raises -> Int:
+    var function = get_lapack_dgelsd_function()
+    var m = Int32(m_value)
+    var n = Int32(n_value)
+    var nrhs = Int32(nrhs_value)
+    var lda = Int32(m_value)
+    var ldb_int = m_value if m_value > n_value else n_value
+    var ldb = Int32(ldb_int)
+    var rank = Int32(0)
+    var info = Int32(0)
+    var rcond = rcond_value
+    var min_mn = m_value if m_value < n_value else n_value
+    if min_mn < 1:
+        min_mn = 1
+    var iwork_size = 3 * min_mn * 32 + 11 * min_mn
+    if iwork_size < 1:
+        iwork_size = 1
+    var iwork = alloc[Int32](iwork_size)
+    var query_lwork = Int32(-1)
+    var query_work = Float64(0)
+    function(
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=m)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=nrhs)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](b_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldb)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](s_ptr),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](UnsafePointer(to=rcond)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=rank)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](UnsafePointer(to=query_work)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=query_lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](iwork),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    if info != 0:
+        iwork.free()
+        rank_out[] = 0
+        return Int(info)
+    var lwork_int = Int(query_work)
+    if lwork_int < 1:
+        lwork_int = 1
+    var lwork = Int32(lwork_int)
+    var work = alloc[Float64](lwork_int)
+    function(
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=m)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=nrhs)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](b_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldb)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](s_ptr),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](UnsafePointer(to=rcond)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=rank)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](work),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](iwork),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    work.free()
+    iwork.free()
+    rank_out[] = Int(rank)
+    return Int(info)
+
+
+@always_inline
+def lapack_sgeev(
+    n_value: Int,
+    a_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    wr_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    wi_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    vr_ptr: UnsafePointer[Float32, MutExternalOrigin],
+    compute_eigenvectors: Bool,
+) raises -> Int:
+    # Always JOBVL='N' (we never need left eigenvectors); JOBVR='V' or 'N'.
+    var function = get_lapack_sgeev_function()
+    var n = Int32(n_value)
+    var lda = Int32(n_value)
+    var ldvr = Int32(n_value) if compute_eigenvectors else Int32(1)
+    var ldvl = Int32(1)
+    var info = Int32(0)
+    var jobvl_byte = Int8(78)  # 'N'
+    var jobvr_byte = Int8(86) if compute_eigenvectors else Int8(78)
+    var dummy_vl = Float32(0)
+    var query_lwork = Int32(-1)
+    var query_work = Float32(0)
+    function(
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=jobvl_byte)),
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=jobvr_byte)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](wr_ptr),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](wi_ptr),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](UnsafePointer(to=dummy_vl)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldvl)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](vr_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldvr)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](UnsafePointer(to=query_work)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=query_lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    if info != 0:
+        return Int(info)
+    var lwork_int = Int(query_work)
+    if lwork_int < 1:
+        lwork_int = 1
+    var lwork = Int32(lwork_int)
+    var work = alloc[Float32](lwork_int)
+    function(
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=jobvl_byte)),
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=jobvr_byte)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](wr_ptr),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](wi_ptr),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](UnsafePointer(to=dummy_vl)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldvl)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](vr_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldvr)),
+        rebind[UnsafePointer[Float32, MutAnyOrigin]](work),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    work.free()
+    return Int(info)
+
+
+@always_inline
+def lapack_dgeev(
+    n_value: Int,
+    a_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    wr_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    wi_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    vr_ptr: UnsafePointer[Float64, MutExternalOrigin],
+    compute_eigenvectors: Bool,
+) raises -> Int:
+    var function = get_lapack_dgeev_function()
+    var n = Int32(n_value)
+    var lda = Int32(n_value)
+    var ldvr = Int32(n_value) if compute_eigenvectors else Int32(1)
+    var ldvl = Int32(1)
+    var info = Int32(0)
+    var jobvl_byte = Int8(78)
+    var jobvr_byte = Int8(86) if compute_eigenvectors else Int8(78)
+    var dummy_vl = Float64(0)
+    var query_lwork = Int32(-1)
+    var query_work = Float64(0)
+    function(
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=jobvl_byte)),
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=jobvr_byte)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](wr_ptr),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](wi_ptr),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](UnsafePointer(to=dummy_vl)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldvl)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](vr_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldvr)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](UnsafePointer(to=query_work)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=query_lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    if info != 0:
+        return Int(info)
+    var lwork_int = Int(query_work)
+    if lwork_int < 1:
+        lwork_int = 1
+    var lwork = Int32(lwork_int)
+    var work = alloc[Float64](lwork_int)
+    function(
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=jobvl_byte)),
+        rebind[UnsafePointer[Int8, MutAnyOrigin]](UnsafePointer(to=jobvr_byte)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=n)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](a_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lda)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](wr_ptr),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](wi_ptr),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](UnsafePointer(to=dummy_vl)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldvl)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](vr_ptr),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=ldvr)),
+        rebind[UnsafePointer[Float64, MutAnyOrigin]](work),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=lwork)),
+        rebind[UnsafePointer[Int32, MutAnyOrigin]](UnsafePointer(to=info)),
+    )
+    work.free()
+    return Int(info)

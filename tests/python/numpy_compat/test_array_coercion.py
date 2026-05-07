@@ -218,7 +218,6 @@ def test_numpy_array_strided_view_copy_false_preserves_view_storage() -> None:
 @pytest.mark.parametrize(
   "dtype",
   [
-    "uint64",
     "complex128",
     "object",
     "str",
@@ -228,6 +227,27 @@ def test_numpy_array_strided_view_copy_false_preserves_view_storage() -> None:
 def test_unsupported_dtype_requests_are_explicit_blockers(dtype: object) -> None:
   with pytest.raises(NotImplementedError, match="unsupported dtype"):
     np.asarray([1], dtype=dtype)
+
+
+@pytest.mark.parametrize("dtype_name", ["uint64", "uint32", "uint16", "uint8"])
+def test_phase5b_unsigned_int_dtype_allocation_works(dtype_name: str) -> None:
+  # Phase-5b unsigned ints land allocation + arithmetic via the f64 round-trip;
+  # promotion follows numpy 2.x.
+  dtype = getattr(np, dtype_name)
+  arr = np.asarray([1, 2, 3], dtype=dtype)
+  assert arr.dtype == dtype
+  assert arr.tolist() == [1, 2, 3]
+  doubled = arr + arr
+  assert doubled.tolist() == [2, 4, 6]
+
+
+def test_phase5c_float16_dtype_allocation_works() -> None:
+  arr = np.asarray([0.5, 1.0, 2.0], dtype=np.float16)
+  assert arr.dtype == np.float16
+  assert arr.tolist() == [0.5, 1.0, 2.0]
+  result = arr + arr
+  assert result.tolist() == [1.0, 2.0, 4.0]
+  assert result.dtype == np.float16
 
 
 @pytest.mark.parametrize("dtype_name", ["int32", "int16", "int8"])

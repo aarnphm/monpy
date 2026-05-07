@@ -35,10 +35,12 @@ class _NumpyArrayLike(typing.Protocol):
 
 # dtype, op, and casting codes mirror the Mojo side; identical layout there.
 DTYPE_BOOL,DTYPE_INT64,DTYPE_FLOAT32,DTYPE_FLOAT64=range(4)
-# Phase-5a registrations. Metadata + iinfo work for these; allocation
-# raises until the kernel work in elementwise.mojo lands.
+# Phase-5a signed ints.
 DTYPE_INT32,DTYPE_INT16,DTYPE_INT8=4,5,6
-DTYPE_KIND_BOOL,DTYPE_KIND_SIGNED_INT,DTYPE_KIND_REAL_FLOAT=range(3)
+# Phase-5b unsigned ints + Phase-5c float16.
+DTYPE_UINT64,DTYPE_UINT32,DTYPE_UINT16,DTYPE_UINT8=7,8,9,10
+DTYPE_FLOAT16=11
+DTYPE_KIND_BOOL,DTYPE_KIND_SIGNED_INT,DTYPE_KIND_REAL_FLOAT,DTYPE_KIND_UNSIGNED_INT=range(4)
 CASTING_NO,CASTING_EQUIV,CASTING_SAFE,CASTING_SAME_KIND,CASTING_UNSAFE=range(5)
 OP_ADD,OP_SUB,OP_MUL,OP_DIV=range(4)
 # Phase-3 binary op codes; mirror src/domain.mojo.
@@ -84,24 +86,33 @@ bool=DType("bool",0,"b",1,1,"|","|b1","?",builtins.bool)
 int64=DType("int64",1,"i",8,8,"=","<i8","l",builtins.int)
 float32=DType("float32",2,"f",4,4,"=","<f4","f",builtins.float)
 float64=DType("float64",3,"f",8,8,"=","<f8","d",builtins.float)
-# Phase-5a integer dtypes — registered for finfo/iinfo/can_cast/result_type;
-# allocation raises until kernels follow.
+# Phase-5a signed ints.
 int32=DType("int32",4,"i",4,4,"=","<i4","i",builtins.int)
 int16=DType("int16",5,"i",2,2,"=","<i2","h",builtins.int)
 int8=DType("int8",6,"i",1,1,"|","|i1","b",builtins.int)
+# Phase-5b unsigned ints. Allocate via the f64 round-trip path; arithmetic
+# carries through dispatch with promotion rules (see dtype_result_for_binary).
+uint64=DType("uint64",7,"u",8,8,"=","<u8","Q",builtins.int)
+uint32=DType("uint32",8,"u",4,4,"=","<u4","I",builtins.int)
+uint16=DType("uint16",9,"u",2,2,"=","<u2","H",builtins.int)
+uint8=DType("uint8",10,"u",1,1,"|","|u1","B",builtins.int)
+# Phase-5c float16. Storage is 2-byte half; arithmetic delegates through f64.
+float16=DType("float16",11,"f",2,2,"=","<f2","e",builtins.float)
+half=float16  # numpy alias
 bool_=bool;int_=int64;float_=float64;intp=int64
+ubyte=uint8;ushort=uint16;uintc=uint32;ulonglong=uint64
 
-_DT:tuple[DType,...]=(bool,int64,float32,float64,int32,int16,int8)                                                                # ordered by .code; idx == code
+_DT:tuple[DType,...]=(bool,int64,float32,float64,int32,int16,int8,uint64,uint32,uint16,uint8,float16)             # ordered by .code; idx == code
 _DTC:dict[int,DType]={d.code:d for d in _DT}                                                                     # code → DType
-_DTN:dict[str,DType]={d.name:d for d in _DT}|{"bool_":bool,"int_":int64,"float_":float64,"single":float32,"double":float64,"intp":int64} # name → DType
-_DTNK:dict[tuple[str,int],DType]={("b",1):bool,("i",8):int64,("i",4):int32,("i",2):int16,("i",1):int8,("f",4):float32,("f",8):float64} # (numpy kind, itemsize) → DType
-_DTBT:dict[str,DType]={"|b1":bool,"|i1":int8}|{p+s:d for s,d in[("i8",int64),("i4",int32),("i2",int16),("f4",float32),("f8",float64)] for p in"<>="}  # numpy typestr (incl. byteorder prefix) → DType
-_DTK:dict[DType,int]={bool:DTYPE_KIND_BOOL,int64:DTYPE_KIND_SIGNED_INT,int32:DTYPE_KIND_SIGNED_INT,int16:DTYPE_KIND_SIGNED_INT,int8:DTYPE_KIND_SIGNED_INT,float32:DTYPE_KIND_REAL_FLOAT,float64:DTYPE_KIND_REAL_FLOAT}
+_DTN:dict[str,DType]={d.name:d for d in _DT}|{"bool_":bool,"int_":int64,"float_":float64,"single":float32,"double":float64,"intp":int64,"half":float16,"ubyte":uint8,"ushort":uint16,"uintc":uint32,"ulonglong":uint64} # name → DType
+_DTNK:dict[tuple[str,int],DType]={("b",1):bool,("i",8):int64,("i",4):int32,("i",2):int16,("i",1):int8,("u",8):uint64,("u",4):uint32,("u",2):uint16,("u",1):uint8,("f",2):float16,("f",4):float32,("f",8):float64} # (numpy kind, itemsize) → DType
+_DTBT:dict[str,DType]={"|b1":bool,"|i1":int8,"|u1":uint8}|{p+s:d for s,d in[("i8",int64),("i4",int32),("i2",int16),("u8",uint64),("u4",uint32),("u2",uint16),("f2",float16),("f4",float32),("f8",float64)] for p in"<>="}  # numpy typestr (incl. byteorder prefix) → DType
+_DTK:dict[DType,int]={bool:DTYPE_KIND_BOOL,int64:DTYPE_KIND_SIGNED_INT,int32:DTYPE_KIND_SIGNED_INT,int16:DTYPE_KIND_SIGNED_INT,int8:DTYPE_KIND_SIGNED_INT,uint64:DTYPE_KIND_UNSIGNED_INT,uint32:DTYPE_KIND_UNSIGNED_INT,uint16:DTYPE_KIND_UNSIGNED_INT,uint8:DTYPE_KIND_UNSIGNED_INT,float32:DTYPE_KIND_REAL_FLOAT,float64:DTYPE_KIND_REAL_FLOAT,float16:DTYPE_KIND_REAL_FLOAT}
 _NPTYPE:type[object]|None=None                                                                                   # cached numpy.ndarray type (lazy import)
 _CASTING_CODES:dict[str,int]={"no":CASTING_NO,"equiv":CASTING_EQUIV,"safe":CASTING_SAFE,"same_kind":CASTING_SAME_KIND,"unsafe":CASTING_UNSAFE}
-_ISDTYPE_KINDS:dict[str,set[DType]]={"bool":{bool},"signed integer":{int64,int32,int16,int8},"unsigned integer":set(),"integral":{int64,int32,int16,int8},"real floating":{float32,float64},"complex floating":set(),"numeric":{int64,int32,int16,int8,float32,float64}}
-_FINFO:dict[DType,_FInfo]={float32:_FInfo(float32,32,1.1920928955078125e-07,5.960464477539063e-08,3.4028234663852886e38,-3.4028234663852886e38,1.1754943508222875e-38,1.1754943508222875e-38,1e-06,6,23,8,128,-126,-23,-24),float64:_FInfo(float64,64,2.220446049250313e-16,1.1102230246251565e-16,1.7976931348623157e308,-1.7976931348623157e308,2.2250738585072014e-308,2.2250738585072014e-308,1e-15,15,52,11,1024,-1022,-52,-53)}
-_IINFO:dict[DType,_IInfo]={int64:_IInfo(int64,64,-9223372036854775808,9223372036854775807),int32:_IInfo(int32,32,-2147483648,2147483647),int16:_IInfo(int16,16,-32768,32767),int8:_IInfo(int8,8,-128,127)}
+_ISDTYPE_KINDS:dict[str,set[DType]]={"bool":{bool},"signed integer":{int64,int32,int16,int8},"unsigned integer":{uint64,uint32,uint16,uint8},"integral":{int64,int32,int16,int8,uint64,uint32,uint16,uint8},"real floating":{float32,float64,float16},"complex floating":set(),"numeric":{int64,int32,int16,int8,uint64,uint32,uint16,uint8,float32,float64,float16}}
+_FINFO:dict[DType,_FInfo]={float32:_FInfo(float32,32,1.1920928955078125e-07,5.960464477539063e-08,3.4028234663852886e38,-3.4028234663852886e38,1.1754943508222875e-38,1.1754943508222875e-38,1e-06,6,23,8,128,-126,-23,-24),float64:_FInfo(float64,64,2.220446049250313e-16,1.1102230246251565e-16,1.7976931348623157e308,-1.7976931348623157e308,2.2250738585072014e-308,2.2250738585072014e-308,1e-15,15,52,11,1024,-1022,-52,-53),float16:_FInfo(float16,16,0.0009765625,0.00048828125,65504.0,-65504.0,6.103515625e-05,6.103515625e-05,1e-03,3,10,5,16,-14,-10,-11)}
+_IINFO:dict[DType,_IInfo]={int64:_IInfo(int64,64,-9223372036854775808,9223372036854775807),int32:_IInfo(int32,32,-2147483648,2147483647),int16:_IInfo(int16,16,-32768,32767),int8:_IInfo(int8,8,-128,127),uint64:_IInfo(uint64,64,0,18446744073709551615),uint32:_IInfo(uint32,32,0,4294967295),uint16:_IInfo(uint16,16,0,65535),uint8:_IInfo(uint8,8,0,255)}
 _PHASE5A_UNIMPLEMENTED:set[DType]=set()                                                                              # phase-5a int kernels landed; allocation gate removed
 
 # 4×4 promotion tables flattened to a 16-char digit string, indexed (lhs.code*4 + rhs.code).
@@ -113,8 +124,8 @@ _BR:dict[int,dict[tuple[DType,DType],DType]]={OP_ADD:_NPT,OP_SUB:_NPT,OP_MUL:_NP
                                               OP_FLOOR_DIV:_NPT,OP_MOD:_NPT,OP_POWER:_NPT,
                                               OP_MAXIMUM:_NPT,OP_MINIMUM:_NPT,OP_FMIN:_NPT,OP_FMAX:_NPT,
                                               OP_ARCTAN2:_DPT,OP_HYPOT:_DPT,OP_COPYSIGN:_DPT}                    # binary op → promotion table
-_UR:dict[DType,DType]={bool:float64,int64:float64,float32:float32,float64:float64}                               # unary (sin/cos/exp/log) result: int kinds → f64
-_UR_PRESERVE:dict[DType,DType]={bool:int64,int64:int64,float32:float32,float64:float64}                          # preserve-kind unary (negate/abs/square): bool → int64
+_UR:dict[DType,DType]={bool:float64,int64:float64,int32:float64,int16:float64,int8:float64,uint64:float64,uint32:float64,uint16:float64,uint8:float64,float16:float16,float32:float32,float64:float64}  # unary (sin/cos/exp/log) result: int kinds → f64
+_UR_PRESERVE:dict[DType,DType]={bool:int64,int64:int64,int32:int32,int16:int16,int8:int8,uint64:uint64,uint32:uint32,uint16:uint16,uint8:uint8,float16:float16,float32:float32,float64:float64}  # preserve-kind unary: bool → int64
 _CFE="unable to avoid copy while creating a monpy array as requested"                                            # error msg for copy=False refusal
 _S1E="only size-1 arrays can be converted to python scalars"                                                     # error msg for non-size-1 → python scalar
 
@@ -650,10 +661,7 @@ def linspace(start:int|float,stop:int|float,num:int=50,*,dtype:object=None,devic
 # helpers that aren't in the inner loop.
 def eye(N:int,M:int|None=None,k:int=0,dtype:object=None,*,device:object=None)->ndarray:
   _check_cpu(device);t=_resolve_dtype(dtype) if dtype is not None else float64;m=N if M is None else M
-  out=zeros((N,m),dtype=t,device=device)
-  start_i=builtins.max(0,-k);end_i=builtins.min(N,m-k)
-  for i in range(start_i,end_i):out[i,i+k]=1
-  return out
+  return ndarray(_native.eye(N,m,k,t.code))
 
 def identity(n:int,dtype:object=None,*,device:object=None)->ndarray:return eye(n,n,0,dtype=dtype,device=device)
 
@@ -868,10 +876,13 @@ def _concat_into_flat(arrs:Sequence[ndarray],axis:int)->tuple[list[object],tuple
 def concatenate(arrays:Sequence[object],axis:int=0,*,out:object=None,dtype:object=None,casting:str="same_kind")->ndarray:
   if out is not None:raise NotImplementedError("concatenate out= not implemented in monpy v1")
   arrs=[asarray(a) for a in arrays]
-  t=_resolve_dtype(dtype) if dtype is not None else result_type(*arrs) if arrs else float64
-  arrs_cast=[a if a.dtype==t else a.astype(t) for a in arrs]
-  flat,shape=_concat_into_flat(arrs_cast,axis)
-  return ndarray(_native.from_flat(flat,shape,t.code))
+  if not arrs:raise ValueError("concatenate: need at least one array")
+  t=_resolve_dtype(dtype) if dtype is not None else result_type(*arrs)
+  # Pre-cast all inputs and pre-materialise into c-contig — native concat
+  # walks logical indices, but the f64 round-trip path is faster on
+  # contiguous data so we hand it that.
+  arrs_cast=[ascontiguousarray(a if a.dtype==t else a.astype(t)) for a in arrs]
+  return ndarray(_native.concatenate([a._native for a in arrs_cast],axis,t.code))
 
 def stack(arrays:Sequence[object],axis:int=0,*,out:object=None,dtype:object=None)->ndarray:
   if out is not None:raise NotImplementedError("stack out= not implemented in monpy v1")
@@ -1799,7 +1810,7 @@ def _broadcast_pair_shape(s1:tuple[int,...],s2:tuple[int,...])->tuple[int,...]:
   return tuple(out)
 
 def pad(array:object,pad_width:object,mode:str="constant",**kwargs:object)->ndarray:
-  arr=asarray(array)
+  arr=ascontiguousarray(asarray(array))
   if mode!="constant":raise NotImplementedError(f"pad mode={mode!r} not implemented in monpy v1 (only 'constant')")
   cv=kwargs.get("constant_values",0)
   if isinstance(pad_width,builtins.int):pw=[(pad_width,pad_width)]*arr.ndim
@@ -1808,31 +1819,19 @@ def pad(array:object,pad_width:object,mode:str="constant",**kwargs:object)->ndar
     if items and not isinstance(items[0],(list,tuple)):pw=[(builtins.int(items[0]),builtins.int(items[1]))]*arr.ndim
     else:pw=[(builtins.int(p[0]),builtins.int(p[1])) for p in items]
   if len(pw)!=arr.ndim:raise ValueError("pad: pad_width must match ndim")
-  out_shape=tuple(s+l+r for s,(l,r) in builtins.zip(arr.shape,pw))
-  out=full(out_shape,cv,dtype=arr.dtype)
-  inner_key=tuple(slice(l,l+s) for s,(l,r) in builtins.zip(arr.shape,pw))
-  out[inner_key]=arr
-  return out
+  pad_before=tuple(p[0] for p in pw);pad_after=tuple(p[1] for p in pw)
+  return ndarray(_native.pad_constant(arr._native,pad_before,pad_after,float(cv)))
 
 def tril(m:object,k:int=0)->ndarray:
-  arr=asarray(m)
+  arr=ascontiguousarray(asarray(m))
   if arr.ndim<2:raise ValueError("tril: input must be 2D")
-  rows,cols=arr.shape[-2],arr.shape[-1]
-  out=zeros_like(arr)
-  for i in range(rows):
-    for j in range(builtins.min(cols,i+k+1)):
-      out[...,i,j]=arr[...,i,j]
-  return out
+  return ndarray(_native.tril(arr._native,builtins.int(k)))
 
 def triu(m:object,k:int=0)->ndarray:
-  arr=asarray(m)
+  arr=ascontiguousarray(asarray(m))
   if arr.ndim<2:raise ValueError("triu: input must be 2D")
-  rows,cols=arr.shape[-2],arr.shape[-1]
-  out=zeros_like(arr)
-  for i in range(rows):
-    for j in range(builtins.max(0,i+k),cols):
-      out[...,i,j]=arr[...,i,j]
-  return out
+  return ndarray(_native.triu(arr._native,builtins.int(k)))
+
 
 def diag_indices(n:int,ndim:int=2)->tuple[ndarray,...]:
   idx=arange(n,dtype=int64)
@@ -2089,13 +2088,20 @@ def _mat(v:ndarray|_DeferredArray)->ndarray:return v._materialize() if isinstanc
 
 def _coerce(l:ndarray,r:ndarray,op:int)->tuple[ndarray,ndarray]:
   # cast both operands to the common result dtype before handing to native binary kernel.
-  t=_BR[op][(l.dtype,r.dtype)]
+  # Hot path: both dtypes in the original 4-set covered by _BR's table; fall
+  # back to mojo `result_dtype_for_binary` for any uint/f16/cross-kind pair.
+  try:t=_BR[op][(l.dtype,r.dtype)]
+  except KeyError:t=_DTC[_native._result_dtype_for_binary(l.dtype.code,r.dtype.code,op)]
   if l.dtype!=t:l=l.astype(t)
   if r.dtype!=t:r=r.astype(t)
   return l,r
 
-def _result_dtype_for_binary(l:DType,r:DType,op:int)->DType:return _BR[op][(l,r)]                                             # exposed to tests/promotions, mirrors Mojo side
-def _result_dtype_for_unary(d:DType)->DType:return _UR[d]
+def _result_dtype_for_binary(l:DType,r:DType,op:int)->DType:
+  try:return _BR[op][(l,r)]
+  except KeyError:return _DTC[_native._result_dtype_for_binary(l.code,r.code,op)]
+def _result_dtype_for_unary(d:DType)->DType:
+  if d in _UR:return _UR[d]
+  return float64 if d.kind=="i" or d.kind=="u" or d==bool else d
 
 def _can_def_sb(v:ndarray|_DeferredArray,sd:DType)->builtins.bool:return v.dtype in(float32,float64) and sd in(float32,float64)  # defer scalar binary only on float×float — int paths must materialise
 
@@ -2440,4 +2446,4 @@ matvec=linalg.matvec
 vecmat=linalg.vecmat
 vecdot=linalg.vecdot
 
-__all__=["DType","Ufunc","abs","absolute","add","all","any","append","arange","arccos","arcsin","arctan","arctan2","argpartition","argsort","argwhere","array","array_split","asarray","ascontiguousarray","argmax","argmin","asfortranarray","astype","atleast_1d","atleast_2d","atleast_3d","average","bincount","bool","bool_","broadcast_arrays","broadcast_to","can_cast","cbrt","ceil","column_stack","concatenate","copy","copysign","cos","cosh","count_nonzero","cross","cummax","cummin","cumprod","cumsum","deg2rad","degrees","delete","diagonal","diag_indices","digitize","divide","dot","dsplit","dstack","dtype","e","empty","empty_like","equal","exp","exp2","expm1","expand_dims","eye","fabs","finfo","fix","flatnonzero","flatten","flip","fliplr","flipud","float_","float32","float64","floor","floor_divide","fmax","fmin","frombuffer","from_dlpack","fromiter","full","full_like","geomspace","greater","greater_equal","hsplit","hstack","hypot","identity","iinfo","indices","inf","inner","insert","int_","int8","int16","int32","int64","intersect1d","intp","isdtype","isfinite","isinf","isin","isnan","issubdtype","ix_","kron","less","less_equal","lexsort","linalg","linspace","log","log2","log10","log1p","logical_and","logical_not","logical_or","logical_xor","logspace","matmul","matrix_transpose","matvec","max","maximum","mean","median","meshgrid","min","minimum","mod","moveaxis","multiply","nan","nanargmax","nanargmin","nancumprod","nancumsum","nanmax","nanmean","nanmedian","nanmin","nanpercentile","nanprod","nanquantile","nanstd","nansum","nanvar","ndarray","negative","newaxis","nonzero","not_equal","ones","ones_like","outer","pad","partition","percentile","pi","positive","power","prod","promote_types","ptp","quantile","radians","rad2deg","ravel","ravel_multi_index","reciprocal","remainder","repeat","reshape","result_type","rint","roll","rot90","searchsorted","setdiff1d","setxor1d","sign","signbit","sin","sin_add_mul","sinh","sort","split","sqrt","square","squeeze","stack","std","subtract","sum","swapaxes","take","tan","tanh","tensordot","tile","trace","transpose","tri","trim_zeros","triu","tril","triu_indices","tril_indices","true_divide","trunc","ufunc","union1d","unique","unravel_index","var","vdot","vecdot","vecmat","vsplit","vstack","where","zeros","zeros_like"]
+__all__=["DType","Ufunc","abs","absolute","add","all","any","append","arange","arccos","arcsin","arctan","arctan2","argpartition","argsort","argwhere","array","array_split","asarray","ascontiguousarray","argmax","argmin","asfortranarray","astype","atleast_1d","atleast_2d","atleast_3d","average","bincount","bool","bool_","broadcast_arrays","broadcast_to","can_cast","cbrt","ceil","column_stack","concatenate","copy","copysign","cos","cosh","count_nonzero","cross","cummax","cummin","cumprod","cumsum","deg2rad","degrees","delete","diagonal","diag_indices","digitize","divide","dot","dsplit","dstack","dtype","e","empty","empty_like","equal","exp","exp2","expm1","expand_dims","eye","fabs","finfo","fix","flatnonzero","flatten","flip","fliplr","flipud","float_","float16","float32","float64","floor","floor_divide","fmax","fmin","frombuffer","from_dlpack","fromiter","full","full_like","geomspace","greater","greater_equal","half","hsplit","hstack","hypot","identity","iinfo","indices","inf","inner","insert","int_","int8","int16","int32","int64","intersect1d","intp","isdtype","isfinite","isinf","isin","isnan","issubdtype","ix_","kron","less","less_equal","lexsort","linalg","linspace","log","log2","log10","log1p","logical_and","logical_not","logical_or","logical_xor","logspace","matmul","matrix_transpose","matvec","max","maximum","mean","median","meshgrid","min","minimum","mod","moveaxis","multiply","nan","nanargmax","nanargmin","nancumprod","nancumsum","nanmax","nanmean","nanmedian","nanmin","nanpercentile","nanprod","nanquantile","nanstd","nansum","nanvar","ndarray","negative","newaxis","nonzero","not_equal","ones","ones_like","outer","pad","partition","percentile","pi","positive","power","prod","promote_types","ptp","quantile","radians","rad2deg","ravel","ravel_multi_index","reciprocal","remainder","repeat","reshape","result_type","rint","roll","rot90","searchsorted","setdiff1d","setxor1d","sign","signbit","sin","sin_add_mul","sinh","sort","split","sqrt","square","squeeze","stack","std","subtract","sum","swapaxes","take","tan","tanh","tensordot","tile","trace","transpose","tri","trim_zeros","triu","tril","triu_indices","tril_indices","true_divide","trunc","ubyte","ufunc","uint8","uint16","uint32","uint64","uintc","ulonglong","union1d","unique","unravel_index","ushort","var","vdot","vecdot","vecmat","vsplit","vstack","where","zeros","zeros_like"]

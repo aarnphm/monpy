@@ -8,12 +8,17 @@ from domain import (
     BACKEND_FUSED,
     BACKEND_GENERIC,
     DTYPE_BOOL,
+    DTYPE_FLOAT16,
     DTYPE_FLOAT32,
     DTYPE_FLOAT64,
     DTYPE_INT16,
     DTYPE_INT32,
     DTYPE_INT64,
     DTYPE_INT8,
+    DTYPE_UINT16,
+    DTYPE_UINT32,
+    DTYPE_UINT64,
+    DTYPE_UINT8,
     dtype_item_size,
     dtype_result_for_binary,
     dtype_result_for_linalg,
@@ -149,8 +154,18 @@ struct Array(Movable, Writable):
             return PythonObject(Int(get_physical_i16(self_ptr[], physical_offset(self_ptr[], index))))
         if self_ptr[].dtype_code == DTYPE_INT8:
             return PythonObject(Int(get_physical_i8(self_ptr[], physical_offset(self_ptr[], index))))
+        if self_ptr[].dtype_code == DTYPE_UINT64:
+            return PythonObject(Int(get_physical_u64(self_ptr[], physical_offset(self_ptr[], index))))
+        if self_ptr[].dtype_code == DTYPE_UINT32:
+            return PythonObject(Int(get_physical_u32(self_ptr[], physical_offset(self_ptr[], index))))
+        if self_ptr[].dtype_code == DTYPE_UINT16:
+            return PythonObject(Int(get_physical_u16(self_ptr[], physical_offset(self_ptr[], index))))
+        if self_ptr[].dtype_code == DTYPE_UINT8:
+            return PythonObject(Int(get_physical_u8(self_ptr[], physical_offset(self_ptr[], index))))
         if self_ptr[].dtype_code == DTYPE_FLOAT32:
             return PythonObject(get_physical_f32(self_ptr[], physical_offset(self_ptr[], index)))
+        if self_ptr[].dtype_code == DTYPE_FLOAT16:
+            return PythonObject(Float64(get_physical_f16(self_ptr[], physical_offset(self_ptr[], index))))
         return PythonObject(get_physical_f64(self_ptr[], physical_offset(self_ptr[], index)))
 
     def write_to(self, mut writer: Some[Writer]):
@@ -431,12 +446,32 @@ def get_physical_i8(array: Array, physical: Int) raises -> Int8:
     return array.data.bitcast[Int8]()[physical]
 
 
+def get_physical_u64(array: Array, physical: Int) raises -> UInt64:
+    return array.data.bitcast[UInt64]()[physical]
+
+
+def get_physical_u32(array: Array, physical: Int) raises -> UInt32:
+    return array.data.bitcast[UInt32]()[physical]
+
+
+def get_physical_u16(array: Array, physical: Int) raises -> UInt16:
+    return array.data.bitcast[UInt16]()[physical]
+
+
+def get_physical_u8(array: Array, physical: Int) raises -> UInt8:
+    return array.data.bitcast[UInt8]()[physical]
+
+
 def get_physical_f32(array: Array, physical: Int) raises -> Float32:
     return array.data.bitcast[Float32]()[physical]
 
 
 def get_physical_f64(array: Array, physical: Int) raises -> Float64:
     return array.data.bitcast[Float64]()[physical]
+
+
+def get_physical_f16(array: Array, physical: Int) raises -> Float16:
+    return array.data.bitcast[Float16]()[physical]
 
 
 def get_physical_as_f64(array: Array, physical: Int) raises -> Float64:
@@ -452,8 +487,18 @@ def get_physical_as_f64(array: Array, physical: Int) raises -> Float64:
         return Float64(Int(get_physical_i16(array, physical)))
     if array.dtype_code == DTYPE_INT8:
         return Float64(Int(get_physical_i8(array, physical)))
+    if array.dtype_code == DTYPE_UINT64:
+        return Float64(Int(get_physical_u64(array, physical)))
+    if array.dtype_code == DTYPE_UINT32:
+        return Float64(Int(get_physical_u32(array, physical)))
+    if array.dtype_code == DTYPE_UINT16:
+        return Float64(Int(get_physical_u16(array, physical)))
+    if array.dtype_code == DTYPE_UINT8:
+        return Float64(Int(get_physical_u8(array, physical)))
     if array.dtype_code == DTYPE_FLOAT32:
         return Float64(get_physical_f32(array, physical))
+    if array.dtype_code == DTYPE_FLOAT16:
+        return Float64(get_physical_f16(array, physical))
     return get_physical_f64(array, physical)
 
 
@@ -486,8 +531,18 @@ def set_physical_from_f64(mut array: Array, physical: Int, value: Float64) raise
         array.data.bitcast[Int16]()[physical] = Int16(Int(value))
     elif array.dtype_code == DTYPE_INT8:
         array.data.bitcast[Int8]()[physical] = Int8(Int(value))
+    elif array.dtype_code == DTYPE_UINT64:
+        array.data.bitcast[UInt64]()[physical] = UInt64(Int(value))
+    elif array.dtype_code == DTYPE_UINT32:
+        array.data.bitcast[UInt32]()[physical] = UInt32(Int(value))
+    elif array.dtype_code == DTYPE_UINT16:
+        array.data.bitcast[UInt16]()[physical] = UInt16(Int(value))
+    elif array.dtype_code == DTYPE_UINT8:
+        array.data.bitcast[UInt8]()[physical] = UInt8(Int(value))
     elif array.dtype_code == DTYPE_FLOAT32:
         array.data.bitcast[Float32]()[physical] = Float32(value)
+    elif array.dtype_code == DTYPE_FLOAT16:
+        array.data.bitcast[Float16]()[physical] = Float16(value)
     else:
         array.data.bitcast[Float64]()[physical] = value
 
@@ -505,6 +560,14 @@ def set_logical_from_i64(mut array: Array, logical: Int, value: Int64) raises:
         array.data.bitcast[Int16]()[physical_offset(array, logical)] = Int16(Int(value))
     elif array.dtype_code == DTYPE_INT8:
         array.data.bitcast[Int8]()[physical_offset(array, logical)] = Int8(Int(value))
+    elif array.dtype_code == DTYPE_UINT64:
+        array.data.bitcast[UInt64]()[physical_offset(array, logical)] = UInt64(Int(value))
+    elif array.dtype_code == DTYPE_UINT32:
+        array.data.bitcast[UInt32]()[physical_offset(array, logical)] = UInt32(Int(value))
+    elif array.dtype_code == DTYPE_UINT16:
+        array.data.bitcast[UInt16]()[physical_offset(array, logical)] = UInt16(Int(value))
+    elif array.dtype_code == DTYPE_UINT8:
+        array.data.bitcast[UInt8]()[physical_offset(array, logical)] = UInt8(Int(value))
     else:
         set_logical_from_f64(array, logical, Float64(value))
 
@@ -524,8 +587,18 @@ def set_logical_from_py(mut array: Array, logical: Int, value_obj: PythonObject)
         array.data.bitcast[Int16]()[physical] = Int16(Int(py=value_obj))
     elif array.dtype_code == DTYPE_INT8:
         array.data.bitcast[Int8]()[physical] = Int8(Int(py=value_obj))
+    elif array.dtype_code == DTYPE_UINT64:
+        array.data.bitcast[UInt64]()[physical] = UInt64(Int(py=value_obj))
+    elif array.dtype_code == DTYPE_UINT32:
+        array.data.bitcast[UInt32]()[physical] = UInt32(Int(py=value_obj))
+    elif array.dtype_code == DTYPE_UINT16:
+        array.data.bitcast[UInt16]()[physical] = UInt16(Int(py=value_obj))
+    elif array.dtype_code == DTYPE_UINT8:
+        array.data.bitcast[UInt8]()[physical] = UInt8(Int(py=value_obj))
     elif array.dtype_code == DTYPE_FLOAT32:
         array.data.bitcast[Float32]()[physical] = Float32(Float64(py=value_obj))
+    elif array.dtype_code == DTYPE_FLOAT16:
+        array.data.bitcast[Float16]()[physical] = Float16(Float64(py=value_obj))
     else:
         array.data.bitcast[Float64]()[physical] = Float64(py=value_obj)
 
@@ -540,6 +613,10 @@ def scalar_py_as_f64(value_obj: PythonObject, dtype_code: Int) raises -> Float64
         or dtype_code == DTYPE_INT32
         or dtype_code == DTYPE_INT16
         or dtype_code == DTYPE_INT8
+        or dtype_code == DTYPE_UINT64
+        or dtype_code == DTYPE_UINT32
+        or dtype_code == DTYPE_UINT16
+        or dtype_code == DTYPE_UINT8
     ):
         return Float64(Int(py=value_obj))
     return Float64(py=value_obj)
@@ -560,6 +637,36 @@ def contiguous_f64_ptr(
     array: Array,
 ) -> UnsafePointer[Float64, MutExternalOrigin]:
     return array.data.bitcast[Float64]() + array.offset_elems
+
+
+def contiguous_i32_ptr(
+    array: Array,
+) -> UnsafePointer[Int32, MutExternalOrigin]:
+    return array.data.bitcast[Int32]() + array.offset_elems
+
+
+def contiguous_i64_ptr(
+    array: Array,
+) -> UnsafePointer[Int64, MutExternalOrigin]:
+    return array.data.bitcast[Int64]() + array.offset_elems
+
+
+def contiguous_u32_ptr(
+    array: Array,
+) -> UnsafePointer[UInt32, MutExternalOrigin]:
+    return array.data.bitcast[UInt32]() + array.offset_elems
+
+
+def contiguous_u64_ptr(
+    array: Array,
+) -> UnsafePointer[UInt64, MutExternalOrigin]:
+    return array.data.bitcast[UInt64]() + array.offset_elems
+
+
+def contiguous_f16_ptr(
+    array: Array,
+) -> UnsafePointer[Float16, MutExternalOrigin]:
+    return array.data.bitcast[Float16]() + array.offset_elems
 
 
 def contiguous_as_f64(array: Array, index: Int) raises -> Float64:
@@ -628,8 +735,18 @@ def cast_copy_array(src: Array, dtype_code: Int) raises -> Array:
             set_logical_from_i64(result, i, Int64(Int(get_physical_i16(src, physical))))
         elif src.dtype_code == DTYPE_INT8:
             set_logical_from_i64(result, i, Int64(Int(get_physical_i8(src, physical))))
+        elif src.dtype_code == DTYPE_UINT64:
+            set_logical_from_f64(result, i, Float64(Int(get_physical_u64(src, physical))))
+        elif src.dtype_code == DTYPE_UINT32:
+            set_logical_from_i64(result, i, Int64(Int(get_physical_u32(src, physical))))
+        elif src.dtype_code == DTYPE_UINT16:
+            set_logical_from_i64(result, i, Int64(Int(get_physical_u16(src, physical))))
+        elif src.dtype_code == DTYPE_UINT8:
+            set_logical_from_i64(result, i, Int64(Int(get_physical_u8(src, physical))))
         elif src.dtype_code == DTYPE_FLOAT32:
             set_logical_from_f64(result, i, Float64(get_physical_f32(src, physical)))
+        elif src.dtype_code == DTYPE_FLOAT16:
+            set_logical_from_f64(result, i, Float64(get_physical_f16(src, physical)))
         elif src.dtype_code == DTYPE_FLOAT64:
             set_logical_from_f64(result, i, get_physical_f64(src, physical))
         else:

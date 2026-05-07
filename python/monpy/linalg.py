@@ -183,7 +183,12 @@ def matrix_norm(x,axis=(-2,-1),keepdims=False,ord=None):
   return sqrt(_sum(square(X),axis=axis,keepdims=keepdims))
 
 def matrix_rank(M,tol=None,hermitian=False):
-  raise NotImplementedError("matrix_rank requires SVD; deferred to LAPACK binding work")
+  X=_floatify(asarray(M))
+  if X.ndim<2:return 1 if any(X._native.get_scalar(i)!=0 for i in range(X.size)) else 0
+  s=svd(X,compute_uv=False)
+  smax=max(float(s._native.get_scalar(i)) for i in range(s.size))
+  if tol is None:tol=smax*max(X.shape[-2:])*_eps_for(X.dtype)
+  return sum(1 for i in range(s.size) if float(s._native.get_scalar(i))>tol)
 
 def matrix_power(a,n):
   A=asarray(a)
@@ -214,16 +219,117 @@ def multi_dot(arrays):
 def tensorinv(a,ind=2):raise NotImplementedError("tensorinv not implemented in v1")
 def tensorsolve(a,b,axes=None):raise NotImplementedError("tensorsolve not implemented in v1")
 
-# LAPACK-backed decompositions; deferred until accelerate.mojo wires them up.
-def qr(a,mode="reduced"):raise NotImplementedError("qr requires LAPACK sgeqrf/sorgqr; deferred")
-def cholesky(a):raise NotImplementedError("cholesky requires LAPACK spotrf; deferred")
-def eig(a):raise NotImplementedError("eig requires LAPACK sgeev; deferred")
-def eigh(a,UPLO='L'):raise NotImplementedError("eigh requires LAPACK ssyev; deferred")
-def eigvals(a):raise NotImplementedError("eigvals requires LAPACK sgeev; deferred")
-def eigvalsh(a,UPLO='L'):raise NotImplementedError("eigvalsh requires LAPACK ssyev; deferred")
-def svd(a,full_matrices=True,compute_uv=True,hermitian=False):raise NotImplementedError("svd requires LAPACK sgesvd; deferred")
-def svdvals(a):raise NotImplementedError("svdvals requires LAPACK sgesvd; deferred")
-def lstsq(a,b,rcond=None):raise NotImplementedError("lstsq requires LAPACK sgelsd; deferred")
-def pinv(a,rcond=None,hermitian=False):raise NotImplementedError("pinv requires SVD; deferred")
+# Helpers for the LAPACK-backed paths below.
+_QR_MODES={"reduced":0,"complete":1,"r":2}
+def _eps_for(dt):
+  if dt==float32:return 1.1920928955078125e-07
+  return 2.220446049250313e-16
+def _floatify(X):
+  # LAPACK paths only handle float32/float64; promote ints/bools.
+  if X.dtype in(float32,float64):return X
+  return X.astype(float64)
+
+# LAPACK-backed decompositions.
+def qr(a,mode="reduced"):
+  if mode not in _QR_MODES:raise ValueError(f"qr: unknown mode {mode!r}")
+  X=_floatify(asarray(a))
+  if X.ndim!=2:raise ValueError("qr: input must be rank-2")
+  out=_w(_native.linalg_qr,X._native,_QR_MODES[mode])
+  if mode=="r":return ndarray(out)
+  q=ndarray(out[0]);r=ndarray(out[1])
+  return q,r
+
+def cholesky(a):
+  X=_floatify(asarray(a))
+  if X.ndim!=2 or X.shape[0]!=X.shape[1]:raise ValueError("cholesky: input must be square rank-2")
+  return ndarray(_w(_native.linalg_cholesky,X._native))
+
+def eigh(a,UPLO='L'):
+  if UPLO not in('L','U'):raise ValueError(f"eigh: invalid UPLO {UPLO!r}")
+  X=_floatify(asarray(a))
+  if X.ndim!=2 or X.shape[0]!=X.shape[1]:raise ValueError("eigh: input must be square rank-2")
+  if UPLO=='U':X=matrix_transpose(X)
+  out=_w(_native.linalg_eigh,X._native,True)
+  return ndarray(out[0]),ndarray(out[1])
+
+def eigvalsh(a,UPLO='L'):
+  if UPLO not in('L','U'):raise ValueError(f"eigvalsh: invalid UPLO {UPLO!r}")
+  X=_floatify(asarray(a))
+  if X.ndim!=2 or X.shape[0]!=X.shape[1]:raise ValueError("eigvalsh: input must be square rank-2")
+  if UPLO=='U':X=matrix_transpose(X)
+  out=_w(_native.linalg_eigh,X._native,False)
+  return ndarray(out[0])
+
+def eig(a):
+  X=_floatify(asarray(a))
+  if X.ndim!=2 or X.shape[0]!=X.shape[1]:raise ValueError("eig: input must be square rank-2")
+  out=_w(_native.linalg_eig,X._native,True)
+  wr,wi,v,all_real=ndarray(out[0]),ndarray(out[1]),ndarray(out[2]),bool(out[3])
+  if not all_real:raise NotImplementedError("eig: complex eigenvalues require complex dtype (phase 5d, deferred)")
+  return wr,v
+
+def eigvals(a):
+  X=_floatify(asarray(a))
+  if X.ndim!=2 or X.shape[0]!=X.shape[1]:raise ValueError("eigvals: input must be square rank-2")
+  out=_w(_native.linalg_eig,X._native,False)
+  wr,wi,_,all_real=ndarray(out[0]),ndarray(out[1]),ndarray(out[2]),bool(out[3])
+  if not all_real:raise NotImplementedError("eigvals: complex eigenvalues require complex dtype (phase 5d, deferred)")
+  return wr
+
+def svd(a,full_matrices=True,compute_uv=True,hermitian=False):
+  X=_floatify(asarray(a))
+  if X.ndim!=2:raise ValueError("svd: input must be rank-2")
+  out=_w(_native.linalg_svd,X._native,bool(full_matrices),bool(compute_uv))
+  u,s,vt=ndarray(out[0]),ndarray(out[1]),ndarray(out[2])
+  if not compute_uv:return s
+  return u,s,vt
+
+def svdvals(a):return svd(a,compute_uv=False)
+
+def lstsq(a,b,rcond=None):
+  A=_floatify(asarray(a));B=_floatify(asarray(b))
+  if A.ndim!=2:raise ValueError("lstsq: a must be rank-2")
+  if B.ndim not in(1,2):raise ValueError("lstsq: b must be rank-1 or rank-2")
+  if A.shape[0]!=B.shape[0]:raise ValueError("lstsq: shape mismatch on first axis")
+  # numpy 2.x default rcond convention: machine epsilon * max(M, N).
+  if rcond is None:
+    rcond=_eps_for(A.dtype)*max(A.shape)
+  out=_w(_native.linalg_lstsq,A._native,B._native,float(rcond))
+  x=ndarray(out[0]);s=ndarray(out[1]);rank=int(out[2])
+  # numpy returns (x, residuals, rank, s). Residuals are size-(NRHS,) for
+  # rank-deficient overdetermined; size-0 otherwise. v1: compute on the
+  # python side from x and the original A,B.
+  m,n=A.shape
+  if rank==n and m>n and B.ndim==1:
+    diff=matmul(A,x)-B
+    residuals=_sum(square(diff),keepdims=True)
+  elif rank==n and m>n and B.ndim==2:
+    diff=matmul(A,x)-B
+    residuals=_sum(square(diff),axis=0)
+  else:
+    from . import empty as _empty
+    residuals=_empty((0,),dtype=A.dtype)
+  return x,residuals,rank,s
+
+def pinv(a,rcond=None,hermitian=False):
+  A=_floatify(asarray(a))
+  if A.ndim!=2:raise ValueError("pinv: input must be rank-2")
+  m,n=A.shape
+  u,s,vt=svd(A,full_matrices=False,compute_uv=True)
+  smax=max(float(s._native.get_scalar(i)) for i in range(s.size)) if s.size>0 else 0.0
+  if rcond is None:rcond=_eps_for(A.dtype)*max(m,n)
+  cutoff=rcond*smax
+  # Build s_inv: 1/s_i where s_i > cutoff, else 0.
+  from . import zeros as _zeros
+  s_inv=_zeros(s.shape,dtype=s.dtype)
+  for i in range(s.size):
+    val=float(s._native.get_scalar(i))
+    if val>cutoff:_native.fill(s_inv[i:i+1]._native,1.0/val)
+  # pinv = V * diag(s_inv) * U.T
+  V=matrix_transpose(vt)
+  Ut=matrix_transpose(u)
+  # multiply rows of Ut by s_inv (broadcast along axis 0).
+  scaled=multiply(reshape(s_inv,(s_inv.shape[0],1)),Ut)
+  return matmul(V,scaled)
 
 __all__=["LinAlgError","cholesky","cross","det","dot","eig","eigh","eigvals","eigvalsh","inner","inv","kron","lstsq","matmul","matrix_norm","matrix_power","matrix_rank","matrix_transpose","matvec","multi_dot","norm","outer","pinv","qr","slogdet","solve","svd","svdvals","tensordot","tensorinv","tensorsolve","trace","vdot","vecdot","vecmat","vector_norm"]

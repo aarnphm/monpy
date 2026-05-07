@@ -39,16 +39,35 @@ from accelerate import (
     cblas_dgemv_row_major_ld,
     cblas_sgemm_row_major_ld,
     cblas_sgemv_row_major_ld,
+    lapack_dgeev,
+    lapack_dgelsd,
+    lapack_dgeqrf,
+    lapack_dgesdd,
     lapack_dgesv,
     lapack_dgetrf,
+    lapack_dorgqr,
+    lapack_dpotrf,
+    lapack_dsyev,
+    lapack_sgeev,
+    lapack_sgelsd,
+    lapack_sgeqrf,
+    lapack_sgesdd,
     lapack_sgesv,
     lapack_sgetrf,
+    lapack_sorgqr,
+    lapack_spotrf,
+    lapack_ssyev,
 )
 from domain import (
     BACKEND_ACCELERATE,
     BACKEND_FUSED,
+    DTYPE_FLOAT16,
     DTYPE_FLOAT32,
     DTYPE_FLOAT64,
+    DTYPE_INT32,
+    DTYPE_INT64,
+    DTYPE_UINT32,
+    DTYPE_UINT64,
     OP_ADD,
     OP_ARCTAN2,
     OP_COPYSIGN,
@@ -106,8 +125,13 @@ from domain import (
 from array import (
     Array,
     contiguous_as_f64,
+    contiguous_f16_ptr,
     contiguous_f32_ptr,
     contiguous_f64_ptr,
+    contiguous_i32_ptr,
+    contiguous_i64_ptr,
+    contiguous_u32_ptr,
+    contiguous_u64_ptr,
     get_logical_as_f64,
     has_negative_strides,
     has_zero_strides,
@@ -751,8 +775,26 @@ def is_float_dtype(dtype_code: Int) -> Bool:
     return dtype_code == DTYPE_FLOAT32 or dtype_code == DTYPE_FLOAT64
 
 
+def is_typed_simd_dtype(dtype_code: Int) -> Bool:
+    """Returns True for dtypes that have a typed-vec SIMD dispatch path
+    in `maybe_binary_same_shape_contiguous` and friends. Phase 5b/c
+    extension: int32/int64/uint32/uint64 join the f32/f64 fast paths."""
+    return (
+        dtype_code == DTYPE_FLOAT32
+        or dtype_code == DTYPE_FLOAT64
+        or dtype_code == DTYPE_INT64
+        or dtype_code == DTYPE_INT32
+        or dtype_code == DTYPE_UINT64
+        or dtype_code == DTYPE_UINT32
+    )
+
+
 def is_contiguous_float_array(array: Array) raises -> Bool:
     return is_float_dtype(array.dtype_code) and is_c_contiguous(array)
+
+
+def is_contiguous_typed_simd_array(array: Array) raises -> Bool:
+    return is_typed_simd_dtype(array.dtype_code) and is_c_contiguous(array)
 
 
 @fieldwise_init
@@ -868,11 +910,12 @@ def maybe_binary_same_shape_contiguous(
     if (
         not same_shape(lhs.shape, rhs.shape)
         or not same_shape(lhs.shape, result.shape)
-        or not is_contiguous_float_array(lhs)
-        or not is_contiguous_float_array(rhs)
-        or not is_contiguous_float_array(result)
+        or not is_c_contiguous(lhs)
+        or not is_c_contiguous(rhs)
+        or not is_c_contiguous(result)
     ):
         return False
+    # Float fast paths first (most common).
     if (
         lhs.dtype_code == DTYPE_FLOAT32
         and rhs.dtype_code == DTYPE_FLOAT32
@@ -899,6 +942,66 @@ def maybe_binary_same_shape_contiguous(
             op,
         )
         return True
+    # Phase 5b: typed int paths (int32/int64/uint32/uint64). Closes the
+    # ~50× wrapper-bound gap on uint8/uint16/uint32/uint64 + int paths.
+    if (
+        lhs.dtype_code == DTYPE_INT64
+        and rhs.dtype_code == DTYPE_INT64
+        and result.dtype_code == DTYPE_INT64
+    ):
+        binary_same_shape_contig_typed[DType.int64](
+            contiguous_i64_ptr(lhs),
+            contiguous_i64_ptr(rhs),
+            contiguous_i64_ptr(result),
+            result.size_value,
+            op,
+        )
+        return True
+    if (
+        lhs.dtype_code == DTYPE_INT32
+        and rhs.dtype_code == DTYPE_INT32
+        and result.dtype_code == DTYPE_INT32
+    ):
+        binary_same_shape_contig_typed[DType.int32](
+            contiguous_i32_ptr(lhs),
+            contiguous_i32_ptr(rhs),
+            contiguous_i32_ptr(result),
+            result.size_value,
+            op,
+        )
+        return True
+    if (
+        lhs.dtype_code == DTYPE_UINT64
+        and rhs.dtype_code == DTYPE_UINT64
+        and result.dtype_code == DTYPE_UINT64
+    ):
+        binary_same_shape_contig_typed[DType.uint64](
+            contiguous_u64_ptr(lhs),
+            contiguous_u64_ptr(rhs),
+            contiguous_u64_ptr(result),
+            result.size_value,
+            op,
+        )
+        return True
+    if (
+        lhs.dtype_code == DTYPE_UINT32
+        and rhs.dtype_code == DTYPE_UINT32
+        and result.dtype_code == DTYPE_UINT32
+    ):
+        binary_same_shape_contig_typed[DType.uint32](
+            contiguous_u32_ptr(lhs),
+            contiguous_u32_ptr(rhs),
+            contiguous_u32_ptr(result),
+            result.size_value,
+            op,
+        )
+        return True
+    # Phase 5c float16: typed-vec dispatch deferred. Mojo's atan2/hypot/copysign
+    # extern bindings emit a conflicting-signature error for `f16` (no libm
+    # entry point exists for half-precision; `atan2f` overload is f32 only).
+    # f16 falls through to the f64 round-trip below until kernel codegen
+    # gates those float-only ops via `comptime if dtype is not float16`.
+    # Fallback: f64 round-trip for any dtype combo we don't have a typed path for.
     for i in range(result.size_value):
         set_contiguous_from_f64(
             result,
@@ -2314,3 +2417,596 @@ def lu_det_into(a: Array, mut result: Array) raises:
         if maybe_lapack_det_f64(a, result):
             return
     set_logical_from_f64(result, 0, lu_det(a))
+
+
+# ============================================================
+# Phase-6d LAPACK-backed decompositions.
+#
+# Pattern: load row-major Array → column-major scratch (transpose during
+# copy), call LAPACK, transpose result back to row-major Array. Each
+# decomposition exposes a `qr_into`, `cholesky_into`, `svd_into`, etc.
+# entry that allocates and writes into pre-shaped result Arrays.
+# ============================================================
+
+
+def transpose_to_col_major_rect_f32(
+    src: Array,
+    dst: UnsafePointer[Float32, MutExternalOrigin],
+    rows: Int,
+    cols: Int,
+) raises:
+    # Rectangular variant of transpose_to_col_major_f32: src is rows × cols.
+    if is_c_contiguous(src) and src.dtype_code == DTYPE_FLOAT32:
+        var src_ptr = contiguous_f32_ptr(src)
+        for row in range(rows):
+            for col in range(cols):
+                dst[row + col * rows] = src_ptr[row * cols + col]
+        return
+    for row in range(rows):
+        for col in range(cols):
+            dst[row + col * rows] = Float32(get_logical_as_f64(src, row * cols + col))
+
+
+def transpose_to_col_major_rect_f64(
+    src: Array,
+    dst: UnsafePointer[Float64, MutExternalOrigin],
+    rows: Int,
+    cols: Int,
+) raises:
+    if is_c_contiguous(src) and src.dtype_code == DTYPE_FLOAT64:
+        var src_ptr = contiguous_f64_ptr(src)
+        for row in range(rows):
+            for col in range(cols):
+                dst[row + col * rows] = src_ptr[row * cols + col]
+        return
+    for row in range(rows):
+        for col in range(cols):
+            dst[row + col * rows] = get_logical_as_f64(src, row * cols + col)
+
+
+def write_col_major_to_array_f32(
+    src: UnsafePointer[Float32, MutExternalOrigin],
+    mut result: Array,
+    rows: Int,
+    cols: Int,
+) raises:
+    if is_c_contiguous(result) and result.dtype_code == DTYPE_FLOAT32:
+        var dst = contiguous_f32_ptr(result)
+        for row in range(rows):
+            for col in range(cols):
+                dst[row * cols + col] = src[row + col * rows]
+        return
+    for row in range(rows):
+        for col in range(cols):
+            set_logical_from_f64(result, row * cols + col, Float64(src[row + col * rows]))
+
+
+def write_col_major_to_array_f64(
+    src: UnsafePointer[Float64, MutExternalOrigin],
+    mut result: Array,
+    rows: Int,
+    cols: Int,
+) raises:
+    if is_c_contiguous(result) and result.dtype_code == DTYPE_FLOAT64:
+        var dst = contiguous_f64_ptr(result)
+        for row in range(rows):
+            for col in range(cols):
+                dst[row * cols + col] = src[row + col * rows]
+        return
+    for row in range(rows):
+        for col in range(cols):
+            set_logical_from_f64(result, row * cols + col, src[row + col * rows])
+
+
+# ---------- QR ----------
+def lapack_qr_reduced_f32_into(
+    a: Array, mut q_out: Array, mut r_out: Array
+) raises:
+    var m = a.shape[0]
+    var n = a.shape[1]
+    var k = m if m < n else n
+    var qr_buf = alloc[Float32](m * n)
+    var tau = alloc[Float32](k if k > 0 else 1)
+    transpose_to_col_major_rect_f32(a, qr_buf, m, n)
+    var info = lapack_sgeqrf(m, n, qr_buf, tau)
+    if info != 0:
+        qr_buf.free()
+        tau.free()
+        raise Error("linalg.qr: sgeqrf failed")
+    # Extract R: upper triangular of QR (k × n in col-major, but logically
+    # k rows × n cols of R). Zero strictly-below-diagonal entries.
+    for row in range(k):
+        for col in range(n):
+            var val: Float32
+            if col >= row:
+                val = qr_buf[row + col * m]
+            else:
+                val = 0.0
+            set_logical_from_f64(r_out, row * n + col, Float64(val))
+    # Build Q via sorgqr (overwrites qr_buf with M×K Q).
+    info = lapack_sorgqr(m, k, k, qr_buf, tau)
+    if info != 0:
+        qr_buf.free()
+        tau.free()
+        raise Error("linalg.qr: sorgqr failed")
+    write_col_major_to_array_f32(qr_buf, q_out, m, k)
+    qr_buf.free()
+    tau.free()
+    q_out.backend_code = BACKEND_ACCELERATE
+    r_out.backend_code = BACKEND_ACCELERATE
+
+
+def lapack_qr_reduced_f64_into(
+    a: Array, mut q_out: Array, mut r_out: Array
+) raises:
+    var m = a.shape[0]
+    var n = a.shape[1]
+    var k = m if m < n else n
+    var qr_buf = alloc[Float64](m * n)
+    var tau = alloc[Float64](k if k > 0 else 1)
+    transpose_to_col_major_rect_f64(a, qr_buf, m, n)
+    var info = lapack_dgeqrf(m, n, qr_buf, tau)
+    if info != 0:
+        qr_buf.free()
+        tau.free()
+        raise Error("linalg.qr: dgeqrf failed")
+    for row in range(k):
+        for col in range(n):
+            var val: Float64
+            if col >= row:
+                val = qr_buf[row + col * m]
+            else:
+                val = 0.0
+            set_logical_from_f64(r_out, row * n + col, val)
+    info = lapack_dorgqr(m, k, k, qr_buf, tau)
+    if info != 0:
+        qr_buf.free()
+        tau.free()
+        raise Error("linalg.qr: dorgqr failed")
+    write_col_major_to_array_f64(qr_buf, q_out, m, k)
+    qr_buf.free()
+    tau.free()
+    q_out.backend_code = BACKEND_ACCELERATE
+    r_out.backend_code = BACKEND_ACCELERATE
+
+
+def lapack_qr_r_only_f32_into(a: Array, mut r_out: Array) raises:
+    # mode='r': R only.
+    var m = a.shape[0]
+    var n = a.shape[1]
+    var k = m if m < n else n
+    var qr_buf = alloc[Float32](m * n)
+    var tau = alloc[Float32](k if k > 0 else 1)
+    transpose_to_col_major_rect_f32(a, qr_buf, m, n)
+    var info = lapack_sgeqrf(m, n, qr_buf, tau)
+    if info != 0:
+        qr_buf.free()
+        tau.free()
+        raise Error("linalg.qr: sgeqrf failed")
+    for row in range(k):
+        for col in range(n):
+            var val: Float32
+            if col >= row:
+                val = qr_buf[row + col * m]
+            else:
+                val = 0.0
+            set_logical_from_f64(r_out, row * n + col, Float64(val))
+    qr_buf.free()
+    tau.free()
+    r_out.backend_code = BACKEND_ACCELERATE
+
+
+def lapack_qr_r_only_f64_into(a: Array, mut r_out: Array) raises:
+    var m = a.shape[0]
+    var n = a.shape[1]
+    var k = m if m < n else n
+    var qr_buf = alloc[Float64](m * n)
+    var tau = alloc[Float64](k if k > 0 else 1)
+    transpose_to_col_major_rect_f64(a, qr_buf, m, n)
+    var info = lapack_dgeqrf(m, n, qr_buf, tau)
+    if info != 0:
+        qr_buf.free()
+        tau.free()
+        raise Error("linalg.qr: dgeqrf failed")
+    for row in range(k):
+        for col in range(n):
+            var val: Float64
+            if col >= row:
+                val = qr_buf[row + col * m]
+            else:
+                val = 0.0
+            set_logical_from_f64(r_out, row * n + col, val)
+    qr_buf.free()
+    tau.free()
+    r_out.backend_code = BACKEND_ACCELERATE
+
+
+# ---------- Cholesky ----------
+def lapack_cholesky_f32_into(a: Array, mut result: Array) raises:
+    var n = a.shape[0]
+    var buf = alloc[Float32](n * n)
+    transpose_to_col_major_f32(a, buf, n)
+    # numpy returns L (lower); LAPACK's lower-triangular factor in
+    # column-major maps to upper-triangular in row-major. So we ask
+    # LAPACK for "upper" (UPLO='U') and the resulting buffer in
+    # row-major is the lower-triangular L we want.
+    var info = lapack_spotrf(n, buf, True)
+    if info != 0:
+        buf.free()
+        if info > 0:
+            raise Error("linalg.cholesky: matrix is not positive definite")
+        raise Error("linalg.cholesky: spotrf failed")
+    # Write back, zeroing the upper triangle in row-major (which is the
+    # lower triangle in column-major — still untouched garbage).
+    for row in range(n):
+        for col in range(n):
+            var val: Float32
+            if col <= row:
+                val = buf[col + row * n]  # transpose: col-major (col,row) → row-major (row,col)
+            else:
+                val = 0.0
+            set_logical_from_f64(result, row * n + col, Float64(val))
+    buf.free()
+    result.backend_code = BACKEND_ACCELERATE
+
+
+def lapack_cholesky_f64_into(a: Array, mut result: Array) raises:
+    var n = a.shape[0]
+    var buf = alloc[Float64](n * n)
+    transpose_to_col_major_f64(a, buf, n)
+    var info = lapack_dpotrf(n, buf, True)
+    if info != 0:
+        buf.free()
+        if info > 0:
+            raise Error("linalg.cholesky: matrix is not positive definite")
+        raise Error("linalg.cholesky: dpotrf failed")
+    for row in range(n):
+        for col in range(n):
+            var val: Float64
+            if col <= row:
+                val = buf[col + row * n]
+            else:
+                val = 0.0
+            set_logical_from_f64(result, row * n + col, val)
+    buf.free()
+    result.backend_code = BACKEND_ACCELERATE
+
+
+# ---------- Symmetric eigendecomposition ----------
+def lapack_eigh_f32_into(
+    a: Array, mut w_out: Array, mut v_out: Array, compute_eigenvectors: Bool
+) raises:
+    var n = a.shape[0]
+    var buf = alloc[Float32](n * n)
+    var wbuf = alloc[Float32](n if n > 0 else 1)
+    transpose_to_col_major_f32(a, buf, n)
+    # UPLO='L' so LAPACK reads from the lower triangle of col-major buf,
+    # which corresponds to the upper triangle of the row-major source.
+    # numpy.linalg.eigh defaults to UPLO='L' (read from lower in row-major
+    # ordering, i.e. upper in col-major). Pass `upper=False` here so the
+    # F77 'L' takes effect.
+    var info = lapack_ssyev(n, buf, wbuf, compute_eigenvectors, False)
+    if info != 0:
+        buf.free()
+        wbuf.free()
+        raise Error("linalg.eigh: ssyev failed to converge")
+    for i in range(n):
+        set_logical_from_f64(w_out, i, Float64(wbuf[i]))
+    if compute_eigenvectors:
+        # buf is col-major N×N; eigenvectors are columns. Output expects
+        # rows = original-rows, cols = eigenvectors → write as col-major
+        # → row-major, which is exactly write_col_major_to_array.
+        write_col_major_to_array_f32(buf, v_out, n, n)
+        v_out.backend_code = BACKEND_ACCELERATE
+    buf.free()
+    wbuf.free()
+    w_out.backend_code = BACKEND_ACCELERATE
+
+
+def lapack_eigh_f64_into(
+    a: Array, mut w_out: Array, mut v_out: Array, compute_eigenvectors: Bool
+) raises:
+    var n = a.shape[0]
+    var buf = alloc[Float64](n * n)
+    var wbuf = alloc[Float64](n if n > 0 else 1)
+    transpose_to_col_major_f64(a, buf, n)
+    var info = lapack_dsyev(n, buf, wbuf, compute_eigenvectors, False)
+    if info != 0:
+        buf.free()
+        wbuf.free()
+        raise Error("linalg.eigh: dsyev failed to converge")
+    for i in range(n):
+        set_logical_from_f64(w_out, i, wbuf[i])
+    if compute_eigenvectors:
+        write_col_major_to_array_f64(buf, v_out, n, n)
+        v_out.backend_code = BACKEND_ACCELERATE
+    buf.free()
+    wbuf.free()
+    w_out.backend_code = BACKEND_ACCELERATE
+
+
+# ---------- General eigendecomposition (real-result fast path) ----------
+def lapack_eig_f32_real_into(
+    a: Array,
+    mut wr_out: Array,
+    mut wi_out: Array,
+    mut vr_out: Array,
+    compute_eigenvectors: Bool,
+) raises -> Bool:
+    """Returns True if all eigenvalues are real (imaginary parts zero).
+    Caller must check before exposing to numpy-parity APIs (we don't have
+    complex dtype yet; mixed real+complex eigenvalue spectra raise upstream).
+    The real-only path writes wr_out, vr_out (column eigenvectors)."""
+    var n = a.shape[0]
+    var buf = alloc[Float32](n * n)
+    var wr = alloc[Float32](n if n > 0 else 1)
+    var wi = alloc[Float32](n if n > 0 else 1)
+    var vr_size = n * n if compute_eigenvectors else 1
+    var vr = alloc[Float32](vr_size)
+    transpose_to_col_major_f32(a, buf, n)
+    var info = lapack_sgeev(n, buf, wr, wi, vr, compute_eigenvectors)
+    if info != 0:
+        buf.free()
+        wr.free()
+        wi.free()
+        vr.free()
+        raise Error("linalg.eig: sgeev failed to converge")
+    for i in range(n):
+        set_logical_from_f64(wr_out, i, Float64(wr[i]))
+        set_logical_from_f64(wi_out, i, Float64(wi[i]))
+    var all_real = True
+    for i in range(n):
+        if wi[i] != 0.0:
+            all_real = False
+            break
+    if compute_eigenvectors:
+        write_col_major_to_array_f32(vr, vr_out, n, n)
+        vr_out.backend_code = BACKEND_ACCELERATE
+    buf.free()
+    wr.free()
+    wi.free()
+    vr.free()
+    wr_out.backend_code = BACKEND_ACCELERATE
+    wi_out.backend_code = BACKEND_ACCELERATE
+    return all_real
+
+
+def lapack_eig_f64_real_into(
+    a: Array,
+    mut wr_out: Array,
+    mut wi_out: Array,
+    mut vr_out: Array,
+    compute_eigenvectors: Bool,
+) raises -> Bool:
+    var n = a.shape[0]
+    var buf = alloc[Float64](n * n)
+    var wr = alloc[Float64](n if n > 0 else 1)
+    var wi = alloc[Float64](n if n > 0 else 1)
+    var vr_size = n * n if compute_eigenvectors else 1
+    var vr = alloc[Float64](vr_size)
+    transpose_to_col_major_f64(a, buf, n)
+    var info = lapack_dgeev(n, buf, wr, wi, vr, compute_eigenvectors)
+    if info != 0:
+        buf.free()
+        wr.free()
+        wi.free()
+        vr.free()
+        raise Error("linalg.eig: dgeev failed to converge")
+    for i in range(n):
+        set_logical_from_f64(wr_out, i, wr[i])
+        set_logical_from_f64(wi_out, i, wi[i])
+    var all_real = True
+    for i in range(n):
+        if wi[i] != 0.0:
+            all_real = False
+            break
+    if compute_eigenvectors:
+        write_col_major_to_array_f64(vr, vr_out, n, n)
+        vr_out.backend_code = BACKEND_ACCELERATE
+    buf.free()
+    wr.free()
+    wi.free()
+    vr.free()
+    wr_out.backend_code = BACKEND_ACCELERATE
+    wi_out.backend_code = BACKEND_ACCELERATE
+    return all_real
+
+
+# ---------- SVD ----------
+def lapack_svd_f32_into(
+    a: Array,
+    mut u_out: Array,
+    mut s_out: Array,
+    mut vt_out: Array,
+    full_matrices: Bool,
+    compute_uv: Bool,
+) raises:
+    var m = a.shape[0]
+    var n = a.shape[1]
+    var k = m if m < n else n
+    var a_buf = alloc[Float32](m * n)
+    var s_buf = alloc[Float32](k if k > 0 else 1)
+    var u_rows = m
+    var u_cols = m if full_matrices else k
+    var vt_rows = n if full_matrices else k
+    var vt_cols = n
+    var u_size = u_rows * u_cols if compute_uv else 1
+    var vt_size = vt_rows * vt_cols if compute_uv else 1
+    var u_buf = alloc[Float32](u_size if u_size > 0 else 1)
+    var vt_buf = alloc[Float32](vt_size if vt_size > 0 else 1)
+    transpose_to_col_major_rect_f32(a, a_buf, m, n)
+    var info = lapack_sgesdd(m, n, a_buf, s_buf, u_buf, vt_buf, full_matrices, compute_uv)
+    if info != 0:
+        a_buf.free()
+        s_buf.free()
+        u_buf.free()
+        vt_buf.free()
+        raise Error("linalg.svd: sgesdd failed to converge")
+    for i in range(k):
+        set_logical_from_f64(s_out, i, Float64(s_buf[i]))
+    if compute_uv:
+        # U is col-major u_rows × u_cols. Transpose to row-major.
+        write_col_major_to_array_f32(u_buf, u_out, u_rows, u_cols)
+        # VT is col-major vt_rows × vt_cols. Same.
+        write_col_major_to_array_f32(vt_buf, vt_out, vt_rows, vt_cols)
+        u_out.backend_code = BACKEND_ACCELERATE
+        vt_out.backend_code = BACKEND_ACCELERATE
+    a_buf.free()
+    s_buf.free()
+    u_buf.free()
+    vt_buf.free()
+    s_out.backend_code = BACKEND_ACCELERATE
+
+
+def lapack_svd_f64_into(
+    a: Array,
+    mut u_out: Array,
+    mut s_out: Array,
+    mut vt_out: Array,
+    full_matrices: Bool,
+    compute_uv: Bool,
+) raises:
+    var m = a.shape[0]
+    var n = a.shape[1]
+    var k = m if m < n else n
+    var a_buf = alloc[Float64](m * n)
+    var s_buf = alloc[Float64](k if k > 0 else 1)
+    var u_rows = m
+    var u_cols = m if full_matrices else k
+    var vt_rows = n if full_matrices else k
+    var vt_cols = n
+    var u_size = u_rows * u_cols if compute_uv else 1
+    var vt_size = vt_rows * vt_cols if compute_uv else 1
+    var u_buf = alloc[Float64](u_size if u_size > 0 else 1)
+    var vt_buf = alloc[Float64](vt_size if vt_size > 0 else 1)
+    transpose_to_col_major_rect_f64(a, a_buf, m, n)
+    var info = lapack_dgesdd(m, n, a_buf, s_buf, u_buf, vt_buf, full_matrices, compute_uv)
+    if info != 0:
+        a_buf.free()
+        s_buf.free()
+        u_buf.free()
+        vt_buf.free()
+        raise Error("linalg.svd: dgesdd failed to converge")
+    for i in range(k):
+        set_logical_from_f64(s_out, i, s_buf[i])
+    if compute_uv:
+        write_col_major_to_array_f64(u_buf, u_out, u_rows, u_cols)
+        write_col_major_to_array_f64(vt_buf, vt_out, vt_rows, vt_cols)
+        u_out.backend_code = BACKEND_ACCELERATE
+        vt_out.backend_code = BACKEND_ACCELERATE
+    a_buf.free()
+    s_buf.free()
+    u_buf.free()
+    vt_buf.free()
+    s_out.backend_code = BACKEND_ACCELERATE
+
+
+# ---------- Least squares ----------
+def lapack_lstsq_f32_into(
+    a: Array,
+    b: Array,
+    mut x_out: Array,
+    mut s_out: Array,
+    rcond: Float32,
+    rank_out_ptr: UnsafePointer[Int, MutExternalOrigin],
+) raises:
+    """Solves ‖A·x − b‖₂ minimum-norm. Writes solution to x_out (shape
+    (N,) for vector b, (N, NRHS) for matrix b), singular values to s_out
+    (length min(M, N)), and the effective rank to *rank_out_ptr."""
+    var m = a.shape[0]
+    var n = a.shape[1]
+    var nrhs = 1
+    var b_is_vec = True
+    if len(b.shape) == 2:
+        nrhs = b.shape[1]
+        b_is_vec = False
+    var k = m if m < n else n
+    var ldb = m if m > n else n
+    var a_buf = alloc[Float32](m * n)
+    var b_buf = alloc[Float32](ldb * nrhs)
+    var s_buf = alloc[Float32](k if k > 0 else 1)
+    transpose_to_col_major_rect_f32(a, a_buf, m, n)
+    # Copy b into the LDB × NRHS column-major scratch (rows beyond M
+    # padding stays 0; numpy convention).
+    for col in range(nrhs):
+        for row in range(ldb):
+            if row < m:
+                if b_is_vec:
+                    b_buf[row + col * ldb] = Float32(get_logical_as_f64(b, row))
+                else:
+                    b_buf[row + col * ldb] = Float32(get_logical_as_f64(b, row * nrhs + col))
+            else:
+                b_buf[row + col * ldb] = 0.0
+    var info = lapack_sgelsd(m, n, nrhs, a_buf, b_buf, s_buf, rcond, rank_out_ptr)
+    if info != 0:
+        a_buf.free()
+        b_buf.free()
+        s_buf.free()
+        raise Error("linalg.lstsq: sgelsd failed to converge")
+    # Write x_out: first N rows of the col-major b_buf hold the solution.
+    if b_is_vec:
+        for row in range(n):
+            set_logical_from_f64(x_out, row, Float64(b_buf[row]))
+    else:
+        for row in range(n):
+            for col in range(nrhs):
+                set_logical_from_f64(x_out, row * nrhs + col, Float64(b_buf[row + col * ldb]))
+    for i in range(k):
+        set_logical_from_f64(s_out, i, Float64(s_buf[i]))
+    a_buf.free()
+    b_buf.free()
+    s_buf.free()
+    x_out.backend_code = BACKEND_ACCELERATE
+    s_out.backend_code = BACKEND_ACCELERATE
+
+
+def lapack_lstsq_f64_into(
+    a: Array,
+    b: Array,
+    mut x_out: Array,
+    mut s_out: Array,
+    rcond: Float64,
+    rank_out_ptr: UnsafePointer[Int, MutExternalOrigin],
+) raises:
+    var m = a.shape[0]
+    var n = a.shape[1]
+    var nrhs = 1
+    var b_is_vec = True
+    if len(b.shape) == 2:
+        nrhs = b.shape[1]
+        b_is_vec = False
+    var k = m if m < n else n
+    var ldb = m if m > n else n
+    var a_buf = alloc[Float64](m * n)
+    var b_buf = alloc[Float64](ldb * nrhs)
+    var s_buf = alloc[Float64](k if k > 0 else 1)
+    transpose_to_col_major_rect_f64(a, a_buf, m, n)
+    for col in range(nrhs):
+        for row in range(ldb):
+            if row < m:
+                if b_is_vec:
+                    b_buf[row + col * ldb] = get_logical_as_f64(b, row)
+                else:
+                    b_buf[row + col * ldb] = get_logical_as_f64(b, row * nrhs + col)
+            else:
+                b_buf[row + col * ldb] = 0.0
+    var info = lapack_dgelsd(m, n, nrhs, a_buf, b_buf, s_buf, rcond, rank_out_ptr)
+    if info != 0:
+        a_buf.free()
+        b_buf.free()
+        s_buf.free()
+        raise Error("linalg.lstsq: dgelsd failed to converge")
+    if b_is_vec:
+        for row in range(n):
+            set_logical_from_f64(x_out, row, b_buf[row])
+    else:
+        for row in range(n):
+            for col in range(nrhs):
+                set_logical_from_f64(x_out, row * nrhs + col, b_buf[row + col * ldb])
+    for i in range(k):
+        set_logical_from_f64(s_out, i, s_buf[i])
+    a_buf.free()
+    b_buf.free()
+    s_buf.free()
+    x_out.backend_code = BACKEND_ACCELERATE
+    s_out.backend_code = BACKEND_ACCELERATE

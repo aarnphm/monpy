@@ -30,17 +30,24 @@ comptime DTYPE_BOOL = 0
 comptime DTYPE_INT64 = 1
 comptime DTYPE_FLOAT32 = 2
 comptime DTYPE_FLOAT64 = 3
-# Phase-5a registrations. Metadata is live (itemsize/kind/format-char
-# resolve) so finfo/iinfo/can_cast/result_type can reason about them,
-# but allocation and arithmetic kernels still error on these codes
-# until the kernel work in elementwise.mojo lands.
+# Phase-5a signed ints.
 comptime DTYPE_INT32 = 4
 comptime DTYPE_INT16 = 5
 comptime DTYPE_INT8 = 6
+# Phase-5b unsigned ints. Allocation + arithmetic via the f64
+# round-trip path; promotion rules follow numpy 2.x.
+comptime DTYPE_UINT64 = 7
+comptime DTYPE_UINT32 = 8
+comptime DTYPE_UINT16 = 9
+comptime DTYPE_UINT8 = 10
+# Phase-5c float16. Stored as 2-byte half; arithmetic delegates through
+# the f64 round-trip path until a SIMD float16 kernel lands.
+comptime DTYPE_FLOAT16 = 11
 
 comptime DTYPE_KIND_BOOL = 0
 comptime DTYPE_KIND_SIGNED_INT = 1
 comptime DTYPE_KIND_REAL_FLOAT = 2
+comptime DTYPE_KIND_UNSIGNED_INT = 3
 
 comptime CASTING_NO = 0
 comptime CASTING_EQUIV = 1
@@ -130,13 +137,13 @@ comptime BACKEND_FUSED = 2
 
 
 def dtype_item_size(dtype_code: Int) raises -> Int:
-    if dtype_code == DTYPE_BOOL or dtype_code == DTYPE_INT8:
+    if dtype_code == DTYPE_BOOL or dtype_code == DTYPE_INT8 or dtype_code == DTYPE_UINT8:
         return 1
-    if dtype_code == DTYPE_INT16:
+    if dtype_code == DTYPE_INT16 or dtype_code == DTYPE_UINT16 or dtype_code == DTYPE_FLOAT16:
         return 2
-    if dtype_code == DTYPE_INT32 or dtype_code == DTYPE_FLOAT32:
+    if dtype_code == DTYPE_INT32 or dtype_code == DTYPE_FLOAT32 or dtype_code == DTYPE_UINT32:
         return 4
-    if dtype_code == DTYPE_INT64 or dtype_code == DTYPE_FLOAT64:
+    if dtype_code == DTYPE_INT64 or dtype_code == DTYPE_FLOAT64 or dtype_code == DTYPE_UINT64:
         return 8
     raise Error("unsupported dtype code")
 
@@ -145,17 +152,40 @@ def dtype_alignment(dtype_code: Int) raises -> Int:
     return dtype_item_size(dtype_code)
 
 
+def _is_signed_int_code(code: Int) -> Bool:
+    return (
+        code == DTYPE_INT64
+        or code == DTYPE_INT32
+        or code == DTYPE_INT16
+        or code == DTYPE_INT8
+    )
+
+
+def _is_unsigned_int_code(code: Int) -> Bool:
+    return (
+        code == DTYPE_UINT64
+        or code == DTYPE_UINT32
+        or code == DTYPE_UINT16
+        or code == DTYPE_UINT8
+    )
+
+
+def _is_float_code(code: Int) -> Bool:
+    return (
+        code == DTYPE_FLOAT64
+        or code == DTYPE_FLOAT32
+        or code == DTYPE_FLOAT16
+    )
+
+
 def dtype_kind_code(dtype_code: Int) raises -> Int:
     if dtype_code == DTYPE_BOOL:
         return DTYPE_KIND_BOOL
-    if (
-        dtype_code == DTYPE_INT64
-        or dtype_code == DTYPE_INT32
-        or dtype_code == DTYPE_INT16
-        or dtype_code == DTYPE_INT8
-    ):
+    if _is_signed_int_code(dtype_code):
         return DTYPE_KIND_SIGNED_INT
-    if dtype_code == DTYPE_FLOAT32 or dtype_code == DTYPE_FLOAT64:
+    if _is_unsigned_int_code(dtype_code):
+        return DTYPE_KIND_UNSIGNED_INT
+    if _is_float_code(dtype_code):
         return DTYPE_KIND_REAL_FLOAT
     raise Error("unsupported dtype code")
 
@@ -167,15 +197,27 @@ def dtype_code_from_format_char(c: Int, itemsize: Int) raises -> Int:
         return DTYPE_BOOL
     if c == 0x62 and itemsize == 1:  # 'b'
         return DTYPE_INT8
+    if c == 0x42 and itemsize == 1:  # 'B'
+        return DTYPE_UINT8
     if c == 0x68 and itemsize == 2:  # 'h'
         return DTYPE_INT16
+    if c == 0x48 and itemsize == 2:  # 'H'
+        return DTYPE_UINT16
     if c == 0x69 and itemsize == 4:  # 'i'
         return DTYPE_INT32
+    if c == 0x49 and itemsize == 4:  # 'I'
+        return DTYPE_UINT32
     if (c == 0x6C or c == 0x71) and itemsize == 8:  # 'l' or 'q'
         return DTYPE_INT64
-    # 'l' on 32-bit Linux is 4 bytes — interpret as int32.
+    if (c == 0x4C or c == 0x51) and itemsize == 8:  # 'L' or 'Q'
+        return DTYPE_UINT64
+    # 'l'/'L' on 32-bit Linux is 4 bytes — interpret as int32/uint32.
     if c == 0x6C and itemsize == 4:
         return DTYPE_INT32
+    if c == 0x4C and itemsize == 4:
+        return DTYPE_UINT32
+    if c == 0x65 and itemsize == 2:  # 'e' (float16, PEP-3118 + numpy convention)
+        return DTYPE_FLOAT16
     if c == 0x66 and itemsize == 4:  # 'f'
         return DTYPE_FLOAT32
     if c == 0x64 and itemsize == 8:  # 'd'
@@ -184,6 +226,8 @@ def dtype_code_from_format_char(c: Int, itemsize: Int) raises -> Int:
 
 
 def dtype_result_for_unary(dtype_code: Int) -> Int:
+    if dtype_code == DTYPE_FLOAT16:
+        return DTYPE_FLOAT16
     if dtype_code == DTYPE_FLOAT32:
         return DTYPE_FLOAT32
     return DTYPE_FLOAT64
@@ -200,16 +244,30 @@ def dtype_result_for_unary_preserve(dtype_code: Int) -> Int:
 
 
 def _is_int_code(code: Int) -> Bool:
-    return (
-        code == DTYPE_INT64
-        or code == DTYPE_INT32
-        or code == DTYPE_INT16
-        or code == DTYPE_INT8
-    )
+    return _is_signed_int_code(code) or _is_unsigned_int_code(code)
 
 
-def _wider_int(a: Int, b: Int) raises -> Int:
-    """Return the wider of two signed-integer dtype codes."""
+def _signed_int_size_to_code(size: Int) raises -> Int:
+    if size == 1:
+        return DTYPE_INT8
+    if size == 2:
+        return DTYPE_INT16
+    if size == 4:
+        return DTYPE_INT32
+    return DTYPE_INT64
+
+
+def _unsigned_int_size_to_code(size: Int) raises -> Int:
+    if size == 1:
+        return DTYPE_UINT8
+    if size == 2:
+        return DTYPE_UINT16
+    if size == 4:
+        return DTYPE_UINT32
+    return DTYPE_UINT64
+
+
+def _wider_signed_int(a: Int, b: Int) raises -> Int:
     var sa = dtype_item_size(a)
     var sb = dtype_item_size(b)
     if sa >= sb:
@@ -217,46 +275,99 @@ def _wider_int(a: Int, b: Int) raises -> Int:
     return b
 
 
+def _wider_unsigned_int(a: Int, b: Int) raises -> Int:
+    var sa = dtype_item_size(a)
+    var sb = dtype_item_size(b)
+    if sa >= sb:
+        return a
+    return b
+
+
+def _signed_unsigned_promote(signed_code: Int, unsigned_code: Int) raises -> Int:
+    # numpy 2.x: int_n + uint_n → next-wider signed (e.g. int8 + uint8 →
+    # int16). int64 + uint64 → float64 because no integer holds both ranges.
+    var ss = dtype_item_size(signed_code)
+    var us = dtype_item_size(unsigned_code)
+    if us < ss:
+        return signed_code  # signed already wider; result stays signed
+    if us == 8 and ss == 8:
+        return DTYPE_FLOAT64
+    var promoted_size = us * 2
+    if promoted_size >= 8:
+        return DTYPE_INT64
+    return _signed_int_size_to_code(promoted_size)
+
+
 def dtype_result_for_binary(lhs_dtype: Int, rhs_dtype: Int, op: Int) -> Int:
-    """Numpy 2.x binary promotion. The original 4-dtype if-chain is
-    extended to cover int8/16/32 by reducing through size-aware cases."""
+    """Numpy 2.x binary promotion. Covers the 11-dtype matrix plus any
+    operator-specific overrides (always-float transcendentals, division).
+    """
     # Always-float binary transcendentals.
     if op == OP_ARCTAN2 or op == OP_HYPOT or op == OP_COPYSIGN:
         if lhs_dtype == DTYPE_FLOAT32 and rhs_dtype == DTYPE_FLOAT32:
             return DTYPE_FLOAT32
+        if lhs_dtype == DTYPE_FLOAT16 and rhs_dtype == DTYPE_FLOAT16:
+            return DTYPE_FLOAT16
         return DTYPE_FLOAT64
-    # Division always promotes to float; small-int + small-float can
-    # stay in float32, but large-int (int32+) needs float64 for safety.
+    # Division: always float, with size-aware promotion.
     if op == OP_DIV:
-        # If either side is float64 → float64.
         if lhs_dtype == DTYPE_FLOAT64 or rhs_dtype == DTYPE_FLOAT64:
             return DTYPE_FLOAT64
-        # Both float32 (or float32 + bool/small-int): float32.
         if lhs_dtype == DTYPE_FLOAT32 or rhs_dtype == DTYPE_FLOAT32:
             var other = rhs_dtype if lhs_dtype == DTYPE_FLOAT32 else lhs_dtype
-            if other == DTYPE_FLOAT32 or other == DTYPE_BOOL:
+            if other == DTYPE_FLOAT32 or other == DTYPE_BOOL or other == DTYPE_FLOAT16:
                 return DTYPE_FLOAT32
-            if other == DTYPE_INT8 or other == DTYPE_INT16:
+            if other == DTYPE_INT8 or other == DTYPE_INT16 or other == DTYPE_UINT8 or other == DTYPE_UINT16:
                 return DTYPE_FLOAT32
+        if lhs_dtype == DTYPE_FLOAT16 or rhs_dtype == DTYPE_FLOAT16:
+            var other = rhs_dtype if lhs_dtype == DTYPE_FLOAT16 else lhs_dtype
+            if other == DTYPE_FLOAT16 or other == DTYPE_BOOL:
+                return DTYPE_FLOAT16
+            if other == DTYPE_INT8 or other == DTYPE_UINT8:
+                return DTYPE_FLOAT16
+            return DTYPE_FLOAT32
         return DTYPE_FLOAT64
     # Non-division arithmetic.
     if lhs_dtype == DTYPE_FLOAT64 or rhs_dtype == DTYPE_FLOAT64:
         return DTYPE_FLOAT64
     if lhs_dtype == DTYPE_FLOAT32 or rhs_dtype == DTYPE_FLOAT32:
-        # int32+/int64 + float32 → float64 (precision loss otherwise).
-        if (lhs_dtype == DTYPE_INT64 or lhs_dtype == DTYPE_INT32) or (
-            rhs_dtype == DTYPE_INT64 or rhs_dtype == DTYPE_INT32
-        ):
+        var other = rhs_dtype if lhs_dtype == DTYPE_FLOAT32 else lhs_dtype
+        # int32+/int64/uint32+/uint64 + float32 → float64.
+        if other == DTYPE_INT64 or other == DTYPE_INT32:
+            return DTYPE_FLOAT64
+        if other == DTYPE_UINT64 or other == DTYPE_UINT32:
             return DTYPE_FLOAT64
         return DTYPE_FLOAT32
+    if lhs_dtype == DTYPE_FLOAT16 or rhs_dtype == DTYPE_FLOAT16:
+        var other = rhs_dtype if lhs_dtype == DTYPE_FLOAT16 else lhs_dtype
+        if other == DTYPE_FLOAT16 or other == DTYPE_BOOL:
+            return DTYPE_FLOAT16
+        if other == DTYPE_INT8 or other == DTYPE_UINT8:
+            return DTYPE_FLOAT16
+        if other == DTYPE_INT16 or other == DTYPE_UINT16:
+            return DTYPE_FLOAT32
+        # bigger ints with f16 → f64 (not enough mantissa).
+        return DTYPE_FLOAT64
+    # All-integer / bool path.
     if _is_int_code(lhs_dtype) or _is_int_code(rhs_dtype):
-        # both integer (or one bool one int): widest signed-integer wins.
+        var l_signed = _is_signed_int_code(lhs_dtype)
+        var l_unsigned = _is_unsigned_int_code(lhs_dtype)
+        var r_signed = _is_signed_int_code(rhs_dtype)
+        var r_unsigned = _is_unsigned_int_code(rhs_dtype)
+        # bool propagates to whatever the other side is.
         if not _is_int_code(lhs_dtype):
             return rhs_dtype
         if not _is_int_code(rhs_dtype):
             return lhs_dtype
+        # both integer.
         try:
-            return _wider_int(lhs_dtype, rhs_dtype)
+            if l_signed and r_signed:
+                return _wider_signed_int(lhs_dtype, rhs_dtype)
+            if l_unsigned and r_unsigned:
+                return _wider_unsigned_int(lhs_dtype, rhs_dtype)
+            if l_signed and r_unsigned:
+                return _signed_unsigned_promote(lhs_dtype, rhs_dtype)
+            return _signed_unsigned_promote(rhs_dtype, lhs_dtype)
         except:
             return DTYPE_INT64
     return DTYPE_BOOL
@@ -264,11 +375,17 @@ def dtype_result_for_binary(lhs_dtype: Int, rhs_dtype: Int, op: Int) -> Int:
 
 def dtype_result_for_reduction(dtype_code: Int, op: Int) -> Int:
     if op == REDUCE_MEAN:
-        if dtype_code == DTYPE_FLOAT32:
+        if dtype_code == DTYPE_FLOAT16 or dtype_code == DTYPE_FLOAT32:
             return DTYPE_FLOAT32
         return DTYPE_FLOAT64
     if op == REDUCE_SUM and dtype_code == DTYPE_BOOL:
         return DTYPE_INT64
+    if op == REDUCE_SUM or op == REDUCE_PROD:
+        # numpy: small-int reductions accumulate in int64/uint64 to avoid overflow.
+        if _is_signed_int_code(dtype_code):
+            return DTYPE_INT64
+        if _is_unsigned_int_code(dtype_code):
+            return DTYPE_UINT64
     return dtype_code
 
 
@@ -301,20 +418,39 @@ def dtype_can_cast(from_dtype: Int, to_dtype: Int, casting: Int) raises -> Bool:
         # Bool fits in any numeric type.
         if from_kind == DTYPE_KIND_BOOL:
             return True
-        # Signed-integer widening: smaller fits in larger.
         if from_kind == DTYPE_KIND_SIGNED_INT:
             if to_kind == DTYPE_KIND_SIGNED_INT:
                 var fs = dtype_item_size(from_dtype)
                 var ts = dtype_item_size(to_dtype)
                 return ts >= fs
             if to_kind == DTYPE_KIND_REAL_FLOAT:
-                # int8/int16 fit in float32 mantissa; int32 needs float64;
-                # int64 is technically lossy in f64 but numpy says safe.
                 var fs = dtype_item_size(from_dtype)
                 if to_dtype == DTYPE_FLOAT64:
                     return True
                 if to_dtype == DTYPE_FLOAT32:
                     return fs <= 2
+                if to_dtype == DTYPE_FLOAT16:
+                    return False  # int → f16 not safe (mantissa = 10 bits)
+            # signed → unsigned never safe (negative values lose).
+            return False
+        if from_kind == DTYPE_KIND_UNSIGNED_INT:
+            if to_kind == DTYPE_KIND_UNSIGNED_INT:
+                var fs = dtype_item_size(from_dtype)
+                var ts = dtype_item_size(to_dtype)
+                return ts >= fs
+            if to_kind == DTYPE_KIND_SIGNED_INT:
+                # uint_n fits safely in int_{2n}: uint8→int16, uint16→int32, uint32→int64.
+                # uint64 → no signed int holds full range.
+                var fs = dtype_item_size(from_dtype)
+                var ts = dtype_item_size(to_dtype)
+                return ts > fs
+            if to_kind == DTYPE_KIND_REAL_FLOAT:
+                if to_dtype == DTYPE_FLOAT64:
+                    return True
+                if to_dtype == DTYPE_FLOAT32:
+                    return dtype_item_size(from_dtype) <= 2
+                if to_dtype == DTYPE_FLOAT16:
+                    return False
             return False
         if from_kind == DTYPE_KIND_REAL_FLOAT:
             if to_kind == DTYPE_KIND_REAL_FLOAT:
@@ -327,7 +463,17 @@ def dtype_can_cast(from_dtype: Int, to_dtype: Int, casting: Int) raises -> Bool:
         if from_kind == DTYPE_KIND_BOOL:
             return True
         if from_kind == DTYPE_KIND_SIGNED_INT:
-            return to_kind == DTYPE_KIND_SIGNED_INT or to_kind == DTYPE_KIND_REAL_FLOAT
+            return (
+                to_kind == DTYPE_KIND_SIGNED_INT
+                or to_kind == DTYPE_KIND_UNSIGNED_INT
+                or to_kind == DTYPE_KIND_REAL_FLOAT
+            )
+        if from_kind == DTYPE_KIND_UNSIGNED_INT:
+            return (
+                to_kind == DTYPE_KIND_UNSIGNED_INT
+                or to_kind == DTYPE_KIND_SIGNED_INT
+                or to_kind == DTYPE_KIND_REAL_FLOAT
+            )
         if from_kind == DTYPE_KIND_REAL_FLOAT:
             return to_kind == DTYPE_KIND_REAL_FLOAT
         return False
