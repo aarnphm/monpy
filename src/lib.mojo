@@ -36,6 +36,7 @@ from create import (
     flip_ops,
     from_external_ops,
     from_flat_ops,
+    full_like_ops,
     full_ops,
     indices_ops,
     inv_ops,
@@ -105,6 +106,7 @@ def PyInit__native() -> PythonObject:
         )
         module.def_function[empty_ops]("empty")
         module.def_function[full_ops]("full")
+        module.def_function[full_like_ops]("full_like")
         module.def_function[from_flat_ops]("from_flat")
         module.def_function[from_external_ops]("from_external")
         module.def_function[copy_from_external_ops]("copy_from_external")

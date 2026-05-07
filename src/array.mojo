@@ -694,6 +694,97 @@ def scalar_py_as_f64(value_obj: PythonObject, dtype_code: Int) raises -> Float64
 
 
 def fill_all_from_py(mut array: Array, value_obj: PythonObject) raises:
+    if is_c_contiguous(array):
+        if array.dtype_code == DTYPE_BOOL:
+            var value = UInt8(0)
+            if Bool(py=value_obj):
+                value = UInt8(1)
+            var ptr = array.data + array.offset_elems
+            for i in range(array.size_value):
+                ptr[i] = value
+            return
+        if array.dtype_code == DTYPE_INT64:
+            var value = Int64(Int(py=value_obj))
+            var ptr = array.data.bitcast[Int64]() + array.offset_elems
+            for i in range(array.size_value):
+                ptr[i] = value
+            return
+        if array.dtype_code == DTYPE_INT32:
+            var value = Int32(Int(py=value_obj))
+            var ptr = array.data.bitcast[Int32]() + array.offset_elems
+            for i in range(array.size_value):
+                ptr[i] = value
+            return
+        if array.dtype_code == DTYPE_INT16:
+            var value = Int16(Int(py=value_obj))
+            var ptr = array.data.bitcast[Int16]() + array.offset_elems
+            for i in range(array.size_value):
+                ptr[i] = value
+            return
+        if array.dtype_code == DTYPE_INT8:
+            var value = Int8(Int(py=value_obj))
+            var ptr = array.data.bitcast[Int8]() + array.offset_elems
+            for i in range(array.size_value):
+                ptr[i] = value
+            return
+        if array.dtype_code == DTYPE_UINT64:
+            var value = UInt64(Int(py=value_obj))
+            var ptr = array.data.bitcast[UInt64]() + array.offset_elems
+            for i in range(array.size_value):
+                ptr[i] = value
+            return
+        if array.dtype_code == DTYPE_UINT32:
+            var value = UInt32(Int(py=value_obj))
+            var ptr = array.data.bitcast[UInt32]() + array.offset_elems
+            for i in range(array.size_value):
+                ptr[i] = value
+            return
+        if array.dtype_code == DTYPE_UINT16:
+            var value = UInt16(Int(py=value_obj))
+            var ptr = array.data.bitcast[UInt16]() + array.offset_elems
+            for i in range(array.size_value):
+                ptr[i] = value
+            return
+        if array.dtype_code == DTYPE_UINT8:
+            var value = UInt8(Int(py=value_obj))
+            var ptr = array.data.bitcast[UInt8]() + array.offset_elems
+            for i in range(array.size_value):
+                ptr[i] = value
+            return
+        if array.dtype_code == DTYPE_FLOAT32:
+            var value = Float32(Float64(py=value_obj))
+            var ptr = array.data.bitcast[Float32]() + array.offset_elems
+            for i in range(array.size_value):
+                ptr[i] = value
+            return
+        if array.dtype_code == DTYPE_FLOAT16:
+            var value = Float16(Float64(py=value_obj))
+            var ptr = array.data.bitcast[Float16]() + array.offset_elems
+            for i in range(array.size_value):
+                ptr[i] = value
+            return
+        if array.dtype_code == DTYPE_FLOAT64:
+            var value = Float64(py=value_obj)
+            var ptr = array.data.bitcast[Float64]() + array.offset_elems
+            for i in range(array.size_value):
+                ptr[i] = value
+            return
+        if array.dtype_code == DTYPE_COMPLEX64:
+            var real = Float32(Float64(py=value_obj.real))
+            var imag = Float32(Float64(py=value_obj.imag))
+            var ptr = array.data.bitcast[Float32]() + array.offset_elems * 2
+            for i in range(array.size_value):
+                ptr[i * 2] = real
+                ptr[i * 2 + 1] = imag
+            return
+        if array.dtype_code == DTYPE_COMPLEX128:
+            var real = Float64(py=value_obj.real)
+            var imag = Float64(py=value_obj.imag)
+            var ptr = array.data.bitcast[Float64]() + array.offset_elems * 2
+            for i in range(array.size_value):
+                ptr[i * 2] = real
+                ptr[i * 2 + 1] = imag
+            return
     for i in range(array.size_value):
         set_logical_from_py(array, i, value_obj)
 

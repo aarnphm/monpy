@@ -156,6 +156,19 @@ def full_ops(shape_obj: PythonObject, value_obj: PythonObject, dtype_obj: Python
     return PythonObject(alloc=result^)
 
 
+def full_like_ops(
+    prototype_obj: PythonObject, value_obj: PythonObject, dtype_obj: PythonObject
+) raises -> PythonObject:
+    var src = prototype_obj.downcast_value_ptr[Array]()
+    var dtype_code = Int(py=dtype_obj)
+    if dtype_code < 0:
+        dtype_code = src[].dtype_code
+    var shape = clone_int_list(src[].shape)
+    var result = make_empty_array(dtype_code, shape^)
+    fill_all_from_py(result, value_obj)
+    return PythonObject(alloc=result^)
+
+
 def from_flat_ops(values_obj: PythonObject, shape_obj: PythonObject, dtype_obj: PythonObject) raises -> PythonObject:
     var dtype_code = Int(py=dtype_obj)
     var shape = int_list_from_py(shape_obj)

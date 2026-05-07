@@ -646,20 +646,26 @@ def empty_like(prototype:object,dtype:object=None,order:str="K",subok:builtins.b
   arr=asarray(prototype);t=_resolve_dtype(dtype) if dtype is not None else arr.dtype
   return empty(arr.shape if shape is None else _norm_shape(shape),dtype=t,device=device)
 
+def _full_like(prototype:object,fill_value:object,dtype:object,shape:int|Sequence[int]|None,device:object)->ndarray:
+  _check_cpu(device);arr=prototype if type(prototype) is ndarray else asarray(prototype)
+  if shape is not None:
+    t=_resolve_dtype(dtype) if dtype is not None else arr.dtype
+    return full(_norm_shape(shape),fill_value,dtype=t,device=device)
+  if dtype is None:return ndarray._wrap(_native.full_like(arr._native,fill_value,-1))
+  t=_resolve_dtype(dtype);_check_dtype_implemented(t)
+  return ndarray._wrap(_native.full_like(arr._native,fill_value,t.code))
+
 def zeros_like(prototype:object,dtype:object=None,order:str="K",subok:builtins.bool=True,shape:int|Sequence[int]|None=None,*,device:object=None)->ndarray:
   _check_order(order);del subok
-  arr=asarray(prototype);t=_resolve_dtype(dtype) if dtype is not None else arr.dtype
-  return zeros(arr.shape if shape is None else _norm_shape(shape),dtype=t,device=device)
+  return _full_like(prototype,0,dtype,shape,device)
 
 def ones_like(prototype:object,dtype:object=None,order:str="K",subok:builtins.bool=True,shape:int|Sequence[int]|None=None,*,device:object=None)->ndarray:
   _check_order(order);del subok
-  arr=asarray(prototype);t=_resolve_dtype(dtype) if dtype is not None else arr.dtype
-  return ones(arr.shape if shape is None else _norm_shape(shape),dtype=t,device=device)
+  return _full_like(prototype,1,dtype,shape,device)
 
 def full_like(prototype:object,fill_value:object,dtype:object=None,order:str="K",subok:builtins.bool=True,shape:int|Sequence[int]|None=None,*,device:object=None)->ndarray:
   _check_order(order);del subok
-  arr=asarray(prototype);t=_resolve_dtype(dtype) if dtype is not None else arr.dtype
-  return full(arr.shape if shape is None else _norm_shape(shape),fill_value,dtype=t,device=device)
+  return _full_like(prototype,fill_value,dtype,shape,device)
 
 def arange(start:int|float,stop:int|float|None=None,step:int|float=1,*,dtype:object=None,device:object=None)->ndarray:
   _check_cpu(device);a=0 if stop is None else start;b=start if stop is None else stop                                         # 1-arg form: stop=start, start=0 (numpy convention)

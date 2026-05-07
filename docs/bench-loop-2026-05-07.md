@@ -273,3 +273,58 @@ remaining complex debts:
   reverse-copy-add kernel might beat vDSP dispatch at this size.
 - complex matmul remains about 2.2x at 64x64.
 - complex interop/cast overhead is still about 1.8-2.0x.
+
+## native like-fill pass
+
+target:
+
+- reduce the helper tax on `zeros_like`, `ones_like`, and `full_like` for view
+  inputs.
+- keep the design general: one native same-shape allocation entrypoint plus
+  typed contiguous scalar fill, not benchmark-row special casing.
+
+changed:
+
+- `src/create.mojo`: added `full_like_ops`, which clones the prototype shape
+  inside native code and uses the prototype dtype when python passes `-1`.
+- `python/monpy/__init__.py`: routed `zeros_like`, `ones_like`, and `full_like`
+  through a shared `_full_like` helper when no explicit `shape=` override is
+  supplied.
+- `src/array.mojo`: specialized `fill_all_from_py` for c-contiguous arrays by
+  converting the python scalar once and filling through typed pointers for
+  bool, integer, float, and complex dtypes. Non-contiguous views keep the
+  existing logical-index fallback.
+
+verification:
+
+- `env MOHAUS_MOJO=... .venv/bin/mohaus develop`
+- `.venv/bin/python -m pytest tests/python/numpy_compat/test_numeric.py -q`
+- python smoke checked `zeros_like`, `ones_like`, `full_like`, and complex
+  `full`.
+
+focused sweep artifact:
+
+- `results/local-sweep-20260507-fill-pass/results.json`
+
+movement from final all-suite baseline:
+
+- `array/creation::zeros_like_transpose_f32`: 12.624 us / 4.339x → 3.124 us / 1.143x.
+- `array/creation::ones_like_transpose_f32`: 12.065 us / 4.004x → 3.232 us / 1.156x.
+- `array/creation::full_like_transpose_f32`: 11.963 us / 4.080x → 3.147 us / 1.123x.
+- `array/views::vstack_f32`: 14.509 us / 4.092x → 11.828 us / 3.499x. This likely moved from cheaper `atleast_2d`/fill interactions and noise; the owning concat path still remains.
+
+remaining top rows after fill pass:
+
+- `array/native_kernels::concatenate_axis0_8x128_f64`: 15.052 us / 4.878x.
+- `array/views::newaxis_middle_f32`: 8.134 us / 3.875x.
+- `array/creation::logspace_50`: 21.271 us / 3.864x.
+- `array/views::vstack_f32`: 11.828 us / 3.499x.
+- `array/views::squeeze_axis0_f32`: 7.848 us / 3.225x.
+- `array/views::stack_axis0_f32`: 12.385 us / 3.176x.
+
+next likely pass:
+
+- same-dtype c-contiguous concatenate fast path in python, then axis-0
+  stack/vstack reshape shortcuts.
+- full-slice plus `None` indexing shortcut for `helper[:, None, :]`, skipping
+  the redundant native `slice` call when all real axes are full slices.
