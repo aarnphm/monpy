@@ -157,6 +157,7 @@ from array import (
     has_negative_strides,
     has_zero_strides,
     is_c_contiguous,
+    physical_offset,
     same_shape,
     set_contiguous_from_f64,
     set_logical_from_f64,
@@ -1290,6 +1291,133 @@ def maybe_binary_rank1_strided_accelerate(lhs: Array, rhs: Array, mut result: Ar
     return False
 
 
+def maybe_complex_binary_rank1_strided_accelerate(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
+    if (
+        len(lhs.shape) != 1
+        or not same_shape(lhs.shape, rhs.shape)
+        or not same_shape(lhs.shape, result.shape)
+        or not is_c_contiguous(result)
+        or (op != OP_ADD and op != OP_SUB)
+    ):
+        return False
+    comptime if not CompilationTarget.is_macos():
+        return False
+    if (
+        lhs.dtype_code == DTYPE_COMPLEX64
+        and rhs.dtype_code == DTYPE_COMPLEX64
+        and result.dtype_code == DTYPE_COMPLEX64
+    ):
+        var lhs_ptr = lhs.data.bitcast[Float32]() + lhs.offset_elems * 2
+        var rhs_ptr = rhs.data.bitcast[Float32]() + rhs.offset_elems * 2
+        var out_ptr = result.data.bitcast[Float32]() + result.offset_elems * 2
+        var lhs_stride = lhs.strides[0] * 2
+        var rhs_stride = rhs.strides[0] * 2
+        if op == OP_ADD:
+            call_vdsp_binary_strided_f32["vDSP_vadd"](
+                lhs_ptr, lhs_stride, rhs_ptr, rhs_stride, out_ptr, 2, result.size_value
+            )
+            call_vdsp_binary_strided_f32["vDSP_vadd"](
+                lhs_ptr + 1, lhs_stride, rhs_ptr + 1, rhs_stride, out_ptr + 1, 2, result.size_value
+            )
+        else:
+            call_vdsp_binary_strided_f32["vDSP_vsub"](
+                rhs_ptr, rhs_stride, lhs_ptr, lhs_stride, out_ptr, 2, result.size_value
+            )
+            call_vdsp_binary_strided_f32["vDSP_vsub"](
+                rhs_ptr + 1, rhs_stride, lhs_ptr + 1, lhs_stride, out_ptr + 1, 2, result.size_value
+            )
+        result.backend_code = BACKEND_ACCELERATE
+        return True
+    if (
+        lhs.dtype_code == DTYPE_COMPLEX128
+        and rhs.dtype_code == DTYPE_COMPLEX128
+        and result.dtype_code == DTYPE_COMPLEX128
+    ):
+        var lhs_ptr = lhs.data.bitcast[Float64]() + lhs.offset_elems * 2
+        var rhs_ptr = rhs.data.bitcast[Float64]() + rhs.offset_elems * 2
+        var out_ptr = result.data.bitcast[Float64]() + result.offset_elems * 2
+        var lhs_stride = lhs.strides[0] * 2
+        var rhs_stride = rhs.strides[0] * 2
+        if op == OP_ADD:
+            call_vdsp_binary_strided_f64["vDSP_vaddD"](
+                lhs_ptr, lhs_stride, rhs_ptr, rhs_stride, out_ptr, 2, result.size_value
+            )
+            call_vdsp_binary_strided_f64["vDSP_vaddD"](
+                lhs_ptr + 1, lhs_stride, rhs_ptr + 1, rhs_stride, out_ptr + 1, 2, result.size_value
+            )
+        else:
+            call_vdsp_binary_strided_f64["vDSP_vsubD"](
+                rhs_ptr, rhs_stride, lhs_ptr, lhs_stride, out_ptr, 2, result.size_value
+            )
+            call_vdsp_binary_strided_f64["vDSP_vsubD"](
+                rhs_ptr + 1, rhs_stride, lhs_ptr + 1, lhs_stride, out_ptr + 1, 2, result.size_value
+            )
+        result.backend_code = BACKEND_ACCELERATE
+        return True
+    return False
+
+
+def complex_binary_same_shape_strided_typed[
+    dtype: DType
+](lhs: Array, rhs: Array, mut result: Array, op: Int) raises where dtype.is_floating_point():
+    var lhs_ptr = lhs.data.bitcast[Scalar[dtype]]()
+    var rhs_ptr = rhs.data.bitcast[Scalar[dtype]]()
+    var out_ptr = result.data.bitcast[Scalar[dtype]]() + result.offset_elems * 2
+    for i in range(result.size_value):
+        var lhs_phys = physical_offset(lhs, i)
+        var rhs_phys = physical_offset(rhs, i)
+        var a = lhs_ptr[lhs_phys * 2]
+        var b = lhs_ptr[lhs_phys * 2 + 1]
+        var c = rhs_ptr[rhs_phys * 2]
+        var d = rhs_ptr[rhs_phys * 2 + 1]
+        if op == OP_ADD:
+            out_ptr[i * 2] = a + c
+            out_ptr[i * 2 + 1] = b + d
+        elif op == OP_SUB:
+            out_ptr[i * 2] = a - c
+            out_ptr[i * 2 + 1] = b - d
+        elif op == OP_MUL:
+            out_ptr[i * 2] = a * c - b * d
+            out_ptr[i * 2 + 1] = a * d + b * c
+        elif op == OP_DIV:
+            var abs_c = c if c >= Scalar[dtype](0) else -c
+            var abs_d = d if d >= Scalar[dtype](0) else -d
+            if abs_c >= abs_d:
+                var r = d / c
+                var den = c + d * r
+                out_ptr[i * 2] = (a + b * r) / den
+                out_ptr[i * 2 + 1] = (b - a * r) / den
+            else:
+                var r = c / d
+                var den = c * r + d
+                out_ptr[i * 2] = (a * r + b) / den
+                out_ptr[i * 2 + 1] = (b * r - a) / den
+        else:
+            raise Error("unsupported op for complex strided binary kernel")
+
+
+def maybe_complex_binary_same_shape_strided(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
+    if (
+        not same_shape(lhs.shape, rhs.shape)
+        or not same_shape(lhs.shape, result.shape)
+        or not is_c_contiguous(result)
+        or lhs.dtype_code != rhs.dtype_code
+        or rhs.dtype_code != result.dtype_code
+    ):
+        return False
+    if maybe_complex_binary_rank1_strided_accelerate(lhs, rhs, result, op):
+        return True
+    if lhs.dtype_code == DTYPE_COMPLEX64:
+        complex_binary_same_shape_strided_typed[DType.float32](lhs, rhs, result, op)
+        result.backend_code = BACKEND_FUSED
+        return True
+    if lhs.dtype_code == DTYPE_COMPLEX128:
+        complex_binary_same_shape_strided_typed[DType.float64](lhs, rhs, result, op)
+        result.backend_code = BACKEND_FUSED
+        return True
+    return False
+
+
 def complex_binary_contig_typed[
     dtype: DType
 ](
@@ -1344,6 +1472,42 @@ def complex_binary_contig_typed[
     raise Error("unsupported op for complex binary kernel")
 
 
+def maybe_complex_binary_contiguous_accelerate(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
+    if op != OP_ADD and op != OP_SUB:
+        return False
+    comptime if not CompilationTarget.is_macos():
+        return False
+    if (
+        lhs.dtype_code == DTYPE_COMPLEX64
+        and rhs.dtype_code == DTYPE_COMPLEX64
+        and result.dtype_code == DTYPE_COMPLEX64
+    ):
+        var lhs_ptr = lhs.data.bitcast[Float32]() + lhs.offset_elems * 2
+        var rhs_ptr = rhs.data.bitcast[Float32]() + rhs.offset_elems * 2
+        var out_ptr = result.data.bitcast[Float32]() + result.offset_elems * 2
+        if op == OP_ADD:
+            call_vdsp_binary_f32["vDSP_vadd"](lhs_ptr, rhs_ptr, out_ptr, result.size_value * 2)
+        else:
+            call_vdsp_binary_f32["vDSP_vsub"](rhs_ptr, lhs_ptr, out_ptr, result.size_value * 2)
+        result.backend_code = BACKEND_ACCELERATE
+        return True
+    if (
+        lhs.dtype_code == DTYPE_COMPLEX128
+        and rhs.dtype_code == DTYPE_COMPLEX128
+        and result.dtype_code == DTYPE_COMPLEX128
+    ):
+        var lhs_ptr = lhs.data.bitcast[Float64]() + lhs.offset_elems * 2
+        var rhs_ptr = rhs.data.bitcast[Float64]() + rhs.offset_elems * 2
+        var out_ptr = result.data.bitcast[Float64]() + result.offset_elems * 2
+        if op == OP_ADD:
+            call_vdsp_binary_f64["vDSP_vaddD"](lhs_ptr, rhs_ptr, out_ptr, result.size_value * 2)
+        else:
+            call_vdsp_binary_f64["vDSP_vsubD"](rhs_ptr, lhs_ptr, out_ptr, result.size_value * 2)
+        result.backend_code = BACKEND_ACCELERATE
+        return True
+    return False
+
+
 def maybe_binary_same_shape_contiguous(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
     if (
         not same_shape(lhs.shape, rhs.shape)
@@ -1359,6 +1523,8 @@ def maybe_binary_same_shape_contiguous(lhs: Array, rhs: Array, mut result: Array
         and rhs.dtype_code == DTYPE_COMPLEX64
         and result.dtype_code == DTYPE_COMPLEX64
     ):
+        if maybe_complex_binary_contiguous_accelerate(lhs, rhs, result, op):
+            return True
         complex_binary_contig_typed[DType.float32](
             contiguous_f32_ptr(lhs),
             contiguous_f32_ptr(rhs),
@@ -1372,6 +1538,8 @@ def maybe_binary_same_shape_contiguous(lhs: Array, rhs: Array, mut result: Array
         and rhs.dtype_code == DTYPE_COMPLEX128
         and result.dtype_code == DTYPE_COMPLEX128
     ):
+        if maybe_complex_binary_contiguous_accelerate(lhs, rhs, result, op):
+            return True
         complex_binary_contig_typed[DType.float64](
             contiguous_f64_ptr(lhs),
             contiguous_f64_ptr(rhs),
@@ -2268,6 +2436,8 @@ def maybe_binary_contiguous(lhs: Array, rhs: Array, mut result: Array, op: Int) 
     if maybe_binary_scalar_contiguous(lhs, rhs, result, op, False):
         return True
     if maybe_binary_scalar_contiguous(rhs, lhs, result, op, True):
+        return True
+    if maybe_complex_binary_same_shape_strided(lhs, rhs, result, op):
         return True
     if maybe_binary_row_broadcast_contiguous(lhs, rhs, result, op, False):
         return True

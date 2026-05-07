@@ -225,3 +225,51 @@ remaining highest-ratio rows:
 - `array/creation::{ones_like,full_like}_transpose_f32`: about 12 us / 4.0x.
 - `strides/elementwise::rank3_transpose_add_f32`: 29.704 us / 3.624x.
 - `array/decomp::pinv_32_f64`: 159.928 us / 2.764x.
+
+## complex strided and contiguous add pass
+
+target:
+
+- fix complex same-shape strided arithmetic so non-contiguous complex views
+  preserve imaginary components.
+- route complex add/sub through Accelerate where the operation is really just
+  componentwise add/sub over interleaved real lanes.
+
+changed:
+
+- `src/elementwise.mojo`: added complex rank-1 strided add/sub through vDSP,
+  using separate real and imaginary strided calls over interleaved storage.
+- `src/elementwise.mojo`: added a generic same-shape strided complex fallback
+  for add/sub/mul/div, so complex views no longer fall into the real-only
+  broadcast fallback.
+- `src/elementwise.mojo`: added contiguous complex add/sub vDSP routing over
+  `2 * n` real lanes.
+- `tests/python/numpy_compat/test_complex.py`: added a nonzero reversed-view
+  regression test for complex add/sub.
+
+verification:
+
+- `env MOHAUS_MOJO=... .venv/bin/mohaus develop`
+- `.venv/bin/python -m pytest tests/python/numpy_compat/test_complex.py -q`
+- python smoke checked contiguous add/sub and reversed add backend tags.
+
+focused sweep artifacts:
+
+- `results/local-sweep-20260507-complex-pass/results.json`
+- `results/local-sweep-20260507-complex-pass2/results.json`
+- `results/local-sweep-20260507-complex-pass3/results.json`
+
+movement from final all-suite baseline to pass3:
+
+- `complex/views::reversed_add_complex64`: 26.940 us / 7.469x → 7.834 us / 2.575x.
+- `complex/elementwise::binary_add_complex64`: 10.731 us / 3.895x → 3.115 us / 1.263x.
+- `complex/elementwise::binary_add_complex128`: 12.460 us / 4.344x → 3.286 us / 1.204x.
+- complex-suite geomean: 2.349x best-ratio → 1.704x best-ratio.
+
+remaining complex debts:
+
+- `complex/views::reversed_add_complex64` is still 2.5x because it uses two
+  strided vDSP calls, one for real and one for imag. a custom interleaved
+  reverse-copy-add kernel might beat vDSP dispatch at this size.
+- complex matmul remains about 2.2x at 64x64.
+- complex interop/cast overhead is still about 1.8-2.0x.

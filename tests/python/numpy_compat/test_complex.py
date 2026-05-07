@@ -41,6 +41,19 @@ def test_complex_arithmetic_add_sub_mul_div_match_numpy() -> None:
   numpy.testing.assert_allclose(numpy.asarray(a_mp / b_mp), a_np / b_np, rtol=1e-12)
 
 
+def test_complex_strided_arithmetic_preserves_imaginary_part() -> None:
+  a_np = numpy.asarray([1 + 2j, -3 + 5j, 7 - 11j, 13 + 17j], dtype=numpy.complex64)
+  b_np = numpy.asarray([2 - 1j, 4 + 3j, -5 + 9j, 6 - 7j], dtype=numpy.complex64)
+  a_mp = mp.asarray(a_np, dtype=mp.complex64)
+  b_mp = mp.asarray(b_np, dtype=mp.complex64)
+  numpy.testing.assert_allclose(
+    numpy.asarray(a_mp[::-1] + b_mp[::-1]), a_np[::-1] + b_np[::-1], rtol=1e-6
+  )
+  numpy.testing.assert_allclose(
+    numpy.asarray(a_mp[::-1] - b_mp[::-1]), a_np[::-1] - b_np[::-1], rtol=1e-6
+  )
+
+
 def test_complex_negate_preserves_imaginary_part() -> None:
   a = mp.asarray([1 + 2j, 3 + 4j], dtype=mp.complex128)
   numpy.testing.assert_array_equal(numpy.asarray(-a), [-1 - 2j, -3 - 4j])
