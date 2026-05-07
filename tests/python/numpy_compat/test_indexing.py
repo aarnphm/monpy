@@ -91,6 +91,18 @@ def test_newaxis_indexing_matches_numpy_and_shares_storage() -> None:
   arr = np.arange(6, dtype=np.int64).reshape(2, 3)
   oracle = numpy.arange(6, dtype=numpy.int64).reshape(2, 3)
 
+  full_view = arr[:, None, :]
+  full_expected = oracle[:, None, :]
+
+  assert_same_shape_dtype(full_view, full_expected)
+  assert_same_values(full_view, full_expected)
+  assert full_view.strides == full_expected.strides
+
+  full_view[1, 0, 1] = -5
+  full_expected[1, 0, 1] = -5
+
+  assert_same_values(arr, oracle)
+
   view = arr[:, None, ::-1]
   expected = oracle[:, None, ::-1]
 

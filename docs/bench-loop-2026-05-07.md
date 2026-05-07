@@ -328,3 +328,59 @@ next likely pass:
   stack/vstack reshape shortcuts.
 - full-slice plus `None` indexing shortcut for `helper[:, None, :]`, skipping
   the redundant native `slice` call when all real axes are full slices.
+
+## wrapper join/view pass
+
+target:
+
+- remove python wrapper work around already-native copies and pure view
+  reshapes.
+- keep fallbacks intact for casting, non-contiguous inputs, non-axis-0 stack,
+  and partial/reversed slices.
+
+changed:
+
+- `python/monpy/__init__.py`: `concatenate` now has a same-dtype
+  c-contiguous fast path that calls native concatenate directly without
+  `result_type`, `astype`, or `ascontiguousarray` churn.
+- `python/monpy/__init__.py`: `stack(axis=0)` now concatenates the original
+  arrays once and reshapes to `(len(arrs),) + ref_shape`, avoiding per-input
+  `expand_dims`.
+- `python/monpy/__init__.py`: `vstack` now handles the all-1d case by
+  concatenating originals and reshaping to `(len(arrs), row_width)`, avoiding
+  `atleast_2d` reshapes for the hot path.
+- `python/monpy/__init__.py`: indexing with only full slices plus `None` now
+  skips the no-op native slice and applies only the needed `expand_dims` views.
+
+verification:
+
+- `.venv/bin/python -m pytest tests/python/numpy_compat/test_creation_helpers.py tests/python/numpy_compat/test_indexing.py -q`
+- python smoke checked full-slice `newaxis`, `concatenate`, `stack`, and
+  `vstack` shapes.
+
+focused sweep artifact:
+
+- `results/local-sweep-20260507-wrapper-pass/results.json`
+
+movement from fill pass to wrapper pass:
+
+- `array/native_kernels::concatenate_axis0_8x128_f64`: 15.052 us / 4.878x → 7.365 us / 2.336x.
+- `array/views::concatenate_axis0_f32`: 6.075 us / 2.479x → 4.265 us / 1.718x.
+- `array/views::stack_axis0_f32`: 12.385 us / 3.176x → 8.167 us / 2.345x.
+- `array/views::vstack_f32`: 11.828 us / 3.499x → 8.554 us / 2.538x.
+- `array/views::hstack_f32`: 6.547 us / 2.213x → 4.718 us / 1.603x.
+- `array/views::newaxis_middle_f32`: 8.134 us / 3.875x → 5.881 us / 2.787x.
+- array-suite best-ratio geomean on focused run: 1.122x → 1.111x.
+
+remaining top rows after wrapper pass:
+
+- `array/creation::logspace_50`: 21.652 us / 3.765x.
+- `array/views::squeeze_axis0_f32`: 7.896 us / 3.218x. Benchmark still allocates
+  a numpy array inside the timed monpy lambda, so this row needs measurement
+  cleanup before runtime work.
+- `array/ext_dtypes::reduce_sum_{u64,u16,u8,i32,u32}`: about 9.9-10.1 us /
+  2.7-2.9x, likely still on the f64 round-trip reduction path.
+- `array/decomp::pinv_8_f64` and `pinv_32_f64`: still 2.6-2.7x, probably
+  native LAPACK scratch/query overhead plus python tuple handling.
+- `array/views::newaxis_middle_f32`: still 2.8x because it needs native
+  `expand_dims`; a fused view constructor would be the next principled cut.

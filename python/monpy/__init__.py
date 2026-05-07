@@ -436,11 +436,24 @@ class ndarray:
     if self.size!=1:raise TypeError(_S1E)
     return self._native.get_scalar(0)
   def _view_for_key(self,key:object)->ndarray:
-    parts=_expand_key(key,self.ndim);starts:list[int]=[];stops:list[int]=[];steps:list[int]=[];drops:list[int]=[]            # drops[axis]==1 → collapse axis (integer index, not slice)
+    parts=_expand_key(key,self.ndim);shape=self.shape
+    if builtins.any(p is None for p in parts):
+      axis=0;result_axis=0;new_axes:list[int]=[];only_full_slices=True
+      for part in parts:
+        if part is None:new_axes.append(result_axis);result_axis+=1;continue
+        if not isinstance(part,slice):only_full_slices=False;break
+        d=shape[axis];a,b,c=part.indices(d)
+        if a!=0 or b!=d or c!=1:only_full_slices=False;break
+        axis+=1;result_axis+=1
+      if only_full_slices and axis==len(shape):
+        out=self
+        for ax in new_axes:out=ndarray._wrap(_native.expand_dims(out._native,ax),base=out)
+        return out
+    starts:list[int]=[];stops:list[int]=[];steps:list[int]=[];drops:list[int]=[]                                      # drops[axis]==1 → collapse axis (integer index, not slice)
     axis=0;result_axis=0;new_axes:list[int]=[]
     for part in parts:
       if part is None:new_axes.append(result_axis);result_axis+=1;continue
-      d=self.shape[axis]
+      d=shape[axis]
       if isinstance(part,slice):a,b,c=part.indices(d);starts.append(a);stops.append(b);steps.append(c);drops.append(0)
       else:i=_norm_idx(part,d);starts.append(i);stops.append(i+1);steps.append(1);drops.append(1)
       axis+=1
@@ -883,6 +896,11 @@ def concatenate(arrays:Sequence[object],axis:int=0,*,out:object=None,dtype:objec
   if out is not None:raise NotImplementedError("concatenate out= not implemented in monpy v1")
   arrs=[asarray(a) for a in arrays]
   if not arrs:raise ValueError("concatenate: need at least one array")
+  if dtype is None:
+    dtype_code=builtins.int(arrs[0]._native.dtype_code());all_fast=True
+    for a in arrs:
+      if builtins.int(a._native.dtype_code())!=dtype_code or not a._native.is_c_contiguous():all_fast=False;break
+    if all_fast:return ndarray._wrap(_native.concatenate([a._native for a in arrs],axis,dtype_code))
   t=_resolve_dtype(dtype) if dtype is not None else result_type(*arrs)
   # Pre-cast all inputs and pre-materialise into c-contig — native concat
   # walks logical indices, but the f64 round-trip path is faster on
@@ -895,11 +913,15 @@ def stack(arrays:Sequence[object],axis:int=0,*,out:object=None,dtype:object=None
   arrs=[asarray(a) for a in arrays]
   if not arrs:raise ValueError("stack: need at least one array")
   ref=arrs[0]
+  ref_shape=ref.shape
   for a in arrs:
-    if a.shape!=ref.shape:raise ValueError("stack: arrays must have identical shape")
+    if a.shape!=ref_shape:raise ValueError("stack: arrays must have identical shape")
   n=ref.ndim
   ax=axis+n+1 if axis<0 else axis
   if ax<0 or ax>n:raise ValueError("stack: axis out of range")
+  if ax==0 and n>0:
+    flat=concatenate(arrs,axis=0,dtype=dtype)
+    return flat.reshape((len(arrs),)+ref_shape)
   expanded=[expand_dims(a,ax) for a in arrs]
   return concatenate(expanded,axis=ax,dtype=dtype)
 
@@ -910,7 +932,13 @@ def hstack(arrays:Sequence[object])->ndarray:
   return concatenate(arrs,axis=1)
 
 def vstack(arrays:Sequence[object])->ndarray:
-  arrs=[atleast_2d(a) for a in arrays]
+  raw=[asarray(a) for a in arrays]
+  if raw and builtins.all(a.ndim==1 for a in raw):
+    row_width=raw[0].shape[0]
+    if builtins.all(a.shape[0]==row_width for a in raw):
+      flat=concatenate(raw,axis=0)
+      return flat.reshape((len(raw),row_width))
+  arrs=[atleast_2d(a) for a in raw]
   return concatenate(arrs,axis=0)
 
 def dstack(arrays:Sequence[object])->ndarray:

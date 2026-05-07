@@ -100,3 +100,25 @@ def test_ix_returns_outer_index_arrays() -> None:
   ax, bx = np.ix_(a, b)
   assert ax.shape == (3, 1)
   assert bx.shape == (1, 4)
+
+
+def test_join_helpers_match_numpy_for_axis0_fast_paths() -> None:
+  a = np.arange(4, dtype=np.float32)
+  b = np.arange(4, 8, dtype=np.float32)
+  a_np = numpy.arange(4, dtype=numpy.float32)
+  b_np = numpy.arange(4, 8, dtype=numpy.float32)
+
+  numpy.testing.assert_array_equal(numpy.asarray(np.concatenate([a, b])), numpy.concatenate([a_np, b_np]))
+  numpy.testing.assert_array_equal(numpy.asarray(np.stack([a, b], axis=0)), numpy.stack([a_np, b_np], axis=0))
+  numpy.testing.assert_array_equal(numpy.asarray(np.vstack([a, b])), numpy.vstack([a_np, b_np]))
+
+
+def test_stack_axis0_fast_path_preserves_dtype_override() -> None:
+  a = np.arange(3, dtype=np.int64)
+  b = np.arange(3, 6, dtype=np.int64)
+  expected = numpy.stack([numpy.arange(3), numpy.arange(3, 6)], axis=0).astype(numpy.float32)
+
+  out = np.stack([a, b], axis=0, dtype=np.float32)
+
+  assert out.dtype == np.float32
+  numpy.testing.assert_array_equal(numpy.asarray(out), expected)
