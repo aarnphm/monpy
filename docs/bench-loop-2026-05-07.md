@@ -384,3 +384,51 @@ remaining top rows after wrapper pass:
   native LAPACK scratch/query overhead plus python tuple handling.
 - `array/views::newaxis_middle_f32`: still 2.8x because it needs native
   `expand_dims`; a fused view constructor would be the next principled cut.
+
+## integer reduction pass
+
+target:
+
+- remove f64 round-trip reduction overhead for full-array integer and bool
+  sums.
+- keep the scope narrow: full reduction only. Axis reductions still need their
+  own strided/output-shape kernels.
+
+changed:
+
+- `src/elementwise.mojo`: extended `maybe_reduce_contiguous` with typed
+  full-array `REDUCE_SUM` paths for bool, signed ints, and unsigned ints.
+  Signed and bool sums accumulate/write `int64`; unsigned sums accumulate/write
+  `uint64`, matching the native dtype promotion table.
+- `tests/python/numpy_compat/test_ufunc.py`: added value-parity coverage for
+  bool, signed integer, and unsigned integer `add.reduce(axis=None)`.
+
+verification:
+
+- `env MOHAUS_MOJO=... .venv/bin/mohaus develop`
+- `.venv/bin/python -m pytest tests/python/numpy_compat/test_ufunc.py -q`
+
+focused sweep artifact:
+
+- `results/local-sweep-20260507-reduce-pass/results.json`
+
+movement from wrapper pass to reduce pass:
+
+- `array/ext_dtypes::reduce_sum_u8`: 9.911 us / 2.756x → 3.850 us / 1.032x.
+- `array/ext_dtypes::reduce_sum_u16`: 10.135 us / 2.801x → 3.856 us / 1.027x.
+- `array/ext_dtypes::reduce_sum_u32`: 10.052 us / 2.739x → 3.845 us / 1.051x.
+- `array/ext_dtypes::reduce_sum_u64`: 10.006 us / 2.934x → 3.949 us / 1.132x.
+- `array/ext_dtypes::reduce_sum_i32`: 9.936 us / 2.746x → 3.807 us / 1.017x.
+- array-suite best-ratio geomean on focused run: 1.111x → 1.094x.
+
+known non-win:
+
+- `array/ext_dtypes::reduce_sum_f16`: 9.952 us / 2.417x → 9.467 us / 2.297x.
+  Float16 still needs a typed accumulation path if we care about that row.
+
+rejected branch:
+
+- tried a native positive-base `logspace` path. It moved the right work into
+  native code, but Mojo `pow` differed from numpy/Python float64 results by
+  about `7e-10` relative on the existing `rtol=1e-12` parity test. Backed out;
+  this row needs an accuracy-first design, not a faster wrong `pow`.

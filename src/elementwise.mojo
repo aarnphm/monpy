@@ -67,6 +67,7 @@ from accelerate import (
 from domain import (
     BACKEND_ACCELERATE,
     BACKEND_FUSED,
+    DTYPE_BOOL,
     DTYPE_COMPLEX128,
     DTYPE_COMPLEX64,
     DTYPE_FLOAT16,
@@ -2536,6 +2537,79 @@ def maybe_sin_add_mul_contiguous(
 
 
 def maybe_reduce_contiguous(src: Array, mut result: Array, op: Int) raises -> Bool:
+    if op == REDUCE_SUM and is_c_contiguous(src):
+        if src.dtype_code == DTYPE_BOOL:
+            var acc = Int64(0)
+            var ptr = contiguous_u8_ptr(src)
+            for i in range(src.size_value):
+                acc += Int64(Int(ptr[i]))
+            set_logical_from_i64(result, 0, acc)
+            result.backend_code = BACKEND_FUSED
+            return True
+        if src.dtype_code == DTYPE_INT64:
+            var acc = Int64(0)
+            var ptr = contiguous_i64_ptr(src)
+            for i in range(src.size_value):
+                acc += ptr[i]
+            set_logical_from_i64(result, 0, acc)
+            result.backend_code = BACKEND_FUSED
+            return True
+        if src.dtype_code == DTYPE_INT32:
+            var acc = Int64(0)
+            var ptr = contiguous_i32_ptr(src)
+            for i in range(src.size_value):
+                acc += Int64(Int(ptr[i]))
+            set_logical_from_i64(result, 0, acc)
+            result.backend_code = BACKEND_FUSED
+            return True
+        if src.dtype_code == DTYPE_INT16:
+            var acc = Int64(0)
+            var ptr = contiguous_i16_ptr(src)
+            for i in range(src.size_value):
+                acc += Int64(Int(ptr[i]))
+            set_logical_from_i64(result, 0, acc)
+            result.backend_code = BACKEND_FUSED
+            return True
+        if src.dtype_code == DTYPE_INT8:
+            var acc = Int64(0)
+            var ptr = contiguous_i8_ptr(src)
+            for i in range(src.size_value):
+                acc += Int64(Int(ptr[i]))
+            set_logical_from_i64(result, 0, acc)
+            result.backend_code = BACKEND_FUSED
+            return True
+        if src.dtype_code == DTYPE_UINT64:
+            var acc = UInt64(0)
+            var ptr = contiguous_u64_ptr(src)
+            for i in range(src.size_value):
+                acc += ptr[i]
+            result.data.bitcast[UInt64]()[result.offset_elems] = acc
+            result.backend_code = BACKEND_FUSED
+            return True
+        if src.dtype_code == DTYPE_UINT32:
+            var acc = UInt64(0)
+            var ptr = contiguous_u32_ptr(src)
+            for i in range(src.size_value):
+                acc += UInt64(Int(ptr[i]))
+            result.data.bitcast[UInt64]()[result.offset_elems] = acc
+            result.backend_code = BACKEND_FUSED
+            return True
+        if src.dtype_code == DTYPE_UINT16:
+            var acc = UInt64(0)
+            var ptr = contiguous_u16_ptr(src)
+            for i in range(src.size_value):
+                acc += UInt64(Int(ptr[i]))
+            result.data.bitcast[UInt64]()[result.offset_elems] = acc
+            result.backend_code = BACKEND_FUSED
+            return True
+        if src.dtype_code == DTYPE_UINT8:
+            var acc = UInt64(0)
+            var ptr = contiguous_u8_ptr(src)
+            for i in range(src.size_value):
+                acc += UInt64(Int(ptr[i]))
+            result.data.bitcast[UInt64]()[result.offset_elems] = acc
+            result.backend_code = BACKEND_FUSED
+            return True
     if not is_contiguous_float_array(src):
         return False
     if op == REDUCE_SUM or op == REDUCE_MEAN:

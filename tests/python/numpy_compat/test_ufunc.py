@@ -263,6 +263,34 @@ def test_add_reduce_axis_int_matches_numpy() -> None:
   numpy.testing.assert_array_equal(numpy.asarray(mp.add.reduce(arr, axis=1)), oracle.sum(axis=1))
 
 
+@pytest.mark.parametrize(
+  ("mp_dtype", "np_dtype"),
+  [
+    (mp.bool, numpy.bool_),
+    (mp.int8, numpy.int8),
+    (mp.int16, numpy.int16),
+    (mp.int32, numpy.int32),
+    (mp.int64, numpy.int64),
+    (mp.uint8, numpy.uint8),
+    (mp.uint16, numpy.uint16),
+    (mp.uint32, numpy.uint32),
+    (mp.uint64, numpy.uint64),
+  ],
+)
+def test_add_reduce_integer_dtypes_match_numpy(mp_dtype: object, np_dtype: object) -> None:
+  if np_dtype is numpy.bool_:
+    values = numpy.asarray([True, False, True, True], dtype=np_dtype)
+  else:
+    values = numpy.arange(17, dtype=np_dtype)
+  arr = mp.asarray(values, dtype=mp_dtype)
+  out = mp.add.reduce(arr, axis=None)
+  expected = numpy.add.reduce(values, axis=None)
+
+  if np_dtype is numpy.int32:
+    assert numpy.asarray(out).dtype == numpy.asarray(expected).dtype
+  numpy.testing.assert_array_equal(numpy.asarray(out), expected)
+
+
 def test_add_reduce_keepdims_matches_numpy() -> None:
   arr = mp.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=mp.float64)
   out = mp.add.reduce(arr, axis=0, keepdims=True)
