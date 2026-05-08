@@ -773,3 +773,88 @@ The new broad frontier is `empty_like_shape_override_f32` at 1.905x,
 should be the view-wrapper cluster only after a quick profile decides whether
 `moveaxis` or `empty_like(shape=...)` has the larger removable Python metadata
 tax.
+
+### 2026-05-08 attention scalar and row-kernel recovery
+
+The linked reference commit, `e2ed21d`, only added `pyyaml`; it was not the
+attention regression point. A detached baseline at that commit measured the
+attention rows as:
+
+| row | `e2ed21d` monpy us | current-start monpy us | post-fix monpy us | post-fix ratio |
+| --- | -----------------: | ---------------------: | ----------------: | -------------: |
+| `attention/softmax/causal_scores_t32_f32` | 57.121 | 47.262 | 21.292 | 1.988x |
+| `attention/attention/causal_attention_t32_d32_f32` | 133.539 | 121.953 | 43.121 | 1.907x |
+| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 1606.192 | 1534.498 | 165.275 | 1.569x |
+
+The bad current-start profile was still real. It just came from the attention
+stack's generic paths, not the PyYAML commit:
+
+- `reduce_axis_ops` used the coordinate-list f64 walker for every
+  `axis=-1, keepdims=True` row reduction. Direct softmax decomposition showed
+  row `max` at 11.492 us and row `sum` at 11.272 us on a 32x32 float32 score
+  matrix.
+- `where(cond, fill, scores)` paid the full broadcast `MultiLayoutIter`, taking
+  about 55.867 us for the causal 32x32 mask.
+- `mnp.power(f32, 3.0)` used the ufunc array/0-d-array path, upcast to
+  float64, and turned the GPT MLP into mixed `float64 @ float32` fallback
+  matmuls. The two rectangular matmuls were about 565 us each before fixing
+  weak scalar handling.
+
+This pass added three general fast paths rather than benchmark-only branches:
+
+- C-contiguous last-axis reductions for float32/float64 `sum`, `mean`, `prod`,
+  `min`, and `max`. The sum/mean path reuses the existing 4-accumulator SIMD
+  reducer per row.
+- C-contiguous `(rows, cols)` by `(rows, 1)` binary broadcasting for float32 and
+  float64. This covers softmax row shifts/divides and layer-norm centering.
+- Same-shape bool-mask `where` for contiguous float32/float64 arrays, plus weak
+  Python-scalar ufunc dispatch so `mnp.power(float32_array, 3.0)` stays float32.
+  Scalar power `x**2` and `x**3` now lower to multiplication instead of libm
+  `pow`.
+
+Direct microbenchmarks for the attention shapes moved as follows:
+
+| operation | before us | after us |
+| --- | --------: | -------: |
+| `mnp.max(scores, axis=-1, keepdims=True)` | 11.492 | 2.658 |
+| `mnp.sum(scores, axis=-1, keepdims=True)` | 11.272 | 2.326 |
+| `scores - row_max` with a prebuilt `(32, 1)` row max | 8.7-ish | 4.858 |
+| `mnp.where(causal_mask, fill, scores)` | 55.867 | 3.443 |
+| `mnp.power(x_f32, 3.0)` for a 32x128 MLP activation | 64.073 | 2.379 |
+| `_gelu_monpy(32x128)` | about 61.4 after mask work | 37.245 |
+
+Post-fix decomposition now has the GPT row dominated by compositional layer
+norm and attention overhead, not BLAS misses:
+
+| operation | monpy us | numpy us |
+| --- | -------: | -------: |
+| layer norm, one 32x32 block | 23.699 | 10.844 |
+| causal attention on normalized input | 39.176 | 18.755 |
+| GELU on 32x128 MLP activation | 31.778 | 39.254 |
+| MLP output matmul | 1.674 | n/a |
+| final `lm_head` matmul | 1.624 | n/a |
+| full tiny GPT logits | 160.262 | 100.863 |
+
+Profile artifacts:
+
+- `results/local-profile-20260508-attention-softmax-current/manifest.json`
+  measured the pre-fix softmax row at 47.898 us/call, 54.4 MB max RSS, and a
+  96,504 byte traced allocation peak. The `sample(1)` report put most samples
+  inside `create::reduction_ops::reduce_axis_ops`.
+- `results/local-profile-20260508-attention-softmax-axislast-reduce/manifest.json`
+  measured the row-reduction-only softmax at 30.499 us/call with similar memory
+  shape, confirming the first bottleneck was the axis reducer.
+- `results/local-profile-20260508-attention-causal-weak-scalar-power/manifest.json`
+  measured the post-fix causal-attention row at 44.168 us/call, 54.1 MB max RSS,
+  and a 205,720 byte traced allocation peak.
+- `results/local-profile-20260508-attention-gpt-weak-scalar-power/manifest.json`
+  measured the post-fix GPT row at 171.755 us/call, 54.6 MB max RSS, 54.9 MB
+  allocation-pass max RSS, and a 202,800 byte traced allocation peak. The sample
+  is now dominated by repeated f32 binary kernels, row broadcasts, and wrapper
+  allocation around layer norm / softmax composition.
+
+Next target: fused row softmax and fused row layer norm. The current arithmetic
+is no longer absurd, but the benchmark still makes several Python/native
+round-trips and temporary arrays per row-normalization step. A single-pass
+last-axis layer norm and a stable row softmax would attack the remaining
+1.57x GPT gap directly.

@@ -28,6 +28,7 @@ from cute.iter import LayoutIter
 from domain import ArrayDType, ReduceOp
 from elementwise import (
     maybe_argmax_contiguous,
+    maybe_reduce_axis_last_contiguous,
     maybe_reduce_contiguous,
     maybe_reduce_strided_typed,
 )
@@ -222,6 +223,9 @@ def reduce_axis_ops(
     var out_size = result.size_value
     if out_size == 0:
         return PythonObject(alloc=result^)
+    if len(reduce_axes) == 1 and reduce_axes[0] == ndim - 1:
+        if maybe_reduce_axis_last_contiguous(src[], result, op):
+            return PythonObject(alloc=result^)
     # Build coord helper for output index → src physical offset of the
     # first element of the reduced subspace.
     var keep_strides = List[Int]()

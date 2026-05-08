@@ -142,6 +142,19 @@ def test_power_matches_numpy() -> None:
   )
 
 
+def test_power_scalar_square_and_cube_match_numpy() -> None:
+  a = mp.asarray([-2.0, -0.5, 0.0, 1.5], dtype=mp.float32)
+  oracle = numpy.asarray([-2.0, -0.5, 0.0, 1.5], dtype=numpy.float32)
+
+  square = mp.power(a, 2.0)
+  cube = mp.power(a, 3.0)
+
+  assert square.dtype == mp.float32
+  assert cube.dtype == mp.float32
+  numpy.testing.assert_allclose(numpy.asarray(square), numpy.power(oracle, 2.0))
+  numpy.testing.assert_allclose(numpy.asarray(cube), numpy.power(oracle, 3.0))
+
+
 def test_maximum_minimum_propagate_nan() -> None:
   a = mp.asarray([1.0, math.nan, 3.0], dtype=mp.float64)
   b = mp.asarray([2.0, 2.0, math.nan], dtype=mp.float64)

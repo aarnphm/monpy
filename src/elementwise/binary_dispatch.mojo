@@ -48,6 +48,7 @@ from .tile_kernels import (
     pick_inner_axis_for_strided_binary,
 )
 from .typed_kernels import (
+    binary_column_broadcast_contig_typed,
     binary_row_broadcast_contig_typed,
     binary_same_shape_contig_typed,
     binary_scalar_contig_typed,
@@ -625,6 +626,59 @@ def maybe_binary_row_broadcast_contiguous(
     return True
 
 
+def maybe_binary_column_keepdims_broadcast_contiguous(
+    matrix: Array,
+    column: Array,
+    mut result: Array,
+    op: Int,
+    column_on_left: Bool,
+) raises -> Bool:
+    if (
+        len(matrix.shape) != 2
+        or len(column.shape) != 2
+        or column.shape[0] != matrix.shape[0]
+        or column.shape[1] != 1
+        or not same_shape(matrix.shape, result.shape)
+        or not is_c_contiguous(matrix)
+        or not is_c_contiguous(column)
+        or not is_c_contiguous(result)
+    ):
+        return False
+    var rows = matrix.shape[0]
+    var cols = matrix.shape[1]
+    if (
+        matrix.dtype_code == ArrayDType.FLOAT32.value
+        and column.dtype_code == ArrayDType.FLOAT32.value
+        and result.dtype_code == ArrayDType.FLOAT32.value
+    ):
+        binary_column_broadcast_contig_typed[DType.float32](
+            contiguous_ptr[DType.float32](matrix),
+            contiguous_ptr[DType.float32](column),
+            contiguous_ptr[DType.float32](result),
+            rows,
+            cols,
+            op,
+            column_on_left,
+        )
+        return True
+    if (
+        matrix.dtype_code == ArrayDType.FLOAT64.value
+        and column.dtype_code == ArrayDType.FLOAT64.value
+        and result.dtype_code == ArrayDType.FLOAT64.value
+    ):
+        binary_column_broadcast_contig_typed[DType.float64](
+            contiguous_ptr[DType.float64](matrix),
+            contiguous_ptr[DType.float64](column),
+            contiguous_ptr[DType.float64](result),
+            rows,
+            cols,
+            op,
+            column_on_left,
+        )
+        return True
+    return False
+
+
 def maybe_binary_same_shape_strided(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
     # General N-D same-shape strided walker. Walks `inner_axis` with SIMD when
     # possible (full or load-only) and walks the remaining axes with a coord
@@ -819,6 +873,10 @@ def maybe_binary_contiguous(lhs: Array, rhs: Array, mut result: Array, op: Int) 
     if maybe_binary_row_broadcast_contiguous(lhs, rhs, result, op, False):
         return True
     if maybe_binary_row_broadcast_contiguous(rhs, lhs, result, op, True):
+        return True
+    if maybe_binary_column_keepdims_broadcast_contiguous(lhs, rhs, result, op, False):
+        return True
+    if maybe_binary_column_keepdims_broadcast_contiguous(rhs, lhs, result, op, True):
         return True
     if maybe_binary_rank1_strided_accelerate(lhs, rhs, result, op):
         return True

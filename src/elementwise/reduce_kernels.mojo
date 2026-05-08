@@ -38,6 +38,8 @@ from cute.iter import LayoutIter
 from domain import ArrayDType, BackendKind, ReduceOp
 
 from .predicates import is_contiguous_float_array
+
+
 def reduce_sum_typed[
     dtype: DType
 ](
@@ -82,6 +84,8 @@ def reduce_sum_typed[
         acc += Float64(src_ptr[i])
         i += 1
     return acc
+
+
 def reduce_strided_typed[dtype: DType](src: Array, op: Int) raises -> Float64:
     # Strided reduction via typed-pointer scalar walk. Two paths:
     #   1. linearly-addressable (transpose / swapaxes of c-contig):
@@ -172,10 +176,10 @@ def reduce_strided_typed[dtype: DType](src: Array, op: Int) raises -> Float64:
             iter.step()
         return Float64(acc)
     raise Error("reduce_strided_typed: unsupported op")
+
+
 @always_inline
-def _reduce_strided_and_write[
-    dt: DType
-](src: Array, mut result: Array, op: Int) raises:
+def _reduce_strided_and_write[dt: DType](src: Array, mut result: Array, op: Int) raises:
     # Run the typed strided reducer and write the bimodal result:
     # float dtypes → set_logical_from_f64 (acc is already Float64-cast);
     # integer dtypes → set_logical_from_i64 unless op is MEAN, in which
@@ -229,6 +233,77 @@ def maybe_reduce_strided_typed(src: Array, mut result: Array, op: Int) raises ->
     else:
         return False
     return True
+
+
+@always_inline
+def _reduce_axis_last_contiguous_typed[
+    dt: DType
+](src: Array, mut result: Array, op: Int) raises where dt.is_floating_point():
+    var cols = src.shape[len(src.shape) - 1]
+    var rows = src.size_value // cols
+    var ptr = contiguous_ptr[dt](src)
+    for row in range(rows):
+        var base = row * cols
+        if op == ReduceOp.SUM.value or op == ReduceOp.MEAN.value:
+            var acc = reduce_sum_typed[dt](ptr + base, cols)
+            if op == ReduceOp.MEAN.value:
+                acc = acc / Float64(cols)
+            set_logical_from_f64(result, row, acc)
+        elif op == ReduceOp.PROD.value:
+            var acc = ptr[base]
+            for col in range(1, cols):
+                acc *= ptr[base + col]
+            set_logical_from_f64(result, row, Float64(acc))
+        elif op == ReduceOp.MIN.value:
+            var acc = ptr[base]
+            for col in range(1, cols):
+                var value = ptr[base + col]
+                if value < acc:
+                    acc = value
+            set_logical_from_f64(result, row, Float64(acc))
+        elif op == ReduceOp.MAX.value:
+            var acc = ptr[base]
+            for col in range(1, cols):
+                var value = ptr[base + col]
+                if value > acc:
+                    acc = value
+            set_logical_from_f64(result, row, Float64(acc))
+    result.backend_code = BackendKind.FUSED.value
+
+
+def maybe_reduce_axis_last_contiguous(src: Array, mut result: Array, op: Int) raises -> Bool:
+    """Fast path for row-wise reductions of C-contiguous arrays.
+
+    Attention-style workloads hit `axis=-1, keepdims=True` repeatedly on
+    small float32 matrices. The generic axis reducer allocates coordinate
+    lists and round-trips each element through f64 dispatch; for a 32x32
+    row reduction that bookkeeping costs more than the arithmetic. This
+    path treats the last axis as contiguous rows and writes one scalar per
+    row, with the existing SIMD sum primitive for sum/mean.
+    """
+    if (
+        op != ReduceOp.SUM.value
+        and op != ReduceOp.MEAN.value
+        and op != ReduceOp.PROD.value
+        and op != ReduceOp.MIN.value
+        and op != ReduceOp.MAX.value
+    ):
+        return False
+    if len(src.shape) == 0:
+        return False
+    if src.shape[len(src.shape) - 1] == 0:
+        return False
+    if not is_c_contiguous(src):
+        return False
+    if src.dtype_code == ArrayDType.FLOAT32.value:
+        _reduce_axis_last_contiguous_typed[DType.float32](src, result, op)
+        return True
+    if src.dtype_code == ArrayDType.FLOAT64.value:
+        _reduce_axis_last_contiguous_typed[DType.float64](src, result, op)
+        return True
+    return False
+
+
 def maybe_reduce_contiguous(src: Array, mut result: Array, op: Int) raises -> Bool:
     if op == ReduceOp.SUM.value and is_c_contiguous(src):
         if src.dtype_code == ArrayDType.BOOL.value:

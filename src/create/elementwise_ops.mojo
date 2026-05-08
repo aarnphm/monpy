@@ -30,9 +30,11 @@ from array import (
     as_layout,
     broadcast_shape,
     clone_int_list,
+    contiguous_ptr,
     get_logical_as_f64,
     get_physical_as_f64,
     get_physical_bool,
+    is_c_contiguous,
     item_size,
     make_empty_array,
     result_dtype_for_binary,
@@ -62,6 +64,42 @@ from elementwise import (
 )
 
 from ._complex_helpers import _complex_imag, _complex_real, _complex_store
+
+
+def _where_bool_same_shape_contig_typed[dt: DType](cond: Array, lhs: Array, rhs: Array, mut result: Array) raises:
+    var cond_ptr = cond.data + cond.offset_elems
+    var lhs_ptr = contiguous_ptr[dt](lhs)
+    var rhs_ptr = contiguous_ptr[dt](rhs)
+    var out_ptr = contiguous_ptr[dt](result)
+    for i in range(result.size_value):
+        if cond_ptr[i] != UInt8(0):
+            out_ptr[i] = lhs_ptr[i]
+        else:
+            out_ptr[i] = rhs_ptr[i]
+    result.backend_code = BackendKind.FUSED.value
+
+
+def _maybe_where_bool_same_shape_contiguous(cond: Array, lhs: Array, rhs: Array, mut result: Array) raises -> Bool:
+    if (
+        cond.dtype_code != ArrayDType.BOOL.value
+        or lhs.dtype_code != rhs.dtype_code
+        or lhs.dtype_code != result.dtype_code
+        or not same_shape(cond.shape, result.shape)
+        or not same_shape(lhs.shape, result.shape)
+        or not same_shape(rhs.shape, result.shape)
+        or not is_c_contiguous(cond)
+        or not is_c_contiguous(lhs)
+        or not is_c_contiguous(rhs)
+        or not is_c_contiguous(result)
+    ):
+        return False
+    if lhs.dtype_code == ArrayDType.FLOAT32.value:
+        _where_bool_same_shape_contig_typed[DType.float32](cond, lhs, rhs, result)
+        return True
+    if lhs.dtype_code == ArrayDType.FLOAT64.value:
+        _where_bool_same_shape_contig_typed[DType.float64](cond, lhs, rhs, result)
+        return True
+    return False
 
 
 def unary_preserve_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
@@ -662,6 +700,8 @@ def where_ops(cond_obj: PythonObject, lhs_obj: PythonObject, rhs_obj: PythonObje
     var shape = broadcast_shape(tmp, rhs[])
     var dtype_code = result_dtype_for_binary(lhs[].dtype_code, rhs[].dtype_code, BinaryOp.ADD.value)
     var result = make_empty_array(dtype_code, shape^)
+    if _maybe_where_bool_same_shape_contiguous(cond[], lhs[], rhs[], result):
+        return PythonObject(alloc=result^)
     var cond_layout = as_broadcast_layout(cond[], result.shape)
     var lhs_layout = as_broadcast_layout(lhs[], result.shape)
     var rhs_layout = as_broadcast_layout(rhs[], result.shape)

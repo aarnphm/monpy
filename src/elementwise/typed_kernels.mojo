@@ -333,6 +333,29 @@ def binary_scalar_contig_typed[
     # f32 / f64 duplicate branches in `maybe_binary_scalar_contiguous`.
     comptime width = simd_width_of[dtype]()
     var scalar_vec = SIMD[dtype, width](scalar_value)
+    if not scalar_on_left and op == BinaryOp.POWER.value:
+        if scalar_value == Scalar[dtype](2):
+            var i = 0
+            while i + width <= size:
+                var value = array_ptr.load[width=width](i)
+                out_ptr.store(i, value * value)
+                i += width
+            while i < size:
+                var value = array_ptr[i]
+                out_ptr[i] = value * value
+                i += 1
+            return
+        if scalar_value == Scalar[dtype](3):
+            var i = 0
+            while i + width <= size:
+                var value = array_ptr.load[width=width](i)
+                out_ptr.store(i, (value * value) * value)
+                i += width
+            while i < size:
+                var value = array_ptr[i]
+                out_ptr[i] = (value * value) * value
+                i += 1
+            return
     var i = 0
     while i + width <= size:
         var array_vec = array_ptr.load[width=width](i)
@@ -488,6 +511,53 @@ def binary_row_broadcast_contig_typed[
                 out_ptr[matrix_index] = apply_binary_typed_vec[dtype, 1](rhs_v, lhs_v, op)[0]
             else:
                 out_ptr[matrix_index] = apply_binary_typed_vec[dtype, 1](lhs_v, rhs_v, op)[0]
+            j += 1
+
+
+def binary_column_broadcast_contig_typed[
+    dtype: DType
+](
+    matrix_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    column_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    rows: Int,
+    cols: Int,
+    op: Int,
+    column_on_left: Bool,
+) raises:
+    # Comptime-typed kernel for matrix⊕column and column⊕matrix where
+    # `column` has shape (rows, 1). This is the attention/layer-norm
+    # broadcast pattern after keepdims row reductions.
+    comptime width = simd_width_of[dtype]()
+    for i in range(rows):
+        var column_vec = SIMD[dtype, width](column_ptr[i])
+        var column_scalar = SIMD[dtype, 1](column_ptr[i])
+        var j = 0
+        while j + width <= cols:
+            var matrix_index = i * cols + j
+            var matrix_vec = matrix_ptr.load[width=width](matrix_index)
+            if op == BinaryOp.ADD.value:
+                out_ptr.store(matrix_index, matrix_vec + column_vec)
+            elif column_on_left:
+                out_ptr.store(
+                    matrix_index,
+                    apply_binary_typed_vec[dtype, width](column_vec, matrix_vec, op),
+                )
+            else:
+                out_ptr.store(
+                    matrix_index,
+                    apply_binary_typed_vec[dtype, width](matrix_vec, column_vec, op),
+                )
+            j += width
+        while j < cols:
+            var matrix_index = i * cols + j
+            var matrix_scalar = SIMD[dtype, 1](matrix_ptr[matrix_index])
+            if op == BinaryOp.ADD.value:
+                out_ptr[matrix_index] = matrix_ptr[matrix_index] + column_ptr[i]
+            elif column_on_left:
+                out_ptr[matrix_index] = apply_binary_typed_vec[dtype, 1](column_scalar, matrix_scalar, op)[0]
+            else:
+                out_ptr[matrix_index] = apply_binary_typed_vec[dtype, 1](matrix_scalar, column_scalar, op)[0]
             j += 1
 
 

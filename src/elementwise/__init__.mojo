@@ -122,6 +122,7 @@ from .predicates import (
 )
 from .reduce_kernels import (
     maybe_argmax_contiguous,
+    maybe_reduce_axis_last_contiguous,
     maybe_reduce_contiguous,
     maybe_reduce_strided_typed,
     reduce_strided_typed,
@@ -145,6 +146,7 @@ from .typed_kernels import (
     apply_binary_typed_vec_static,
     apply_unary_preserve_typed_vec,
     apply_unary_typed_vec,
+    binary_column_broadcast_contig_typed,
     binary_row_broadcast_contig_typed,
     binary_same_shape_contig_typed,
     binary_same_shape_contig_typed_static,

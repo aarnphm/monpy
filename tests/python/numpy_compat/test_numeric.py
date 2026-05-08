@@ -248,6 +248,40 @@ def test_axis_reductions_match_numpy() -> None:
   numpy.testing.assert_array_equal(numpy.asarray(np.sum(arr, keepdims=True)), oracle.sum(keepdims=True))
 
 
+def test_float_axis_last_reductions_match_numpy() -> None:
+  arr = (np.arange(4 * 5, dtype=np.float32).reshape(4, 5) / 7.0) - 1.0
+  oracle = (numpy.arange(4 * 5, dtype=numpy.float32).reshape(4, 5) / 7.0) - 1.0
+
+  for reducer in (np.sum, np.mean, np.min, np.max, np.prod):
+    numpy.testing.assert_allclose(
+      numpy.asarray(reducer(arr, axis=-1)),
+      reducer(oracle, axis=-1),
+      rtol=1e-6,
+      atol=1e-6,
+    )
+    numpy.testing.assert_allclose(
+      numpy.asarray(reducer(arr, axis=-1, keepdims=True)),
+      reducer(oracle, axis=-1, keepdims=True),
+      rtol=1e-6,
+      atol=1e-6,
+    )
+
+
+def test_float_axis_last_keepdims_binary_broadcast_matches_numpy() -> None:
+  arr = (np.arange(4 * 5, dtype=np.float32).reshape(4, 5) / 9.0) + 1.0
+  oracle = (numpy.arange(4 * 5, dtype=numpy.float32).reshape(4, 5) / 9.0) + 1.0
+  col = np.mean(arr, axis=-1, keepdims=True)
+  oracle_col = numpy.mean(oracle, axis=-1, keepdims=True)
+
+  for got, expected in (
+    (arr - col, oracle - oracle_col),
+    (col - arr, oracle_col - oracle),
+    (arr / col, oracle / oracle_col),
+    (col / arr, oracle_col / oracle),
+  ):
+    numpy.testing.assert_allclose(numpy.asarray(got), expected, rtol=1e-6, atol=1e-6)
+
+
 def test_matmul_matches_numpy_for_1d_and_2d() -> None:
   mat = np.asarray([[1, 2], [3, 4]], dtype=np.float64)
   rhs = np.asarray([[5, 6], [7, 8]], dtype=np.float64)
@@ -404,6 +438,18 @@ def test_where_matches_numpy() -> None:
   rhs = np.asarray([10, 20, 30])
 
   assert np.where(cond, lhs, rhs).tolist() == numpy.where([True, False, True], [1, 2, 3], [10, 20, 30]).tolist()
+
+
+def test_where_float_same_shape_matches_numpy() -> None:
+  cond = np.asarray([[True, False, True], [False, True, False]])
+  lhs = np.asarray([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
+  rhs = np.asarray([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]], dtype=np.float32)
+  oracle = numpy.where(numpy.asarray(cond), numpy.asarray(lhs), numpy.asarray(rhs))
+
+  out = np.where(cond, lhs, rhs)
+
+  numpy.testing.assert_allclose(numpy.asarray(out), oracle)
+  assert out._native.used_fused()
 
 
 def test_where_broadcasts_scalars_and_arrays() -> None:
