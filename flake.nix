@@ -138,6 +138,11 @@
           packages = (commonPackages pkgs) ++ preCommit.enabledPackages;
 
           shellHook = ''
+            export UV_PYTHON="${pkgs.python311}/bin/python3.11"
+            export UV_NO_MANAGED_PYTHON=1
+            export UV_PYTHON_DOWNLOADS=never
+            export PYTHON="$UV_PYTHON"
+
             if [ -z "''${MOHAUS_MOJO:-}" ] \
               && [ -n "''${MODULAR_DERIVED_PATH:-}" ] \
               && [ -x "''${MODULAR_DERIVED_PATH:-}/build/bin/mojo" ]; then
