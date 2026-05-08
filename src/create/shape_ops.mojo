@@ -393,6 +393,32 @@ def diagonal_ops(
     return PythonObject(alloc=result^)
 
 
+def slice_1d_ops(
+    array_obj: PythonObject,
+    start_obj: PythonObject,
+    stop_obj: PythonObject,
+    step_obj: PythonObject,
+) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    if len(src[].shape) != 1:
+        raise Error("slice_1d() requires a rank-1 array")
+    var start = Int(py=start_obj)
+    var stop = Int(py=stop_obj)
+    var step = Int(py=step_obj)
+    var shape = List[Int]()
+    shape.append(slice_length(src[].shape[0], start, stop, step))
+    var strides = List[Int]()
+    strides.append(src[].strides[0] * step)
+    var result = make_view_array(
+        src[],
+        shape^,
+        strides^,
+        shape_size(shape),
+        src[].offset_elems + start * src[].strides[0],
+    )
+    return PythonObject(alloc=result^)
+
+
 def trace_ops(
     array_obj: PythonObject,
     offset_obj: PythonObject,

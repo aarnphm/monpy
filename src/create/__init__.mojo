@@ -108,7 +108,10 @@ from ._complex_helpers import _complex_imag, _complex_real, _complex_store
 from .creation_ops import (
     arange_ops,
     copy_from_external_ops,
+    copyto_ops,
     empty_ops,
+    eye_ops,
+    fill_ops,
     from_external_ops,
     from_flat_ops,
     full_like_ops,
@@ -116,6 +119,7 @@ from .creation_ops import (
     indices_ops,
     linspace_ops,
     logspace_ops,
+    tri_ops,
 )
 from .elementwise_ops import (
     apply_unary_complex_f64,
@@ -152,6 +156,7 @@ from .shape_ops import (
     pad_constant_ops,
     ravel_ops,
     reshape_ops,
+    slice_1d_ops,
     slice_ops,
     squeeze_all_ops,
     squeeze_axes_ops,
@@ -197,175 +202,3 @@ from .linalg_ops import (
 
 
 
-def eye_ops(
-    n_obj: PythonObject,
-    m_obj: PythonObject,
-    k_obj: PythonObject,
-    dtype_code_obj: PythonObject,
-) raises -> PythonObject:
-    # Native diagonal-fill identity. Replaces python loop that was
-    # ~100-250× slower than numpy at N=64.
-    var n = Int(py=n_obj)
-    var m = Int(py=m_obj)
-    var k = Int(py=k_obj)
-    var dtype_code = Int(py=dtype_code_obj)
-    var shape = List[Int]()
-    shape.append(n)
-    shape.append(m)
-    var result = make_empty_array(dtype_code, shape^)
-    if dtype_code == ArrayDType.FLOAT32.value:
-        var out_ptr = contiguous_f32_ptr(result)
-        for i in range(n * m):
-            out_ptr[i] = Float32(0.0)
-        var start_i = 0 if k >= 0 else -k
-        var max_diag = n if (m - k) > n else (m - k)
-        var end_i = max_diag if max_diag > 0 else 0
-        if end_i > n:
-            end_i = n
-        for i in range(start_i, end_i):
-            var col = i + k
-            if col >= 0 and col < m:
-                out_ptr[i * m + col] = Float32(1.0)
-        return PythonObject(alloc=result^)
-    if dtype_code == ArrayDType.FLOAT64.value:
-        var out_ptr = contiguous_f64_ptr(result)
-        for i in range(n * m):
-            out_ptr[i] = 0.0
-        var start_i = 0 if k >= 0 else -k
-        var max_diag = n if (m - k) > n else (m - k)
-        var end_i = max_diag if max_diag > 0 else 0
-        if end_i > n:
-            end_i = n
-        for i in range(start_i, end_i):
-            var col = i + k
-            if col >= 0 and col < m:
-                out_ptr[i * m + col] = 1.0
-        return PythonObject(alloc=result^)
-    # Zero out first.
-    for i in range(n * m):
-        set_logical_from_f64(result, i, 0.0)
-    # Walk diagonal.
-    var start_i = 0 if k >= 0 else -k
-    var max_diag = n if (m - k) > n else (m - k)
-    var end_i = max_diag if max_diag > 0 else 0
-    if end_i > n:
-        end_i = n
-    for i in range(start_i, end_i):
-        var col = i + k
-        if col >= 0 and col < m:
-            set_logical_from_f64(result, i * m + col, 1.0)
-    return PythonObject(alloc=result^)
-
-
-def tri_ops(
-    n_obj: PythonObject,
-    m_obj: PythonObject,
-    k_obj: PythonObject,
-    dtype_code_obj: PythonObject,
-) raises -> PythonObject:
-    var n = Int(py=n_obj)
-    var m = Int(py=m_obj)
-    var k = Int(py=k_obj)
-    var dtype_code = Int(py=dtype_code_obj)
-    var shape = List[Int]()
-    shape.append(n)
-    shape.append(m)
-    var result = make_empty_array(dtype_code, shape^)
-    if dtype_code == ArrayDType.FLOAT32.value:
-        var out_ptr = contiguous_f32_ptr(result)
-        for r in range(n):
-            var row_limit = r + k + 1
-            if row_limit < 0:
-                row_limit = 0
-            if row_limit > m:
-                row_limit = m
-            for c in range(m):
-                if c < row_limit:
-                    out_ptr[r * m + c] = Float32(1.0)
-                else:
-                    out_ptr[r * m + c] = Float32(0.0)
-        return PythonObject(alloc=result^)
-    if dtype_code == ArrayDType.FLOAT64.value:
-        var out_ptr = contiguous_f64_ptr(result)
-        for r in range(n):
-            var row_limit = r + k + 1
-            if row_limit < 0:
-                row_limit = 0
-            if row_limit > m:
-                row_limit = m
-            for c in range(m):
-                if c < row_limit:
-                    out_ptr[r * m + c] = 1.0
-                else:
-                    out_ptr[r * m + c] = 0.0
-        return PythonObject(alloc=result^)
-    for r in range(n):
-        var row_limit = r + k + 1
-        if row_limit < 0:
-            row_limit = 0
-        if row_limit > m:
-            row_limit = m
-        for c in range(m):
-            var value = 0.0
-            if c < row_limit:
-                value = 1.0
-            set_logical_from_f64(result, r * m + c, value)
-    return PythonObject(alloc=result^)
-
-
-def fill_ops(array_obj: PythonObject, value_obj: PythonObject) raises -> PythonObject:
-    var dst = array_obj.downcast_value_ptr[Array]()
-    fill_all_from_py(dst[], value_obj)
-    return PythonObject(None)
-
-
-def copyto_ops(dst_obj: PythonObject, src_obj: PythonObject) raises -> PythonObject:
-    var dst = dst_obj.downcast_value_ptr[Array]()
-    var src = src_obj.downcast_value_ptr[Array]()
-    var shape = broadcast_shape(src[], dst[])
-    if not same_shape(shape, dst[].shape):
-        raise Error("copyto() source is not broadcastable to destination")
-    var src_layout = as_broadcast_layout(src[], dst[].shape)
-    var dst_layout = as_layout(dst[])
-    var src_item = item_size(src[].dtype_code)
-    var dst_item = item_size(dst[].dtype_code)
-    var operand_layouts = List[Layout]()
-    operand_layouts.append(src_layout^)
-    operand_layouts.append(dst_layout^)
-    var item_sizes = List[Int]()
-    item_sizes.append(src_item)
-    item_sizes.append(dst_item)
-    var base_offsets = List[Int]()
-    base_offsets.append(src[].offset_elems * src_item)
-    base_offsets.append(dst[].offset_elems * dst_item)
-    var iter = MultiLayoutIter(dst[].shape, operand_layouts^, item_sizes^, base_offsets^)
-    while iter.has_next():
-        set_physical_from_f64(dst[], iter.element_index(1), get_physical_as_f64(src[], iter.element_index(0)))
-        iter.step()
-    return PythonObject(None)
-
-
-def slice_1d_ops(
-    array_obj: PythonObject,
-    start_obj: PythonObject,
-    stop_obj: PythonObject,
-    step_obj: PythonObject,
-) raises -> PythonObject:
-    var src = array_obj.downcast_value_ptr[Array]()
-    if len(src[].shape) != 1:
-        raise Error("slice_1d() requires a rank-1 array")
-    var start = Int(py=start_obj)
-    var stop = Int(py=stop_obj)
-    var step = Int(py=step_obj)
-    var shape = List[Int]()
-    shape.append(slice_length(src[].shape[0], start, stop, step))
-    var strides = List[Int]()
-    strides.append(src[].strides[0] * step)
-    var result = make_view_array(
-        src[],
-        shape^,
-        strides^,
-        shape_size(shape),
-        src[].offset_elems + start * src[].strides[0],
-    )
-    return PythonObject(alloc=result^)
