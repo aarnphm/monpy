@@ -371,9 +371,9 @@ def main() -> None:
   )
   parser.add_argument("--comment-title", default="monpy benchmark sweep")
   parser.add_argument(
-    "--replace-legacy",
+    "--migrate-legacy-comment",
     action="store_true",
-    help="allow this comment to replace the old single-comment benchmark markers",
+    help="allow this keyed comment to claim the old single-comment benchmark markers",
   )
   parser.add_argument("--post", action="store_true")
   args = parser.parse_args()
@@ -382,7 +382,7 @@ def main() -> None:
   marker = comment_marker(args.comment_key)
   if args.comment_key is None:
     markers = (MARKER, *LEGACY_MARKERS)
-  elif args.replace_legacy:
+  elif args.migrate_legacy_comment:
     markers = (marker, MARKER, *LEGACY_MARKERS)
   else:
     markers = (marker,)

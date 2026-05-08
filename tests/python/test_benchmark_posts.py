@@ -124,3 +124,32 @@ def test_existing_comment_id_prefers_platform_marker_over_legacy(
   )
 
   assert comment_id == 2
+
+
+def test_existing_comment_id_can_claim_legacy_marker(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  posts = load_posts_module()
+  comments = [
+    {"id": 1, "body": "<!-- monpy-bench -->\n\n### monpy benchmark sweep"},
+  ]
+
+  def fake_request_json(
+    method: str,
+    path: str,
+    *,
+    token: str,
+    body: Mapping[str, object] | None = None,
+  ) -> object:
+    return comments
+
+  monkeypatch.setattr(posts, "request_json", fake_request_json)
+
+  comment_id = posts.existing_comment_id(
+    repo="aarnphm/monpy",
+    sha="abc123",
+    token="token",
+    markers=(posts.comment_marker("arm"), posts.MARKER, *posts.LEGACY_MARKERS),
+  )
+
+  assert comment_id == 1

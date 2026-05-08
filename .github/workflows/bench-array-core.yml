@@ -155,7 +155,7 @@ jobs:
             --post
           )
           if [[ "${{ matrix.comment_key }}" == "arm" ]]; then
-            post_args+=(--replace-legacy)
+            post_args+=(--migrate-legacy-comment)
           fi
           .venv/bin/python .github/scripts/posts.py "${post_args[@]}"
 
