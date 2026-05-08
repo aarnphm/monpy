@@ -239,6 +239,10 @@ class Ufunc:
   @property
   def identity(self)->object:return self._identity
   def __call__(self, *args:object, out:ndarray|None=None, where:object=True, casting:typing.Literal["no", "equiv", "safe", "same_kind", "unsafe"]="same_kind", dtype:object=None)->ndarray:
+    if (self.nin==2 and out is not None and dtype is None and where is True and casting=="same_kind" and len(args)==2
+        and type(args[0]) is ndarray and type(args[1]) is ndarray and type(out) is ndarray and self._kind=="binary"):
+      _native.binary_into(out._native, typing.cast(ndarray, args[0])._native, typing.cast(ndarray, args[1])._native, self._op)
+      return out
     if _has_kernel_arg(args):
       if out is not None or where is not True or dtype is not None:raise NotImplementedError(f"{self.__name__}: staged ufunc out/where/dtype are not implemented")
       from .kernels import dsl as _kernel_dsl

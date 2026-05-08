@@ -921,3 +921,39 @@ focused tests passed. The one-round role-first smoke wrote
 medians: softmax 15.584 us vs NumPy 20.375 us (0.765x), attention 34.125 us vs
 NumPy 36.250 us (0.941x), GPT 111.917 us vs NumPy 140.750 us (0.795x). Treat
 these as import/runner signal only.
+
+### 2026-05-08 binary `out=` ufunc fast path
+
+The heartbeat target sweep
+`results/local-sweep-20260508-heartbeat-all-targets/manifest.json` showed that
+attention rows were already ahead of NumPy on the current machine, while the
+wrapper-bound `array/elementwise/binary_add_out_f32` row still cost 2.126x NumPy
+time. The benchmark already had a lower-level extension comparison,
+`binary_add_extension_out_f32`, at 1.128x, which isolated most of the remaining
+gap to Python ufunc dispatch rather than the native loop.
+
+`python/monpy/__init__.py` now gives the exact `ndarray, ndarray, out=ndarray`
+binary ufunc case a direct `_native.binary_into(...)` path before the staged
+kernel probe and promotion machinery. This is intentionally narrow: default
+`where=True`, default `casting="same_kind"`, no `dtype=`, exact `ndarray` inputs,
+and exact `ndarray` output.
+
+Focused verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_numeric.py::test_binary_out_writes_existing_destination tests/python/numpy_compat/test_ufunc.py::test_ufunc_out_kwarg_writes_in_place tests/python/numpy_compat/test_ufunc.py::test_ufunc_dtype_kwarg_casts -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types array --loops 50 --repeats 5 --rounds 3 --vector-size 1024 --vector-sizes 16384 --matrix-sizes 16 --linalg-sizes 2 --format json --sort ratio --output-dir results/local-sweep-20260508-ufunc-out-fastpath --no-progress --no-stdout
+```
+
+The focused tests passed. Before/after for the wrapper-bound rows:
+
+| row | before | after | delta |
+| --- | ---: | ---: | ---: |
+| `binary_add_out_f32` | 5.103 us, 2.116x | 2.955 us, 1.263x | 1.73x faster |
+| `binary_add_f32` | 3.126 us, 1.248x | 3.050 us, 1.247x | neutral |
+| `binary_add_extension_out_f32` | 2.694 us, 1.128x | 2.667 us, 1.135x | neutral |
+
+Next target remains `complex/matmul_64_complex64`: it already reports
+`used_accelerate=True`, so the investigation should focus on BLAS function
+lookup/call overhead, row-major complex GEMM calling convention, and whether a
+small-N Mojo complex microkernel can beat the framework call for 64x64.
