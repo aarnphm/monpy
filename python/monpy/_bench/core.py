@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Any
 import warnings
 
 import monpy as _monpy
@@ -23,7 +24,7 @@ try:
 except ModuleNotFoundError:
   _tqdm = None
 
-BenchFn = Callable[[], object]
+BenchFn = Callable[[], Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +78,7 @@ class _NoProgress:
     return None
 
 
-def progress_bar(*, total: int, enabled: bool) -> object:
+def progress_bar(*, total: int, enabled: bool) -> Any:
   if not enabled:
     return _NoProgress()
   if _tqdm is None:
@@ -100,10 +101,10 @@ def parse_sizes(value: str) -> tuple[int, ...]:
   return sizes
 
 
-def force_monpy(value: object) -> object:
+def force_monpy(value: Any) -> Any:
   if not isinstance(value, mnp.ndarray):
     try:
-      _ = value._native
+      _ = getattr(value, "_native")
     except AttributeError:
       pass
   return value
@@ -186,8 +187,8 @@ def build_cases(
 ) -> list[BenchCase]:
   x_np = np.linspace(0.1, 2.0, vector_size, dtype=np.float32)
   y_np = np.linspace(2.0, 4.0, vector_size, dtype=np.float32)
-  x_mp = mnp.asarray(x_np.tolist(), dtype=mnp.float32)
-  y_mp = mnp.asarray(y_np.tolist(), dtype=mnp.float32)
+  x_mp: Any = mnp.asarray(x_np.tolist(), dtype=mnp.float32)
+  y_mp: Any = mnp.asarray(y_np.tolist(), dtype=mnp.float32)
   add_out_np = np.empty_like(x_np)
   add_out_mp = mnp.empty(x_mp.shape, dtype=mnp.float32)
   dtype_specs = (
@@ -213,9 +214,9 @@ def build_cases(
   m_np = np.arange(256, dtype=np.float32).reshape(16, 16)
   n_np = np.arange(256, dtype=np.float32).reshape(16, 16)
   row_np = np.ones(16, dtype=np.float32)
-  m_mp = mnp.asarray(m_np.tolist(), dtype=mnp.float32)
-  n_mp = mnp.asarray(n_np.tolist(), dtype=mnp.float32)
-  row_mp = mnp.asarray(row_np.tolist(), dtype=mnp.float32)
+  m_mp: Any = mnp.asarray(m_np.tolist(), dtype=mnp.float32)
+  n_mp: Any = mnp.asarray(n_np.tolist(), dtype=mnp.float32)
+  row_mp: Any = mnp.asarray(row_np.tolist(), dtype=mnp.float32)
 
   matmul_probe_size = max(64, max(matrix_sizes))
   matmul_probe_np = scaled_matrix(matmul_probe_size, np.float32)
@@ -232,12 +233,12 @@ def build_cases(
     raise AssertionError("expected contiguous float64 matmul to exercise the Apple Accelerate dgemm path")
   verify_same(matmul_f64_probe, matmul_f64_probe_np @ matmul_f64_probe_np, rtol=1e-9, atol=1e-9)
 
-  fused_probe = mnp.sin_add_mul(x_mp, y_mp, 3.0)
+  fused_probe: Any = mnp.sin_add_mul(x_mp, y_mp, 3.0)
   if not fused_probe._native.used_fused():
     raise AssertionError("expected sin_add_mul to exercise the native fused kernel path")
   verify_same(fused_probe, np.sin(x_np) + y_np * 3.0, rtol=1e-4, atol=1e-4)
 
-  eager_fused_probe = mnp.sin(x_mp) + y_mp * 3.0
+  eager_fused_probe: Any = mnp.sin(x_mp) + y_mp * 3.0
   if not eager_fused_probe._native.used_fused():
     raise AssertionError("expected sin(x) + y * scalar to lower into the native fused kernel path")
   verify_same(eager_fused_probe, np.sin(x_np) + y_np * 3.0, rtol=1e-4, atol=1e-4)
@@ -456,7 +457,7 @@ def build_cases(
     BenchCase("reductions", "trace_64_f64", lambda: mnp.trace(diag_mp), lambda: np.trace(diag_np)),
   ])
 
-  # Phase-6a / 6b additions: shape manipulation + creation helpers.
+  # shape manipulation + creation helpers.
   s_np = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
   s_mp = mnp.asarray(s_np)
   vec_a_np = np.arange(8, dtype=np.float32)
@@ -553,8 +554,8 @@ def build_cases(
       continue
     bw_x_np = np.linspace(0.1, 2.0, size, dtype=np.float32)
     bw_y_np = np.linspace(2.0, 4.0, size, dtype=np.float32)
-    bw_x_mp = mnp.asarray(bw_x_np, dtype=mnp.float32, copy=False)
-    bw_y_mp = mnp.asarray(bw_y_np, dtype=mnp.float32, copy=False)
+    bw_x_mp: Any = mnp.asarray(bw_x_np, dtype=mnp.float32, copy=False)
+    bw_y_mp: Any = mnp.asarray(bw_y_np, dtype=mnp.float32, copy=False)
     bw_out_np = np.empty_like(bw_x_np)
     bw_out_mp = mnp.empty(bw_x_mp.shape, dtype=mnp.float32)
     suffix = f"{size}_f32"
@@ -852,7 +853,7 @@ def sorted_results(results: Sequence[BenchResult], *, sort: str) -> list[BenchRe
 
 
 def table_rows(results: Sequence[BenchResult]) -> list[tuple[str, ...]]:
-  rows = [
+  rows: list[tuple[str, ...]] = [
     ("group", "case", "monpy us", "numpy us", "monpy/numpy", "monpy range", "numpy range", "ratio range", "rounds")
   ]
   for result in results:
@@ -975,4 +976,3 @@ def render_results(results: Sequence[BenchResult], *, args: argparse.Namespace) 
   if args.format == "markdown":
     return render_markdown(ordered, rounds=args.rounds, loops=args.loops, repeats=args.repeats)
   return render_table(ordered, rounds=args.rounds, loops=args.loops, repeats=args.repeats)
-

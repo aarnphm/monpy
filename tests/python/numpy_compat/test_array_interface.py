@@ -106,6 +106,35 @@ def test_ops_numpy_to_numpy_dtype_and_copy_arguments() -> None:
   assert cast.tolist() == [99.0, 2.0, 3.0]
 
 
+def test_ops_numpy_from_numpy_dtype_and_copy_arguments() -> None:
+  source = numpy.arange(6, dtype=numpy.int64).reshape(2, 3)
+
+  view = ops_numpy.from_numpy(source, copy=False)
+  source[0, 1] = 99
+  view[1, 2] = -5
+  copied = ops_numpy.from_numpy(source, copy=True)
+  copied[0, 0] = 77
+  cast = ops_numpy.from_numpy(source, dtype=np.float32, copy=None)
+
+  assert view.tolist() == [[0, 99, 2], [3, 4, -5]]
+  assert source.tolist() == [[0, 99, 2], [3, 4, -5]]
+  assert copied.tolist() == [[77, 99, 2], [3, 4, -5]]
+  assert source.tolist() == [[0, 99, 2], [3, 4, -5]]
+  assert cast.dtype == np.float32
+  assert cast.tolist() == [[0.0, 99.0, 2.0], [3.0, 4.0, -5.0]]
+
+
+def test_ops_numpy_from_numpy_rejects_required_copy_when_copy_false() -> None:
+  source = numpy.asarray([1, 2, 3], dtype=numpy.int64)
+
+  with pytest.raises(ValueError, match="copy"):
+    ops_numpy.from_numpy(source, dtype=np.float32, copy=False)
+
+  source.flags.writeable = False
+  with pytest.raises(ValueError, match="readonly"):
+    ops_numpy.from_numpy(source, copy=False)
+
+
 def test_array_dunder_removed_from_core() -> None:
   arr = np.asarray([1, 2, 3], dtype=np.int64)
 

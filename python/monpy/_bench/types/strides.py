@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 import monumpy as mnp
 import numpy as np
@@ -25,22 +26,22 @@ def build_cases(
   )
   b_np = np.flip(a_np, axis=1).copy()
   row_np = np.linspace(0.1, 1.0, size, dtype=np.float32)
-  a_mp = mnp.asarray(a_np, dtype=mnp.float32, copy=False)
-  b_mp = mnp.asarray(b_np, dtype=mnp.float32, copy=False)
-  row_mp = mnp.asarray(row_np, dtype=mnp.float32, copy=False)
+  a_mp: Any = mnp.asarray(a_np, dtype=mnp.float32, copy=False)
+  b_mp: Any = mnp.asarray(b_np, dtype=mnp.float32, copy=False)
+  row_mp: Any = mnp.asarray(row_np, dtype=mnp.float32, copy=False)
 
   x_np = np.linspace(0.1, 2.0, vector, dtype=np.float32)
   y_np = np.linspace(2.0, 4.0, vector, dtype=np.float32)
-  x_mp = mnp.asarray(x_np, dtype=mnp.float32, copy=False)
-  y_mp = mnp.asarray(y_np, dtype=mnp.float32, copy=False)
+  x_mp: Any = mnp.asarray(x_np, dtype=mnp.float32, copy=False)
+  y_mp: Any = mnp.asarray(y_np, dtype=mnp.float32, copy=False)
 
   cube_n = max(8, min(size // 4, 32))
   cube_np = (
     np.arange(cube_n * cube_n * cube_n, dtype=np.float32).reshape(cube_n, cube_n, cube_n) / 37.0
   ).astype(np.float32, copy=False)
   cube_rhs_np = np.flip(cube_np, axis=2).copy()
-  cube_mp = mnp.asarray(cube_np, dtype=mnp.float32, copy=False)
-  cube_rhs_mp = mnp.asarray(cube_rhs_np, dtype=mnp.float32, copy=False)
+  cube_mp: Any = mnp.asarray(cube_np, dtype=mnp.float32, copy=False)
+  cube_rhs_mp: Any = mnp.asarray(cube_rhs_np, dtype=mnp.float32, copy=False)
 
   cases = [
     BenchCase("elementwise", "transpose_add_f32", lambda: a_mp.T + b_mp.T, lambda: a_np.T + b_np.T),

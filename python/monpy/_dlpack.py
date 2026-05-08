@@ -1,4 +1,5 @@
-# fmt: off # ruff: noqa
+# fmt: off
+# ruff: noqa
 from __future__ import annotations
 
 import ctypes
@@ -320,10 +321,10 @@ class _DLPackOwner:
     except Exception:return
 
 
-def from_dlpack(obj:object,copy:bool|None):return from_dlpack_capsule(_request_capsule(obj, copy), copy)
+def from_dlpack(obj:object, copy:bool|None):return from_dlpack_capsule(_request_capsule(obj, copy), copy)
 
 
-def from_dlpack_capsule(capsule:object,copy:bool|None):
+def from_dlpack_capsule(capsule:object, copy:bool|None):
   import monpy as mp
   address, versioned, _name, used_name = _capsule_pointer(capsule)
   tensor, flags = _managed_tensor(address, versioned)

@@ -27,6 +27,12 @@ def test_core_import_and_buffer_paths_do_not_import_numpy() -> None:
     assert monpy.runtime.__all__ == ["ops_numpy"]
     import monpy.runtime as runtime
     assert runtime is monpy.runtime
+    from monpy.runtime import ops_numpy
+    assert callable(ops_numpy.from_numpy)
+    assert ops_numpy.is_array_input([1, 2, 3]) is False
+    assert ops_numpy.is_dtype_input(int) is False
+    assert ops_numpy.resolve_dtype(monpy.float32) is monpy.float32
+    assert "numpy" not in sys.modules
 
     arr = monpy.asarray([1, 2, 3], dtype=monpy.int64)
     assert arr.tolist() == [1, 2, 3]

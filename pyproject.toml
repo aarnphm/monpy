@@ -19,6 +19,7 @@ python-src = "python"
 module-name = "monpy._native"
 strip = true
 mojo-flags = []
+generate-stub = false
 
 [tool.ruff.lint]
 ignore = ["E111", "E114"]
