@@ -21,13 +21,22 @@ Math notes (cross-ref `docs/research/complex-kernels.md`):
     denominator first. Without this, c² + d² overflows for moderate
     |c|, |d| even when the quotient is representable. §2.
 
-`complex_binary_contig_typed` and `maybe_complex_binary_contiguous_accelerate`
-remain in elementwise/__init__.mojo because they tightly couple to the
-ADD/SUB delegation into `binary_same_shape_contig_typed`.
+Also hosts:
+  - `complex_binary_contig_typed[dt]` — c-contig complex×complex binary
+    (ADD/SUB/MUL/DIV). ADD/SUB delegate to `binary_same_shape_contig_typed`
+    over the 2N-float interleaved view; MUL is schoolbook FMA; DIV is Smith
+    1962. Cross-ref `docs/research/complex-kernels.md §2-3`.
+  - `maybe_complex_binary_contiguous_accelerate` — macOS vDSP_vadd/vsub
+    fast path for c64/c128 ADD/SUB on c-contig inputs (treats interleaved
+    storage as a 2N-wide real vector).
 """
 
+from std.sys import CompilationTarget
+
+from accelerate import call_vdsp_binary_f32, call_vdsp_binary_f64
 from array import (
     Array,
+    contiguous_ptr,
     is_c_contiguous,
     physical_offset,
     same_shape,
@@ -35,6 +44,7 @@ from array import (
 from domain import ArrayDType, BackendKind, BinaryOp, UnaryOp
 
 from .accelerate_dispatch import maybe_complex_binary_rank1_strided_accelerate
+from .typed_kernels import binary_same_shape_contig_typed
 
 
 def complex_unary_preserve_contig_typed[
@@ -233,3 +243,107 @@ def complex_scalar_real_contig_typed[
                 out_ptr[i * 2 + 1] = src_ptr[i * 2 + 1] / scalar_real
         return
     raise Error("unsupported op for complex scalar real binary kernel")
+
+
+def complex_binary_contig_typed[
+    dtype: DType
+](
+    lhs_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    rhs_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    n_elems: Int,
+    op: Int,
+) raises where dtype.is_floating_point():
+    # Complex arithmetic over interleaved (real, imag) pairs. `dtype` is the
+    # underlying float (f32 → complex64, f64 → complex128). `n_elems` counts
+    # complex values; storage is 2 × n_elems lanes of `dtype`.
+    #
+    # ADD/SUB: linear in components. Reuse the real-typed kernel over the
+    # 2 × n_elems-wide vector — no special handling needed.
+    #
+    # MUL: schoolbook FMA — `(a+bi)(c+di) = (ac − bd) + (ad + bc)i`.
+    # Two FMAs per real lane (`fma(a, c, -b*d)`, `fma(a, d, b*c)`) give
+    # componentwise error ≤ √2·ulp·|result|. Avoids Karatsuba's loss of
+    # significance on the difference of products.
+    #
+    # DIV: Smith 1962 algorithm — for `(a+bi)/(c+di)`, branch on |c| vs |d|
+    # to scale by the larger denominator first. Without this, computing
+    # `c² + d²` overflows for moderate |c|, |d| even when the quotient is
+    # representable. Cross-ref `docs/research/complex-kernels.md §2`.
+    if op == BinaryOp.ADD.value or op == BinaryOp.SUB.value:
+        # Componentwise on the float pairs: add/sub treats interleaved
+        # storage as a 2N float vector. Reuse the existing typed kernel.
+        binary_same_shape_contig_typed[dtype](
+            lhs_ptr,
+            rhs_ptr,
+            out_ptr,
+            n_elems * 2,
+            op,
+        )
+        return
+    if op == BinaryOp.MUL.value:
+        for i in range(n_elems):
+            var a = lhs_ptr[i * 2]
+            var b = lhs_ptr[i * 2 + 1]
+            var c = rhs_ptr[i * 2]
+            var d = rhs_ptr[i * 2 + 1]
+            out_ptr[i * 2] = a * c - b * d
+            out_ptr[i * 2 + 1] = a * d + b * c
+        return
+    if op == BinaryOp.DIV.value:
+        # Smith's algorithm: avoids overflow when |c|, |d| are very different.
+        for i in range(n_elems):
+            var a = lhs_ptr[i * 2]
+            var b = lhs_ptr[i * 2 + 1]
+            var c = rhs_ptr[i * 2]
+            var d = rhs_ptr[i * 2 + 1]
+            var abs_c = c if c >= Scalar[dtype](0) else -c
+            var abs_d = d if d >= Scalar[dtype](0) else -d
+            if abs_c >= abs_d:
+                var r = d / c
+                var den = c + d * r
+                out_ptr[i * 2] = (a + b * r) / den
+                out_ptr[i * 2 + 1] = (b - a * r) / den
+            else:
+                var r = c / d
+                var den = c * r + d
+                out_ptr[i * 2] = (a * r + b) / den
+                out_ptr[i * 2 + 1] = (b * r - a) / den
+        return
+    raise Error("unsupported op for complex binary kernel")
+
+
+def maybe_complex_binary_contiguous_accelerate(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
+    if op != BinaryOp.ADD.value and op != BinaryOp.SUB.value:
+        return False
+    comptime if not CompilationTarget.is_macos():
+        return False
+    if (
+        lhs.dtype_code == ArrayDType.COMPLEX64.value
+        and rhs.dtype_code == ArrayDType.COMPLEX64.value
+        and result.dtype_code == ArrayDType.COMPLEX64.value
+    ):
+        var lhs_ptr = lhs.data.bitcast[Float32]() + lhs.offset_elems * 2
+        var rhs_ptr = rhs.data.bitcast[Float32]() + rhs.offset_elems * 2
+        var out_ptr = result.data.bitcast[Float32]() + result.offset_elems * 2
+        if op == BinaryOp.ADD.value:
+            call_vdsp_binary_f32["vDSP_vadd"](lhs_ptr, rhs_ptr, out_ptr, result.size_value * 2)
+        else:
+            call_vdsp_binary_f32["vDSP_vsub"](rhs_ptr, lhs_ptr, out_ptr, result.size_value * 2)
+        result.backend_code = BackendKind.ACCELERATE.value
+        return True
+    if (
+        lhs.dtype_code == ArrayDType.COMPLEX128.value
+        and rhs.dtype_code == ArrayDType.COMPLEX128.value
+        and result.dtype_code == ArrayDType.COMPLEX128.value
+    ):
+        var lhs_ptr = lhs.data.bitcast[Float64]() + lhs.offset_elems * 2
+        var rhs_ptr = rhs.data.bitcast[Float64]() + rhs.offset_elems * 2
+        var out_ptr = result.data.bitcast[Float64]() + result.offset_elems * 2
+        if op == BinaryOp.ADD.value:
+            call_vdsp_binary_f64["vDSP_vaddD"](lhs_ptr, rhs_ptr, out_ptr, result.size_value * 2)
+        else:
+            call_vdsp_binary_f64["vDSP_vsubD"](rhs_ptr, lhs_ptr, out_ptr, result.size_value * 2)
+        result.backend_code = BackendKind.ACCELERATE.value
+        return True
+    return False
