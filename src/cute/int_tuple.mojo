@@ -1,20 +1,16 @@
-"""Hierarchical integer tuples — the data model under `Layout`.
+"""Hierarchical integer tuples—the data model under `Layout`.
 
-`IntTuple` is the recursive value type that powers the CuTe-style layout
-algebra. Every shape, stride, coordinate, tiler, and "profile" in the
-layout module is an `IntTuple`. A leaf carries a single integer; a
-non-leaf carries a list of child `IntTuple`s.
+`IntTuple` is the recursive value type that powers the CuTe-style layout algebra.
+Every shape, stride, coordinate, tiler, and "profile" in the layout module is an `IntTuple`.
+A leaf carries a single integer; a non-leaf carries a list of child `IntTuple`s.
 
 Representation: a discriminated union (`_is_leaf`, `_value`, `_children`).
-We skip the comptime/runtime split that Modular's `int_tuple.mojo` uses
-(`IntTuple` + `RuntimeTuple`) — monpy targets CPU and runs Python at the
-boundary, so the runtime-polymorphic representation is enough. Adding the
-comptime split is a phase-3 want if profiling shows it helps.
+We skip the comptime/runtime split that Modular's `int_tuple.mojo` uses (`IntTuple` + `RuntimeTuple`):
+- monpy targets CPU and runs Python at the boundary, so the runtime-polymorphic representation is enough.
+- Adding the comptime split is a phase-3 want if profiling shows it helps.
 
-Recursive `Copyable` requires a manual `def __init__(out self, *, copy: Self)`
-because the auto-synthesized constructor cannot resolve `IntTuple: Copyable`
-while `_children: List[IntTuple]` is itself awaiting that resolution. The
-manual definition breaks the cycle.
+Recursive `Copyable` requires a manual `def __init__(out self, *, copy: Self)` because the auto-synthesized constructor cannot resolve `IntTuple: Copyable`
+while `_children: List[IntTuple]` is itself awaiting that resolution. The manual definition breaks the cycle.
 """
 
 from std.collections import List

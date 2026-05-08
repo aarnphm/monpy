@@ -1,20 +1,16 @@
-"""CuTe-style `Layout` — a function from coord to integer offset.
+"""CuTe-style `Layout`—a function from coord to integer offset.
 
-A `Layout` is a (shape, stride) pair of compatible `IntTuple`s. The
-shape gives the input domain; the stride says how each leaf of a
-coordinate contributes to the output offset.
+A `Layout` is a (shape, stride) pair of compatible `IntTuple`s.
+The shape gives the input domain; the stride says how each leaf of a coordinate contributes to the output offset.
 
-This file ships the struct, basic queries (`__call__` / `idx2crd` /
-`size` / `cosize` / `__getitem__`), and the constructors (`row_major`,
-`col_major`, `strided`, `ordered`). The algebra (`coalesce`, `select`,
-`transpose`, `composition`, `complement`, `logical_divide`) lives in
-`functional.mojo`, mirroring CUTLASS's `cute/layout.hpp` vs
-`cute/algorithm/functional.hpp` split.
+This file ships:
+- struct(s)
+- basic queries (`__call__` / `idx2crd` / `size` / `cosize` / `__getitem__`)
+- the constructors (`row_major`, `col_major`, `strided`, `ordered`).
 
-Reference: NVIDIA CUTLASS `media/docs/cute/01_layout.md` and
-`02_layout_algebra.md`. Algorithm skeletons follow
-`include/cute/layout.hpp` adapted for monpy's row-major (numpy/C)
-convention.
+Reference:
+- NVIDIA CUTLASS `media/docs/cute/01_layout.md` and `02_layout_algebra.md`.
+- Algorithm skeletons follow `include/cute/layout.hpp` adapted for monpy's row-major (numpy/C) convention.
 """
 
 from std.collections import List

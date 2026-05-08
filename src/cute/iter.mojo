@@ -1,21 +1,16 @@
 """Stride-cursor iterators over `Layout` objects.
 
-`LayoutIter` walks `[0, size(L))` of a single layout exposing the
-current byte offset at each step. The point of having an iterator is
-to amortize the `crd2idx` divmod across the whole walk: each `step()`
-is O(1) (one cursor increment + one stride add for the rollover) rather
-than O(rank) divmod per element.
+`LayoutIter` walks `[0, size(L))` of a single layout exposing the current byte offset at each step.
+The point of having an iterator is to amortize the `crd2idx` divmod across the whole walk:
+- each `step()` is O(1) (one cursor increment + one stride add for the rollover) rather than O(rank) divmod per element.
 
-`MultiLayoutIter` walks N broadcasted operands in lockstep. Callers
-broadcast each operand to the common output shape (injecting stride-0
-modes where needed) before constructing the iterator.
+`MultiLayoutIter` walks N broadcasted operands in lockstep.
+Callers broadcast each operand to the common output shape (injecting stride-0 modes where needed) before constructing the iterator.
 
-Both types use a flattened representation: the layout's flat-mode
-shape and stride lists drive the cursors. Hierarchical layouts work
-because flatten preserves the leaf walk order.
+Both types use a flattened representation: the layout's flat-mode shape and stride lists drive the cursors.
+Hierarchical layouts work because flatten preserves the leaf walk order.
 
-Convention: the innermost mode is the LAST flat mode (matches
-numpy / row-major: axis 0 is outermost, axis -1 is innermost).
+Convention: the innermost mode is the LAST flat mode (matches numpy/row-major: axis 0 is outermost, axis -1 is innermost).
 """
 
 from std.collections import List

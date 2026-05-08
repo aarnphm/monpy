@@ -1,12 +1,10 @@
 """CuTe-style layout algebra.
 
-`coalesce`, `select` / `transpose`, `composition`, `complement`,
-`logical_divide` over `Layout`. Mirrors CUTLASS's
-`cute/algorithm/functional.hpp`.
+`coalesce`, `select` / `transpose`, `composition`, `complement`, `logical_divide` over `Layout`.
+Mirrors CUTLASS's `cute/algorithm/functional.hpp`.
 
-The split of the `Layout` struct (in `layout.mojo`) from these
-operations follows the CUTLASS convention. Adding a new layout-shaped
-operation here doesn't require touching the struct definition.
+The split of the `Layout` struct (in `layout.mojo`) from these operations follows the CUTLASS convention.
+Adding a new layout-shaped operation here doesn't require touching the struct definition.
 """
 
 from std.collections import List
