@@ -24,6 +24,8 @@ from domain import (
     dtype_item_size,
     dtype_kind_code,
     dtype_promote_types,
+    dtype_storage_bits,
+    dtype_storage_byte_len,
 )
 
 
@@ -54,6 +56,14 @@ def result_dtype_for_reduction_py_ops(dtype_obj: PythonObject, op_obj: PythonObj
 
 def dtype_item_size_py_ops(dtype_obj: PythonObject) raises -> PythonObject:
     return PythonObject(dtype_item_size(Int(py=dtype_obj)))
+
+
+def dtype_storage_bits_py_ops(dtype_obj: PythonObject) raises -> PythonObject:
+    return PythonObject(dtype_storage_bits(Int(py=dtype_obj)))
+
+
+def dtype_storage_nbytes_py_ops(dtype_obj: PythonObject, size_obj: PythonObject) raises -> PythonObject:
+    return PythonObject(dtype_storage_byte_len(Int(py=dtype_obj), Int(py=size_obj)))
 
 
 def dtype_alignment_py_ops(dtype_obj: PythonObject) raises -> PythonObject:

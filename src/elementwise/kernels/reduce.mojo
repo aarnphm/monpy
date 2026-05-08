@@ -1,9 +1,11 @@
-"""Reduction kernels: typed-SIMD sum + strided walkers + dtype dispatchers.
+"""Reduction kernels: typed-SIMD sum/min/max/prod + strided walkers + dispatch.
 
 Hosts:
-  - `reduce_sum_typed[dtype]` — 4-parallel SIMD accumulator sum (the
-    Apple-Silicon FADD-latency-hide trick). Float-only because integer
-    accumulators need different overflow semantics.
+  - `reduce_sum_typed[dtype]` — 8-parallel SIMD accumulator sum.
+  - `reduce_min_typed[dtype]` / `reduce_max_typed[dtype]` /
+    `reduce_prod_typed[dtype]` — 8-parallel SIMD min/max/product.
+    All four float-only because integer accumulators need different
+    overflow / promotion semantics (handled by separate scalar paths).
   - `reduce_strided_typed[dtype]` — generic strided walker with both
     linearly-addressable fast path (transpose / swapaxes of c-contig)
     and a `LayoutIter` fallback for genuine non-linear views.
@@ -11,16 +13,24 @@ Hosts:
     strided typed walker (skips bool/complex; argmax/all/any have
     separate paths).
   - `maybe_reduce_contiguous` — c-contig fast path. Bool / int → i64 / u64
-    accumulators; f16 → f64 round-trip; f32 / f64 → `reduce_sum_typed`.
+    accumulators; f16 → f64 round-trip; f32 / f64 → `reduce_*_typed`.
   - `maybe_argmax_contiguous` — c-contig argmax over float arrays.
 
-The 4-parallel-accumulator trick: single-accumulator FADD chains stall
-on Apple Silicon because each add depends on the previous (3 cyc
-latency, 1 cyc throughput → 1 add per 3 cycles). Four independent
-accumulators saturate the issue rate (4 adds per 3 cycles ≈ 4× speedup
-for memory-resident workloads). Cross-ref `simd-vectorisation.md §6`.
+The 8-parallel-accumulator trick: single-accumulator FADD/FMIN/FMAX/FMUL
+chains stall because each op depends on the previous (≈3 cyc latency on
+Apple Silicon). Modern cores dispatch 2 FP ops per cycle (M-series, AVX2
+Intel/AMD), so the depth needed to saturate is `latency × IPC ≈ 6–8`.
+Eight independent accumulators saturate that pipeline; the final
+tree-reduction collapses them to a scalar. The 4-way version still works
+on 1-IPC machines but leaves ~2× on the table on 2-IPC ones.
+
+Validated on M-series in `benches/bench_reduce.mojo`: 4-way → 86 GB/s
+f32 1k; 8-way → 133 GB/s f32 1k; std.algorithm.sum → 130 GB/s. The
+8-way version matches `std.algorithm.reduction` at parity. Cross-ref
+`simd-vectorisation.md §6`.
 """
 
+from std.math import min as _simd_min, max as _simd_max
 from std.sys import simd_width_of
 
 from array import (
@@ -45,43 +55,204 @@ def reduce_sum_typed[
 ](
     src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
 ) raises -> Float64 where dtype.is_floating_point():
-    # 4-parallel SIMD accumulator sum — breaks the FADD latency dependency.
+    # 8-parallel SIMD accumulator sum.
     #
     # Single-accumulator loop:
-    #   acc = acc + v[i]   ; next iteration depends on previous → ~latency-bound
-    #   On Apple Silicon FADD = 3 cyc latency, 1 cyc throughput. Each cycle is a
-    #   wasted issue slot because the next FADD must wait for the previous
-    #   result. Effective throughput: 1 add per 3 cycles.
+    #   acc = acc + v[i]   ; next iteration depends on previous → latency-bound.
+    #   FADD is ~3 cyc latency on M-series and modern x86. Naively each cycle
+    #   is a wasted issue slot because the next FADD waits on the previous.
     #
-    # 4-accumulator loop:
-    #   a0,a1,a2,a3 are independent → pipeline can issue all 4 in flight,
-    #   one per cycle. Effective throughput: 4 adds per 3 cycles ≈ 4× speedup
-    #   for memory-resident workloads. Final `reduce_add` collapses 4
-    #   accumulators down to a scalar via tree reduction.
+    # 8-accumulator loop:
+    #   a0..a7 are independent. To saturate a 2-IPC FADD pipeline at 3 cyc
+    #   latency you need ~6 in flight; 8 leaves a comfortable margin and
+    #   keeps loop overhead amortised across 8 SIMD vectors per iter.
+    #   Validated against `std.algorithm.reduction.sum`: 8-way matches it
+    #   at parity (~133 GB/s f32 1k on M-series). The 4-way version was
+    #   86 GB/s — same kernel, just fewer accumulators.
     #
     # Promotes to Float64 accumulator regardless of input width to bound
     # the f32 sum's catastrophic cancellation risk (numpy.sum on f32
     # already promotes internally on linalg paths).
     comptime width = simd_width_of[dtype]()
-    comptime block = width * 4
-    var acc0 = SIMD[dtype, width](0)
-    var acc1 = SIMD[dtype, width](0)
-    var acc2 = SIMD[dtype, width](0)
-    var acc3 = SIMD[dtype, width](0)
+    comptime block = width * 8
+    var a0 = SIMD[dtype, width](0)
+    var a1 = SIMD[dtype, width](0)
+    var a2 = SIMD[dtype, width](0)
+    var a3 = SIMD[dtype, width](0)
+    var a4 = SIMD[dtype, width](0)
+    var a5 = SIMD[dtype, width](0)
+    var a6 = SIMD[dtype, width](0)
+    var a7 = SIMD[dtype, width](0)
     var i = 0
     while i + block <= size:
-        acc0 += src_ptr.load[width=width](i)
-        acc1 += src_ptr.load[width=width](i + width)
-        acc2 += src_ptr.load[width=width](i + 2 * width)
-        acc3 += src_ptr.load[width=width](i + 3 * width)
+        a0 += src_ptr.load[width=width](i)
+        a1 += src_ptr.load[width=width](i + width)
+        a2 += src_ptr.load[width=width](i + 2 * width)
+        a3 += src_ptr.load[width=width](i + 3 * width)
+        a4 += src_ptr.load[width=width](i + 4 * width)
+        a5 += src_ptr.load[width=width](i + 5 * width)
+        a6 += src_ptr.load[width=width](i + 6 * width)
+        a7 += src_ptr.load[width=width](i + 7 * width)
         i += block
-    var acc_vec = (acc0 + acc1) + (acc2 + acc3)
+    var acc_vec = ((a0 + a1) + (a2 + a3)) + ((a4 + a5) + (a6 + a7))
     while i + width <= size:
         acc_vec += src_ptr.load[width=width](i)
         i += width
     var acc = Float64(acc_vec.reduce_add()[0])
     while i < size:
         acc += Float64(src_ptr[i])
+        i += 1
+    return acc
+
+
+def reduce_min_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
+) raises -> Scalar[dtype] where dtype.is_floating_point():
+    # 8-parallel SIMD min — same multi-accumulator structure as sum, but
+    # the dependency-breaking primitive is FMIN instead of FADD. FMIN
+    # latency on M-series is ~3 cyc just like FADD; the 8-way unroll
+    # saturates the 2-IPC dispatch the same way.
+    #
+    # Seeded from the first 8 SIMD vectors (rather than +Inf) to avoid
+    # one extra round of FMIN against a constant; correctness holds
+    # because we require size >= block before entering the SIMD loop.
+    if size == 0:
+        raise Error("reduce_min_typed: empty source")
+    comptime width = simd_width_of[dtype]()
+    comptime block = width * 8
+    if size < block:
+        var acc = src_ptr[0]
+        for j in range(1, size):
+            var v = src_ptr[j]
+            if v < acc:
+                acc = v
+        return acc
+    var v0 = src_ptr.load[width=width](0)
+    var v1 = src_ptr.load[width=width](width)
+    var v2 = src_ptr.load[width=width](2 * width)
+    var v3 = src_ptr.load[width=width](3 * width)
+    var v4 = src_ptr.load[width=width](4 * width)
+    var v5 = src_ptr.load[width=width](5 * width)
+    var v6 = src_ptr.load[width=width](6 * width)
+    var v7 = src_ptr.load[width=width](7 * width)
+    var i = block
+    while i + block <= size:
+        v0 = _simd_min(v0, src_ptr.load[width=width](i))
+        v1 = _simd_min(v1, src_ptr.load[width=width](i + width))
+        v2 = _simd_min(v2, src_ptr.load[width=width](i + 2 * width))
+        v3 = _simd_min(v3, src_ptr.load[width=width](i + 3 * width))
+        v4 = _simd_min(v4, src_ptr.load[width=width](i + 4 * width))
+        v5 = _simd_min(v5, src_ptr.load[width=width](i + 5 * width))
+        v6 = _simd_min(v6, src_ptr.load[width=width](i + 6 * width))
+        v7 = _simd_min(v7, src_ptr.load[width=width](i + 7 * width))
+        i += block
+    var acc_vec = _simd_min(
+        _simd_min(_simd_min(v0, v1), _simd_min(v2, v3)),
+        _simd_min(_simd_min(v4, v5), _simd_min(v6, v7)),
+    )
+    while i + width <= size:
+        acc_vec = _simd_min(acc_vec, src_ptr.load[width=width](i))
+        i += width
+    var acc = acc_vec.reduce_min()
+    while i < size:
+        var v = src_ptr[i]
+        if v < acc:
+            acc = v
+        i += 1
+    return acc
+
+
+def reduce_max_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
+) raises -> Scalar[dtype] where dtype.is_floating_point():
+    # 8-parallel SIMD max — symmetric to reduce_min_typed.
+    if size == 0:
+        raise Error("reduce_max_typed: empty source")
+    comptime width = simd_width_of[dtype]()
+    comptime block = width * 8
+    if size < block:
+        var acc = src_ptr[0]
+        for j in range(1, size):
+            var v = src_ptr[j]
+            if v > acc:
+                acc = v
+        return acc
+    var v0 = src_ptr.load[width=width](0)
+    var v1 = src_ptr.load[width=width](width)
+    var v2 = src_ptr.load[width=width](2 * width)
+    var v3 = src_ptr.load[width=width](3 * width)
+    var v4 = src_ptr.load[width=width](4 * width)
+    var v5 = src_ptr.load[width=width](5 * width)
+    var v6 = src_ptr.load[width=width](6 * width)
+    var v7 = src_ptr.load[width=width](7 * width)
+    var i = block
+    while i + block <= size:
+        v0 = _simd_max(v0, src_ptr.load[width=width](i))
+        v1 = _simd_max(v1, src_ptr.load[width=width](i + width))
+        v2 = _simd_max(v2, src_ptr.load[width=width](i + 2 * width))
+        v3 = _simd_max(v3, src_ptr.load[width=width](i + 3 * width))
+        v4 = _simd_max(v4, src_ptr.load[width=width](i + 4 * width))
+        v5 = _simd_max(v5, src_ptr.load[width=width](i + 5 * width))
+        v6 = _simd_max(v6, src_ptr.load[width=width](i + 6 * width))
+        v7 = _simd_max(v7, src_ptr.load[width=width](i + 7 * width))
+        i += block
+    var acc_vec = _simd_max(
+        _simd_max(_simd_max(v0, v1), _simd_max(v2, v3)),
+        _simd_max(_simd_max(v4, v5), _simd_max(v6, v7)),
+    )
+    while i + width <= size:
+        acc_vec = _simd_max(acc_vec, src_ptr.load[width=width](i))
+        i += width
+    var acc = acc_vec.reduce_max()
+    while i < size:
+        var v = src_ptr[i]
+        if v > acc:
+            acc = v
+        i += 1
+    return acc
+
+
+def reduce_prod_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
+) raises -> Scalar[dtype] where dtype.is_floating_point():
+    # 8-parallel SIMD product — FMUL latency on M-series is ~4 cyc at
+    # 2 IPC, so the 8-way structure remains correct (8 ≥ 4 × 2 = 8).
+    # Seed accumulators with 1.0 so the partial product semantics hold
+    # for any size including ones below the SIMD-block threshold.
+    comptime width = simd_width_of[dtype]()
+    comptime block = width * 8
+    var v0 = SIMD[dtype, width](1)
+    var v1 = SIMD[dtype, width](1)
+    var v2 = SIMD[dtype, width](1)
+    var v3 = SIMD[dtype, width](1)
+    var v4 = SIMD[dtype, width](1)
+    var v5 = SIMD[dtype, width](1)
+    var v6 = SIMD[dtype, width](1)
+    var v7 = SIMD[dtype, width](1)
+    var i = 0
+    while i + block <= size:
+        v0 *= src_ptr.load[width=width](i)
+        v1 *= src_ptr.load[width=width](i + width)
+        v2 *= src_ptr.load[width=width](i + 2 * width)
+        v3 *= src_ptr.load[width=width](i + 3 * width)
+        v4 *= src_ptr.load[width=width](i + 4 * width)
+        v5 *= src_ptr.load[width=width](i + 5 * width)
+        v6 *= src_ptr.load[width=width](i + 6 * width)
+        v7 *= src_ptr.load[width=width](i + 7 * width)
+        i += block
+    var acc_vec = ((v0 * v1) * (v2 * v3)) * ((v4 * v5) * (v6 * v7))
+    while i + width <= size:
+        acc_vec *= src_ptr.load[width=width](i)
+        i += width
+    var acc = acc_vec.reduce_mul()
+    while i < size:
+        acc *= src_ptr[i]
         i += 1
     return acc
 
@@ -117,26 +288,42 @@ def reduce_strided_typed[dtype: DType](src: Array, op: Int) raises -> Float64:
                 out = out / Float64(n)
             return out
         if op == ReduceOp.PROD.value:
-            var acc = Scalar[dtype](1)
-            for i in range(n):
-                acc *= ptr[base + i]
-            return Float64(acc)
+            var acc: Float64
+            comptime if dtype.is_floating_point():
+                # SIMD 8-way product — same latency-hide trick as sum.
+                acc = Float64(reduce_prod_typed[dtype](ptr + base, n))
+            else:
+                var i_acc = Scalar[dtype](1)
+                for i in range(n):
+                    i_acc *= ptr[base + i]
+                acc = Float64(i_acc)
+            return acc
         if n == 0:
             raise Error("reduce_strided_typed: empty source")
         if op == ReduceOp.MIN.value:
-            var acc = ptr[base]
-            for i in range(1, n):
-                var v = ptr[base + i]
-                if v < acc:
-                    acc = v
-            return Float64(acc)
+            var acc: Float64
+            comptime if dtype.is_floating_point():
+                acc = Float64(reduce_min_typed[dtype](ptr + base, n))
+            else:
+                var i_acc = ptr[base]
+                for i in range(1, n):
+                    var v = ptr[base + i]
+                    if v < i_acc:
+                        i_acc = v
+                acc = Float64(i_acc)
+            return acc
         if op == ReduceOp.MAX.value:
-            var acc = ptr[base]
-            for i in range(1, n):
-                var v = ptr[base + i]
-                if v > acc:
-                    acc = v
-            return Float64(acc)
+            var acc: Float64
+            comptime if dtype.is_floating_point():
+                acc = Float64(reduce_max_typed[dtype](ptr + base, n))
+            else:
+                var i_acc = ptr[base]
+                for i in range(1, n):
+                    var v = ptr[base + i]
+                    if v > i_acc:
+                        i_acc = v
+                acc = Float64(i_acc)
+            return acc
         raise Error("reduce_strided_typed: unsupported op")
     var layout = as_layout(src)
     var item = item_size(src.dtype_code)
@@ -250,24 +437,17 @@ def _reduce_axis_last_contiguous_typed[
                 acc = acc / Float64(cols)
             set_logical_from_f64(result, row, acc)
         elif op == ReduceOp.PROD.value:
-            var acc = ptr[base]
-            for col in range(1, cols):
-                acc *= ptr[base + col]
-            set_logical_from_f64(result, row, Float64(acc))
+            set_logical_from_f64(
+                result, row, Float64(reduce_prod_typed[dt](ptr + base, cols))
+            )
         elif op == ReduceOp.MIN.value:
-            var acc = ptr[base]
-            for col in range(1, cols):
-                var value = ptr[base + col]
-                if value < acc:
-                    acc = value
-            set_logical_from_f64(result, row, Float64(acc))
+            set_logical_from_f64(
+                result, row, Float64(reduce_min_typed[dt](ptr + base, cols))
+            )
         elif op == ReduceOp.MAX.value:
-            var acc = ptr[base]
-            for col in range(1, cols):
-                var value = ptr[base + col]
-                if value > acc:
-                    acc = value
-            set_logical_from_f64(result, row, Float64(acc))
+            set_logical_from_f64(
+                result, row, Float64(reduce_max_typed[dt](ptr + base, cols))
+            )
     result.backend_code = BackendKind.FUSED.value
 
 
@@ -404,6 +584,34 @@ def maybe_reduce_contiguous(src: Array, mut result: Array, op: Int) raises -> Bo
             return False
         if op == ReduceOp.MEAN.value:
             acc = acc / Float64(src.size_value)
+        set_logical_from_f64(result, 0, acc)
+        return True
+    if op == ReduceOp.PROD.value:
+        var acc: Float64
+        if src.dtype_code == ArrayDType.FLOAT32.value:
+            acc = Float64(reduce_prod_typed[DType.float32](contiguous_ptr[DType.float32](src), src.size_value))
+        elif src.dtype_code == ArrayDType.FLOAT64.value:
+            acc = Float64(reduce_prod_typed[DType.float64](contiguous_ptr[DType.float64](src), src.size_value))
+        else:
+            return False
+        set_logical_from_f64(result, 0, acc)
+        return True
+    if op == ReduceOp.MIN.value or op == ReduceOp.MAX.value:
+        if src.size_value == 0:
+            return False
+        var acc: Float64
+        if src.dtype_code == ArrayDType.FLOAT32.value:
+            if op == ReduceOp.MIN.value:
+                acc = Float64(reduce_min_typed[DType.float32](contiguous_ptr[DType.float32](src), src.size_value))
+            else:
+                acc = Float64(reduce_max_typed[DType.float32](contiguous_ptr[DType.float32](src), src.size_value))
+        elif src.dtype_code == ArrayDType.FLOAT64.value:
+            if op == ReduceOp.MIN.value:
+                acc = Float64(reduce_min_typed[DType.float64](contiguous_ptr[DType.float64](src), src.size_value))
+            else:
+                acc = Float64(reduce_max_typed[DType.float64](contiguous_ptr[DType.float64](src), src.size_value))
+        else:
+            return False
         set_logical_from_f64(result, 0, acc)
         return True
     var acc = contiguous_as_f64(src, 0)

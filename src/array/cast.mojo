@@ -23,7 +23,7 @@ Hosts:
 from std.collections import List
 from std.memory import memcpy
 
-from domain import ArrayDType
+from domain import ArrayDType, dtype_byte_offset, dtype_is_packed_subbyte, dtype_storage_byte_len
 
 from .accessors import (
     Array,
@@ -36,12 +36,12 @@ from .accessors import (
     get_physical_c64_imag,
     get_physical_c64_real,
     is_c_contiguous,
-    item_size,
     physical_offset,
     set_physical_c128,
     set_physical_c64,
 )
 from .dispatch import (
+    get_physical_as_f64,
     set_logical_from_f64,
     set_logical_from_i64,
 )
@@ -449,15 +449,15 @@ def copy_c_contiguous(src: Array) raises -> Array:
     var shape = clone_int_list(src.shape)
     var result = make_empty_array(src.dtype_code, shape^)
     if is_c_contiguous(src):
-        var item_bytes = item_size(src.dtype_code)
-        var src_byte_offset = src.offset_elems * item_bytes
-        var byte_count = src.size_value * item_bytes
-        memcpy(
-            dest=result.data,
-            src=src.data + src_byte_offset,
-            count=byte_count,
-        )
-        return result^
+        if not dtype_is_packed_subbyte(src.dtype_code) or src.offset_elems % 2 == 0:
+            var src_byte_offset = dtype_byte_offset(src.dtype_code, src.offset_elems)
+            var byte_count = dtype_storage_byte_len(src.dtype_code, src.size_value)
+            memcpy(
+                dest=result.data,
+                src=src.data + src_byte_offset,
+                count=byte_count,
+            )
+            return result^
     if _maybe_copy_rank2_strided(src, result):
         return result^
     for i in range(src.size_value):
@@ -469,10 +469,8 @@ def copy_c_contiguous(src: Array) raises -> Array:
                 set_logical_from_f64(result, i, 0.0)
         elif src.dtype_code == ArrayDType.INT64.value:
             set_logical_from_i64(result, i, get_physical[DType.int64](src, physical))
-        elif src.dtype_code == ArrayDType.FLOAT32.value:
-            set_logical_from_f64(result, i, Float64(get_physical[DType.float32](src, physical)))
         else:
-            set_logical_from_f64(result, i, get_physical[DType.float64](src, physical))
+            set_logical_from_f64(result, i, get_physical_as_f64(src, physical))
     return result^
 
 
@@ -561,12 +559,6 @@ def cast_copy_array(src: Array, dtype_code: Int) raises -> Array:
             set_logical_from_i64(result, i, Int64(Int(get_physical[DType.uint16](src, physical))))
         elif src.dtype_code == ArrayDType.UINT8.value:
             set_logical_from_i64(result, i, Int64(Int(get_physical[DType.uint8](src, physical))))
-        elif src.dtype_code == ArrayDType.FLOAT32.value:
-            set_logical_from_f64(result, i, Float64(get_physical[DType.float32](src, physical)))
-        elif src.dtype_code == ArrayDType.FLOAT16.value:
-            set_logical_from_f64(result, i, Float64(get_physical[DType.float16](src, physical)))
-        elif src.dtype_code == ArrayDType.FLOAT64.value:
-            set_logical_from_f64(result, i, get_physical[DType.float64](src, physical))
         else:
-            raise Error("unsupported dtype code")
+            set_logical_from_f64(result, i, get_physical_as_f64(src, physical))
     return result^

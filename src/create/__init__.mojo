@@ -18,6 +18,8 @@ from domain import (
     dtype_item_size,
     dtype_kind_code,
     dtype_promote_types,
+    dtype_storage_bits,
+    dtype_storage_byte_len,
 )
 from elementwise import (
     apply_binary_f64,
@@ -170,6 +172,8 @@ from .ops.dtype import (
     dtype_item_size_py_ops,
     dtype_kind_code_py_ops,
     dtype_promote_types_py_ops,
+    dtype_storage_bits_py_ops,
+    dtype_storage_nbytes_py_ops,
     result_dtype_for_binary_py_ops,
     result_dtype_for_reduction_py_ops,
     result_dtype_for_unary_py_ops,

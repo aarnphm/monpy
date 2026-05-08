@@ -16,10 +16,17 @@ struct ArrayDType(Equatable, ImplicitlyCopyable, Movable):
     comptime FLOAT16 = Self(11)
     comptime COMPLEX64 = Self(12)
     comptime COMPLEX128 = Self(13)
+    comptime BFLOAT16 = Self(14)
+    comptime FLOAT8_E4M3FN = Self(15)
+    comptime FLOAT8_E4M3FNUZ = Self(16)
+    comptime FLOAT8_E5M2 = Self(17)
+    comptime FLOAT8_E5M2FNUZ = Self(18)
+    comptime FLOAT8_E8M0FNU = Self(19)
+    comptime FLOAT4_E2M1FN = Self(20)
 
     @staticmethod
     def from_int(value: Int) raises -> Self:
-        if value >= Self.BOOL.value and value <= Self.COMPLEX128.value:
+        if value >= Self.BOOL.value and value <= Self.FLOAT4_E2M1FN.value:
             return Self(value)
         raise Error("unsupported dtype code")
 
@@ -33,10 +40,11 @@ struct DTypeKind(Equatable, ImplicitlyCopyable, Movable):
     comptime REAL_FLOAT = Self(2)
     comptime UNSIGNED_INT = Self(3)
     comptime COMPLEX_FLOAT = Self(4)
+    comptime QUANT_FLOAT = Self(5)
 
     @staticmethod
     def from_int(value: Int) raises -> Self:
-        if value >= Self.BOOL.value and value <= Self.COMPLEX_FLOAT.value:
+        if value >= Self.BOOL.value and value <= Self.QUANT_FLOAT.value:
             return Self(value)
         raise Error("unsupported dtype kind code")
 
@@ -226,6 +234,7 @@ def dtype_item_size(dtype_code: Int) raises -> Int:
         dtype_code == ArrayDType.INT16.value
         or dtype_code == ArrayDType.UINT16.value
         or dtype_code == ArrayDType.FLOAT16.value
+        or dtype_code == ArrayDType.BFLOAT16.value
     ):
         return 2
     if (
@@ -244,11 +253,44 @@ def dtype_item_size(dtype_code: Int) raises -> Int:
         return 8  # 2 × float32
     if dtype_code == ArrayDType.COMPLEX128.value:
         return 16  # 2 × float64
+    if (
+        dtype_code == ArrayDType.FLOAT8_E4M3FN.value
+        or dtype_code == ArrayDType.FLOAT8_E4M3FNUZ.value
+        or dtype_code == ArrayDType.FLOAT8_E5M2.value
+        or dtype_code == ArrayDType.FLOAT8_E5M2FNUZ.value
+        or dtype_code == ArrayDType.FLOAT8_E8M0FNU.value
+        or dtype_code == ArrayDType.FLOAT4_E2M1FN.value
+    ):
+        return 1
     raise Error("unsupported dtype code")
 
 
 def dtype_alignment(dtype_code: Int) raises -> Int:
     return dtype_item_size(dtype_code)
+
+
+def dtype_storage_bits(dtype_code: Int) raises -> Int:
+    if dtype_code == ArrayDType.FLOAT4_E2M1FN.value:
+        return 4
+    return dtype_item_size(dtype_code) * 8
+
+
+def dtype_storage_byte_len(dtype_code: Int, logical_size: Int) raises -> Int:
+    if logical_size <= 0:
+        return 0
+    if dtype_code == ArrayDType.FLOAT4_E2M1FN.value:
+        return (logical_size + 1) // 2
+    return logical_size * dtype_item_size(dtype_code)
+
+
+def dtype_byte_offset(dtype_code: Int, element_offset: Int) raises -> Int:
+    if dtype_code == ArrayDType.FLOAT4_E2M1FN.value:
+        return element_offset // 2
+    return element_offset * dtype_item_size(dtype_code)
+
+
+def dtype_is_packed_subbyte(dtype_code: Int) -> Bool:
+    return dtype_code == ArrayDType.FLOAT4_E2M1FN.value
 
 
 def _is_signed_int_code(code: Int) -> Bool:
@@ -270,11 +312,27 @@ def _is_unsigned_int_code(code: Int) -> Bool:
 
 
 def _is_float_code(code: Int) -> Bool:
-    return code == ArrayDType.FLOAT64.value or code == ArrayDType.FLOAT32.value or code == ArrayDType.FLOAT16.value
+    return (
+        code == ArrayDType.FLOAT64.value
+        or code == ArrayDType.FLOAT32.value
+        or code == ArrayDType.FLOAT16.value
+        or code == ArrayDType.BFLOAT16.value
+    )
 
 
 def _is_complex_code(code: Int) -> Bool:
     return code == ArrayDType.COMPLEX64.value or code == ArrayDType.COMPLEX128.value
+
+
+def _is_quant_float_code(code: Int) -> Bool:
+    return (
+        code == ArrayDType.FLOAT8_E4M3FN.value
+        or code == ArrayDType.FLOAT8_E4M3FNUZ.value
+        or code == ArrayDType.FLOAT8_E5M2.value
+        or code == ArrayDType.FLOAT8_E5M2FNUZ.value
+        or code == ArrayDType.FLOAT8_E8M0FNU.value
+        or code == ArrayDType.FLOAT4_E2M1FN.value
+    )
 
 
 def dtype_kind_code(dtype_code: Int) raises -> Int:
@@ -286,6 +344,8 @@ def dtype_kind_code(dtype_code: Int) raises -> Int:
         return DTypeKind.UNSIGNED_INT.value
     if _is_float_code(dtype_code):
         return DTypeKind.REAL_FLOAT.value
+    if _is_quant_float_code(dtype_code):
+        return DTypeKind.QUANT_FLOAT.value
     if _is_complex_code(dtype_code):
         return DTypeKind.COMPLEX_FLOAT.value
     raise Error("unsupported dtype code")
@@ -335,6 +395,8 @@ def dtype_code_from_format_char(c: Int, itemsize: Int) raises -> Int:
 
 
 def dtype_result_for_unary(dtype_code: Int) -> Int:
+    if _is_quant_float_code(dtype_code) or dtype_code == ArrayDType.BFLOAT16.value:
+        return ArrayDType.FLOAT32.value
     if dtype_code == ArrayDType.FLOAT16.value:
         return ArrayDType.FLOAT16.value
     if dtype_code == ArrayDType.FLOAT32.value:
@@ -354,6 +416,8 @@ def dtype_result_for_unary_preserve(dtype_code: Int) -> Int:
     """
     if dtype_code == ArrayDType.BOOL.value:
         return ArrayDType.INT64.value
+    if _is_quant_float_code(dtype_code):
+        return ArrayDType.FLOAT32.value
     return dtype_code
 
 
@@ -430,9 +494,15 @@ def dtype_result_for_binary(lhs_dtype: Int, rhs_dtype: Int, op: Int) -> Int:
         if other == ArrayDType.INT32.value or other == ArrayDType.UINT32.value:
             return ArrayDType.COMPLEX128.value
         return ArrayDType.COMPLEX64.value
+    if _is_quant_float_code(lhs_dtype) or _is_quant_float_code(rhs_dtype):
+        if lhs_dtype == ArrayDType.FLOAT64.value or rhs_dtype == ArrayDType.FLOAT64.value:
+            return ArrayDType.FLOAT64.value
+        return ArrayDType.FLOAT32.value
     # Always-float binary transcendentals.
     if op == BinaryOp.ARCTAN2.value or op == BinaryOp.HYPOT.value or op == BinaryOp.COPYSIGN.value:
         if lhs_dtype == ArrayDType.FLOAT32.value and rhs_dtype == ArrayDType.FLOAT32.value:
+            return ArrayDType.FLOAT32.value
+        if lhs_dtype == ArrayDType.BFLOAT16.value and rhs_dtype == ArrayDType.BFLOAT16.value:
             return ArrayDType.FLOAT32.value
         if lhs_dtype == ArrayDType.FLOAT16.value and rhs_dtype == ArrayDType.FLOAT16.value:
             return ArrayDType.FLOAT16.value
@@ -447,6 +517,7 @@ def dtype_result_for_binary(lhs_dtype: Int, rhs_dtype: Int, op: Int) -> Int:
                 other == ArrayDType.FLOAT32.value
                 or other == ArrayDType.BOOL.value
                 or other == ArrayDType.FLOAT16.value
+                or other == ArrayDType.BFLOAT16.value
             ):
                 return ArrayDType.FLOAT32.value
             if (
@@ -463,6 +534,8 @@ def dtype_result_for_binary(lhs_dtype: Int, rhs_dtype: Int, op: Int) -> Int:
             if other == ArrayDType.INT8.value or other == ArrayDType.UINT8.value:
                 return ArrayDType.FLOAT16.value
             return ArrayDType.FLOAT32.value
+        if lhs_dtype == ArrayDType.BFLOAT16.value or rhs_dtype == ArrayDType.BFLOAT16.value:
+            return ArrayDType.FLOAT32.value
         return ArrayDType.FLOAT64.value
     # Non-division arithmetic.
     if lhs_dtype == ArrayDType.FLOAT64.value or rhs_dtype == ArrayDType.FLOAT64.value:
@@ -474,6 +547,10 @@ def dtype_result_for_binary(lhs_dtype: Int, rhs_dtype: Int, op: Int) -> Int:
             return ArrayDType.FLOAT64.value
         if other == ArrayDType.UINT64.value or other == ArrayDType.UINT32.value:
             return ArrayDType.FLOAT64.value
+        return ArrayDType.FLOAT32.value
+    if lhs_dtype == ArrayDType.BFLOAT16.value or rhs_dtype == ArrayDType.BFLOAT16.value:
+        if lhs_dtype == ArrayDType.BFLOAT16.value and rhs_dtype == ArrayDType.BFLOAT16.value:
+            return ArrayDType.BFLOAT16.value
         return ArrayDType.FLOAT32.value
     if lhs_dtype == ArrayDType.FLOAT16.value or rhs_dtype == ArrayDType.FLOAT16.value:
         var other = rhs_dtype if lhs_dtype == ArrayDType.FLOAT16.value else lhs_dtype
@@ -512,12 +589,19 @@ def dtype_result_for_binary(lhs_dtype: Int, rhs_dtype: Int, op: Int) -> Int:
 
 def dtype_result_for_reduction(dtype_code: Int, op: Int) -> Int:
     if op == ReduceOp.MEAN.value:
-        if dtype_code == ArrayDType.FLOAT16.value or dtype_code == ArrayDType.FLOAT32.value:
+        if (
+            dtype_code == ArrayDType.FLOAT16.value
+            or dtype_code == ArrayDType.FLOAT32.value
+            or dtype_code == ArrayDType.BFLOAT16.value
+            or _is_quant_float_code(dtype_code)
+        ):
             return ArrayDType.FLOAT32.value
         return ArrayDType.FLOAT64.value
     if op == ReduceOp.SUM.value and dtype_code == ArrayDType.BOOL.value:
         return ArrayDType.INT64.value
     if op == ReduceOp.SUM.value or op == ReduceOp.PROD.value:
+        if dtype_code == ArrayDType.BFLOAT16.value or _is_quant_float_code(dtype_code):
+            return ArrayDType.FLOAT32.value
         # numpy: small-int reductions accumulate in int64/uint64 to avoid overflow.
         if _is_signed_int_code(dtype_code):
             return ArrayDType.INT64.value
@@ -527,13 +611,21 @@ def dtype_result_for_reduction(dtype_code: Int, op: Int) -> Int:
 
 
 def dtype_result_for_linalg(dtype_code: Int) -> Int:
-    if dtype_code == ArrayDType.FLOAT32.value:
+    if (
+        dtype_code == ArrayDType.FLOAT32.value
+        or dtype_code == ArrayDType.BFLOAT16.value
+        or _is_quant_float_code(dtype_code)
+    ):
         return ArrayDType.FLOAT32.value
     return ArrayDType.FLOAT64.value
 
 
 def dtype_result_for_linalg_binary(lhs_dtype: Int, rhs_dtype: Int) -> Int:
     if lhs_dtype == ArrayDType.FLOAT32.value and rhs_dtype == ArrayDType.FLOAT32.value:
+        return ArrayDType.FLOAT32.value
+    if (lhs_dtype == ArrayDType.BFLOAT16.value or _is_quant_float_code(lhs_dtype)) and (
+        rhs_dtype == ArrayDType.BFLOAT16.value or _is_quant_float_code(rhs_dtype)
+    ):
         return ArrayDType.FLOAT32.value
     return ArrayDType.FLOAT64.value
 
@@ -620,6 +712,8 @@ def dtype_can_cast(from_dtype: Int, to_dtype: Int, casting: Int) raises -> Bool:
                 var ts = dtype_item_size(to_dtype)
                 return ts >= fs
             return False
+        if from_kind == DTypeKind.QUANT_FLOAT.value:
+            return to_kind == DTypeKind.REAL_FLOAT.value and to_dtype != ArrayDType.FLOAT16.value
         return False
     if casting == CastingRule.SAME_KIND.value:
         if from_kind == DTypeKind.BOOL.value:
@@ -638,5 +732,7 @@ def dtype_can_cast(from_dtype: Int, to_dtype: Int, casting: Int) raises -> Bool:
             )
         if from_kind == DTypeKind.REAL_FLOAT.value:
             return to_kind == DTypeKind.REAL_FLOAT.value
+        if from_kind == DTypeKind.QUANT_FLOAT.value:
+            return to_kind == DTypeKind.QUANT_FLOAT.value or to_kind == DTypeKind.REAL_FLOAT.value
         return False
     raise Error("unknown casting policy")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any
 
@@ -63,6 +63,8 @@ def _kind_from_monpy(kind: str) -> DTypeKind:
     return DTypeKind.REAL_FLOAT
   if kind == "c":
     return DTypeKind.COMPLEX_FLOAT
+  if kind == "q":
+    return DTypeKind.QUANT_FLOAT
   raise TypeError(f"unsupported monpy dtype kind: {kind!r}")
 
 
@@ -75,18 +77,28 @@ def from_monpy_dtype(dtype: object) -> DTypeSpec:
   code = getattr(dtype, "code", None)
   kind = getattr(dtype, "kind", None)
   itemsize = getattr(dtype, "itemsize", None)
+  bits = getattr(dtype, "bits", None)
+  storage_bits = getattr(dtype, "storage_bits", None)
+  storage = getattr(dtype, "storage", None)
   if not isinstance(name, str) or not isinstance(code, int) or not isinstance(kind, str) or not isinstance(itemsize, int):
     raise TypeError(f"expected monpy dtype or DTypeSpec, got {type(dtype).__name__}")
+  if name in EXTRA_DTYPES and EXTRA_DTYPES[name].code == code:
+    return replace(EXTRA_DTYPES[name], eager_storage_supported=True)
+  if not isinstance(bits, int):
+    bits = itemsize * 8
+  if not isinstance(storage_bits, int):
+    storage_bits = itemsize * 8
+  storage_kind = StorageKind.PACKED_SUBBYTE if storage == "packed_subbyte" else StorageKind.VALUE
   return DTypeSpec(
     name=name,
     code=code,
     kind=_kind_from_monpy(kind),
-    storage=StorageKind.VALUE,
-    bits=itemsize * 8,
-    storage_bits=itemsize * 8,
+    storage=storage_kind,
+    bits=bits,
+    storage_bits=storage_bits,
     max_name=name,
     safetensors_names=(),
-    host_storage_dtype=name,
+    host_storage_dtype="uint8" if storage_kind is StorageKind.PACKED_SUBBYTE or storage_bits == 8 else name,
     eager_storage_supported=True,
   )
 

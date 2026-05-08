@@ -25,10 +25,12 @@ result helpers — lives in sibling modules.
 from std.collections import List
 from std.os import abort
 from std.python import Python, PythonObject
+from std.utils.numerics import nan
 
 from domain import (
     ArrayDType,
     BackendKind,
+    dtype_byte_offset,
     dtype_item_size,
 )
 from storage import Storage, release_storage
@@ -93,7 +95,7 @@ struct Array(Movable, Writable):
     @staticmethod
     def data_address_py(py_self: PythonObject) raises -> PythonObject:
         var self_ptr = Self._get_self_ptr(py_self)
-        var byte_offset = self_ptr[].offset_elems * item_size(self_ptr[].dtype_code)
+        var byte_offset = dtype_byte_offset(self_ptr[].dtype_code, self_ptr[].offset_elems)
         return PythonObject((self_ptr[].data + byte_offset).__int__())
 
     @staticmethod
@@ -162,6 +164,28 @@ struct Array(Movable, Writable):
             return PythonObject(get_physical[DType.float32](self_ptr[], physical_offset(self_ptr[], index)))
         if self_ptr[].dtype_code == ArrayDType.FLOAT16.value:
             return PythonObject(Float64(get_physical[DType.float16](self_ptr[], physical_offset(self_ptr[], index))))
+        if self_ptr[].dtype_code == ArrayDType.BFLOAT16.value:
+            return PythonObject(Float64(get_physical[DType.bfloat16](self_ptr[], physical_offset(self_ptr[], index))))
+        if self_ptr[].dtype_code == ArrayDType.FLOAT8_E4M3FN.value:
+            return PythonObject(
+                Float64(get_physical[DType.float8_e4m3fn](self_ptr[], physical_offset(self_ptr[], index)))
+            )
+        if self_ptr[].dtype_code == ArrayDType.FLOAT8_E4M3FNUZ.value:
+            return PythonObject(
+                Float64(get_physical[DType.float8_e4m3fnuz](self_ptr[], physical_offset(self_ptr[], index)))
+            )
+        if self_ptr[].dtype_code == ArrayDType.FLOAT8_E5M2.value:
+            return PythonObject(
+                Float64(get_physical[DType.float8_e5m2](self_ptr[], physical_offset(self_ptr[], index)))
+            )
+        if self_ptr[].dtype_code == ArrayDType.FLOAT8_E5M2FNUZ.value:
+            return PythonObject(
+                Float64(get_physical[DType.float8_e5m2fnuz](self_ptr[], physical_offset(self_ptr[], index)))
+            )
+        if self_ptr[].dtype_code == ArrayDType.FLOAT8_E8M0FNU.value:
+            return PythonObject(get_physical_e8m0fnu(self_ptr[], physical_offset(self_ptr[], index)))
+        if self_ptr[].dtype_code == ArrayDType.FLOAT4_E2M1FN.value:
+            return PythonObject(Float64(get_physical_fp4_e2m1fn(self_ptr[], physical_offset(self_ptr[], index))))
         if self_ptr[].dtype_code == ArrayDType.COMPLEX64.value:
             var phys = physical_offset(self_ptr[], index)
             var real = Float64(get_physical_c64_real(self_ptr[], phys))
@@ -339,6 +363,131 @@ def set_physical[dt: DType](mut array: Array, physical: Int, value: Scalar[dt]):
 
 def get_physical_bool(array: Array, physical: Int) raises -> Bool:
     return array.data[physical] != UInt8(0)
+
+
+def _pow2_f64(exp: Int) -> Float64:
+    var value = 1.0
+    if exp >= 0:
+        var i = 0
+        while i < exp:
+            value = value * 2.0
+            i += 1
+    else:
+        var i = 0
+        while i < -exp:
+            value = value * 0.5
+            i += 1
+    return value
+
+
+def get_physical_e8m0fnu(array: Array, physical: Int) raises -> Float64:
+    var bits = Int(array.data[physical])
+    if bits == 255:
+        return Float64(nan[DType.float64]())
+    return _pow2_f64(bits - 127)
+
+
+def _encode_e8m0fnu(value: Float64) -> UInt8:
+    if value != value:
+        return UInt8(255)
+    if value <= 0.0:
+        return UInt8(0)
+    var scaled = value
+    var exp = 0
+    while scaled >= 2.0 and exp < 127:
+        scaled = scaled * 0.5
+        exp += 1
+    while scaled < 1.0 and exp > -127:
+        scaled = scaled * 2.0
+        exp -= 1
+    if scaled >= 1.4142135623730951 and exp < 127:
+        exp += 1
+    if exp >= 127:
+        return UInt8(254)
+    if exp <= -127:
+        return UInt8(0)
+    return UInt8(exp + 127)
+
+
+def set_physical_e8m0fnu(mut array: Array, physical: Int, value: Float64) raises:
+    array.data[physical] = _encode_e8m0fnu(value)
+
+
+def _fp4_nibble_to_f32(code: Int) -> Float32:
+    if code == 0:
+        return 0.0
+    if code == 1:
+        return 0.5
+    if code == 2:
+        return 1.0
+    if code == 3:
+        return 1.5
+    if code == 4:
+        return 2.0
+    if code == 5:
+        return 3.0
+    if code == 6:
+        return 4.0
+    if code == 7:
+        return 6.0
+    if code == 8:
+        return -0.0
+    if code == 9:
+        return -0.5
+    if code == 10:
+        return -1.0
+    if code == 11:
+        return -1.5
+    if code == 12:
+        return -2.0
+    if code == 13:
+        return -3.0
+    if code == 14:
+        return -4.0
+    return -6.0
+
+
+def get_physical_fp4_e2m1fn(array: Array, physical: Int) raises -> Float32:
+    var packed = array.data[physical // 2]
+    var nibble = packed & UInt8(0x0F)
+    if physical % 2 != 0:
+        nibble = (packed >> UInt8(4)) & UInt8(0x0F)
+    return _fp4_nibble_to_f32(Int(nibble))
+
+
+def _encode_fp4_e2m1fn(value: Float64) -> UInt8:
+    var negative = value < 0.0
+    var x = -value if negative else value
+    var code: Int
+    if x <= 0.25:
+        code = 0
+    elif x < 0.75:
+        code = 1
+    elif x <= 1.25:
+        code = 2
+    elif x < 1.75:
+        code = 3
+    elif x <= 2.5:
+        code = 4
+    elif x < 3.5:
+        code = 5
+    elif x <= 5.0:
+        code = 6
+    else:
+        code = 7
+    if negative:
+        code += 8
+    return UInt8(code)
+
+
+def set_physical_fp4_e2m1fn(mut array: Array, physical: Int, value: Float64) raises:
+    var byte_index = physical // 2
+    var code = _encode_fp4_e2m1fn(value)
+    var current = array.data[byte_index]
+    if physical % 2 == 0:
+        array.data[byte_index] = (current & UInt8(0xF0)) | code
+    else:
+        array.data[byte_index] = (current & UInt8(0x0F)) | (code << UInt8(4))
 
 
 # Complex accessors: arrays store interleaved (real, imag) pairs.

@@ -30,6 +30,13 @@ def _dtype_codes() raises -> PythonObject:
     codes["FLOAT16"] = ArrayDType.FLOAT16.value
     codes["COMPLEX64"] = ArrayDType.COMPLEX64.value
     codes["COMPLEX128"] = ArrayDType.COMPLEX128.value
+    codes["BFLOAT16"] = ArrayDType.BFLOAT16.value
+    codes["FLOAT8_E4M3FN"] = ArrayDType.FLOAT8_E4M3FN.value
+    codes["FLOAT8_E4M3FNUZ"] = ArrayDType.FLOAT8_E4M3FNUZ.value
+    codes["FLOAT8_E5M2"] = ArrayDType.FLOAT8_E5M2.value
+    codes["FLOAT8_E5M2FNUZ"] = ArrayDType.FLOAT8_E5M2FNUZ.value
+    codes["FLOAT8_E8M0FNU"] = ArrayDType.FLOAT8_E8M0FNU.value
+    codes["FLOAT4_E2M1FN"] = ArrayDType.FLOAT4_E2M1FN.value
     return codes^
 
 
@@ -40,6 +47,7 @@ def _dtype_kind_codes() raises -> PythonObject:
     codes["REAL_FLOAT"] = DTypeKind.REAL_FLOAT.value
     codes["UNSIGNED_INT"] = DTypeKind.UNSIGNED_INT.value
     codes["COMPLEX_FLOAT"] = DTypeKind.COMPLEX_FLOAT.value
+    codes["QUANT_FLOAT"] = DTypeKind.QUANT_FLOAT.value
     return codes^
 
 

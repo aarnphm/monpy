@@ -34,9 +34,13 @@ from .accessors import (
     get_physical_bool,
     get_physical_c128_real,
     get_physical_c64_real,
+    get_physical_e8m0fnu,
+    get_physical_fp4_e2m1fn,
     is_c_contiguous,
     physical_offset,
     set_physical,
+    set_physical_e8m0fnu,
+    set_physical_fp4_e2m1fn,
 )
 
 
@@ -61,6 +65,16 @@ def dispatch_real_to_f64[op: PhysReadAsF64](dtype_code: Int, array: Array, physi
         return op[DType.float32](array, physical)
     if dtype_code == ArrayDType.FLOAT16.value:
         return op[DType.float16](array, physical)
+    if dtype_code == ArrayDType.BFLOAT16.value:
+        return op[DType.bfloat16](array, physical)
+    if dtype_code == ArrayDType.FLOAT8_E4M3FN.value:
+        return op[DType.float8_e4m3fn](array, physical)
+    if dtype_code == ArrayDType.FLOAT8_E4M3FNUZ.value:
+        return op[DType.float8_e4m3fnuz](array, physical)
+    if dtype_code == ArrayDType.FLOAT8_E5M2.value:
+        return op[DType.float8_e5m2](array, physical)
+    if dtype_code == ArrayDType.FLOAT8_E5M2FNUZ.value:
+        return op[DType.float8_e5m2fnuz](array, physical)
     if dtype_code == ArrayDType.INT64.value:
         return op[DType.int64](array, physical)
     if dtype_code == ArrayDType.INT32.value:
@@ -93,6 +107,21 @@ def dispatch_real_write_f64[
         return True
     if dtype_code == ArrayDType.FLOAT16.value:
         op[DType.float16](array, physical, value)
+        return True
+    if dtype_code == ArrayDType.BFLOAT16.value:
+        op[DType.bfloat16](array, physical, value)
+        return True
+    if dtype_code == ArrayDType.FLOAT8_E4M3FN.value:
+        op[DType.float8_e4m3fn](array, physical, value)
+        return True
+    if dtype_code == ArrayDType.FLOAT8_E4M3FNUZ.value:
+        op[DType.float8_e4m3fnuz](array, physical, value)
+        return True
+    if dtype_code == ArrayDType.FLOAT8_E5M2.value:
+        op[DType.float8_e5m2](array, physical, value)
+        return True
+    if dtype_code == ArrayDType.FLOAT8_E5M2FNUZ.value:
+        op[DType.float8_e5m2fnuz](array, physical, value)
         return True
     if dtype_code == ArrayDType.INT64.value:
         op[DType.int64](array, physical, value)
@@ -190,6 +219,21 @@ def dispatch_real_contig_fill_from_py[
     if dtype_code == ArrayDType.FLOAT16.value:
         op[DType.float16](array, value_obj)
         return True
+    if dtype_code == ArrayDType.BFLOAT16.value:
+        op[DType.bfloat16](array, value_obj)
+        return True
+    if dtype_code == ArrayDType.FLOAT8_E4M3FN.value:
+        op[DType.float8_e4m3fn](array, value_obj)
+        return True
+    if dtype_code == ArrayDType.FLOAT8_E4M3FNUZ.value:
+        op[DType.float8_e4m3fnuz](array, value_obj)
+        return True
+    if dtype_code == ArrayDType.FLOAT8_E5M2.value:
+        op[DType.float8_e5m2](array, value_obj)
+        return True
+    if dtype_code == ArrayDType.FLOAT8_E5M2FNUZ.value:
+        op[DType.float8_e5m2fnuz](array, value_obj)
+        return True
     if dtype_code == ArrayDType.INT64.value:
         op[DType.int64](array, value_obj)
         return True
@@ -228,6 +272,21 @@ def dispatch_real_write_from_py[
         return True
     if dtype_code == ArrayDType.FLOAT16.value:
         op[DType.float16](array, physical, value_obj)
+        return True
+    if dtype_code == ArrayDType.BFLOAT16.value:
+        op[DType.bfloat16](array, physical, value_obj)
+        return True
+    if dtype_code == ArrayDType.FLOAT8_E4M3FN.value:
+        op[DType.float8_e4m3fn](array, physical, value_obj)
+        return True
+    if dtype_code == ArrayDType.FLOAT8_E4M3FNUZ.value:
+        op[DType.float8_e4m3fnuz](array, physical, value_obj)
+        return True
+    if dtype_code == ArrayDType.FLOAT8_E5M2.value:
+        op[DType.float8_e5m2](array, physical, value_obj)
+        return True
+    if dtype_code == ArrayDType.FLOAT8_E5M2FNUZ.value:
+        op[DType.float8_e5m2fnuz](array, physical, value_obj)
         return True
     if dtype_code == ArrayDType.INT64.value:
         op[DType.int64](array, physical, value_obj)
@@ -286,6 +345,10 @@ def get_physical_as_f64(array: Array, physical: Int) raises -> Float64:
         return Float64(get_physical_c64_real(array, physical))
     if c == ArrayDType.COMPLEX128.value:
         return get_physical_c128_real(array, physical)
+    if c == ArrayDType.FLOAT8_E8M0FNU.value:
+        return get_physical_e8m0fnu(array, physical)
+    if c == ArrayDType.FLOAT4_E2M1FN.value:
+        return Float64(get_physical_fp4_e2m1fn(array, physical))
     return dispatch_real_to_f64[_phys_read_as_f64](c, array, physical)
 
 
@@ -309,6 +372,12 @@ def set_physical_from_f64(mut array: Array, physical: Int, value: Float64) raise
         var ptr = array.data.bitcast[Float64]()
         ptr[physical * 2] = value
         ptr[physical * 2 + 1] = 0.0
+        return
+    if c == ArrayDType.FLOAT8_E8M0FNU.value:
+        set_physical_e8m0fnu(array, physical, value)
+        return
+    if c == ArrayDType.FLOAT4_E2M1FN.value:
+        set_physical_fp4_e2m1fn(array, physical, value)
         return
     if dispatch_real_write_f64[_phys_write_from_f64](c, array, physical, value):
         return
@@ -346,6 +415,12 @@ def set_logical_from_py(mut array: Array, logical: Int, value_obj: PythonObject)
             var ptr = array.data.bitcast[Float64]()
             ptr[physical * 2] = real_val
             ptr[physical * 2 + 1] = imag_val
+        return
+    if c == ArrayDType.FLOAT8_E8M0FNU.value:
+        set_physical_e8m0fnu(array, physical, Float64(py=value_obj))
+        return
+    if c == ArrayDType.FLOAT4_E2M1FN.value:
+        set_physical_fp4_e2m1fn(array, physical, Float64(py=value_obj))
         return
     if dispatch_real_write_from_py[_phys_write_from_py](c, array, physical, value_obj):
         return
@@ -396,6 +471,10 @@ def fill_all_from_py(mut array: Array, value_obj: PythonObject) raises:
             for i in range(array.size_value):
                 ptr[i * 2] = real
                 ptr[i * 2 + 1] = imag
+            return
+        if c == ArrayDType.FLOAT8_E8M0FNU.value or c == ArrayDType.FLOAT4_E2M1FN.value:
+            for i in range(array.size_value):
+                set_physical_from_f64(array, array.offset_elems + i, Float64(py=value_obj))
             return
         if dispatch_real_contig_fill_from_py[_contig_fill_from_py](c, array, value_obj):
             return

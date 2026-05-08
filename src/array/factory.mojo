@@ -21,7 +21,7 @@ from std.python import PythonObject
 
 from cute.int_tuple import IntTuple, flatten_to_int_list
 from cute.layout import Layout
-from domain import BackendKind
+from domain import BackendKind, dtype_storage_byte_len
 from storage import (
     make_external_storage,
     make_managed_storage,
@@ -40,7 +40,7 @@ from .accessors import (
 def make_empty_array(dtype_code: Int, var shape: List[Int]) raises -> Array:
     var size = shape_size(shape)
     var strides = make_c_strides(shape)
-    var byte_len = size * item_size(dtype_code)
+    var byte_len = dtype_storage_byte_len(dtype_code, size)
     var storage = make_managed_storage(byte_len)
     # Do not zero-fill here. Creation APIs that promise initialized values write
     # explicitly, and math kernels overwrite every output element before return.

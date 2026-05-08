@@ -14,6 +14,8 @@ from array import (
 )
 from domain import (
     dtype_code_from_format_char,
+    dtype_storage_byte_len,
+    dtype_storage_bits,
 )
 
 
@@ -199,6 +201,7 @@ def frombuffer_ops(
         raise Error("frombuffer: offset must be non-negative")
     if count < -1:
         raise Error("frombuffer: count must be -1 or non-negative")
+    var storage_bits = dtype_storage_bits(dtype_code)
     var item_bytes = item_size(dtype_code)
     var view = Py_buffer()
     var view_ptr = UnsafePointer(to=view).as_any_origin()
@@ -218,12 +221,15 @@ def frombuffer_ops(
     var available = byte_len - offset
     var n = count
     if n < 0:
-        if available % item_bytes != 0:
+        if storage_bits == 4:
+            n = available * 2
+        elif available % item_bytes != 0:
             release_fn(view_ptr)
             raise Error("frombuffer: buffer size must be a multiple of dtype itemsize")
-        n = available // item_bytes
+        else:
+            n = available // item_bytes
     else:
-        var needed = n * item_bytes
+        var needed = dtype_storage_byte_len(dtype_code, n)
         if needed > available:
             release_fn(view_ptr)
             raise Error("frombuffer: buffer is smaller than requested size")
@@ -231,7 +237,7 @@ def frombuffer_ops(
     shape.append(n)
     var strides = List[Int]()
     strides.append(1)
-    var byte_count = n * item_bytes
+    var byte_count = dtype_storage_byte_len(dtype_code, n)
     var data_addr = Int(view.buf.value()) + offset
     var data = UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=data_addr)
     var external = make_external_array(dtype_code, shape^, strides^, 0, data, byte_count)

@@ -39,7 +39,11 @@ DTYPE_INT32, DTYPE_INT16, DTYPE_INT8=_DTCODES["INT32"], _DTCODES["INT16"], _DTCO
 DTYPE_UINT64, DTYPE_UINT32, DTYPE_UINT16, DTYPE_UINT8=_DTCODES["UINT64"], _DTCODES["UINT32"], _DTCODES["UINT16"], _DTCODES["UINT8"]
 DTYPE_FLOAT16=_DTCODES["FLOAT16"]
 DTYPE_COMPLEX64, DTYPE_COMPLEX128=_DTCODES["COMPLEX64"], _DTCODES["COMPLEX128"]
-DTYPE_KIND_BOOL, DTYPE_KIND_SIGNED_INT, DTYPE_KIND_REAL_FLOAT, DTYPE_KIND_UNSIGNED_INT, DTYPE_KIND_COMPLEX_FLOAT=_DTKCODES["BOOL"], _DTKCODES["SIGNED_INT"], _DTKCODES["REAL_FLOAT"], _DTKCODES["UNSIGNED_INT"], _DTKCODES["COMPLEX_FLOAT"]
+DTYPE_BFLOAT16=_DTCODES["BFLOAT16"]
+DTYPE_FLOAT8_E4M3FN, DTYPE_FLOAT8_E4M3FNUZ=_DTCODES["FLOAT8_E4M3FN"], _DTCODES["FLOAT8_E4M3FNUZ"]
+DTYPE_FLOAT8_E5M2, DTYPE_FLOAT8_E5M2FNUZ=_DTCODES["FLOAT8_E5M2"], _DTCODES["FLOAT8_E5M2FNUZ"]
+DTYPE_FLOAT8_E8M0FNU, DTYPE_FLOAT4_E2M1FN=_DTCODES["FLOAT8_E8M0FNU"], _DTCODES["FLOAT4_E2M1FN"]
+DTYPE_KIND_BOOL, DTYPE_KIND_SIGNED_INT, DTYPE_KIND_REAL_FLOAT, DTYPE_KIND_UNSIGNED_INT, DTYPE_KIND_COMPLEX_FLOAT, DTYPE_KIND_QUANT_FLOAT=_DTKCODES["BOOL"], _DTKCODES["SIGNED_INT"], _DTKCODES["REAL_FLOAT"], _DTKCODES["UNSIGNED_INT"], _DTKCODES["COMPLEX_FLOAT"], _DTKCODES["QUANT_FLOAT"]
 CASTING_NO, CASTING_EQUIV, CASTING_SAFE, CASTING_SAME_KIND, CASTING_UNSAFE=_CASTCODES["NO"], _CASTCODES["EQUIV"], _CASTCODES["SAFE"], _CASTCODES["SAME_KIND"], _CASTCODES["UNSAFE"]
 OP_ADD, OP_SUB, OP_MUL, OP_DIV=_BINCODES["ADD"], _BINCODES["SUB"], _BINCODES["MUL"], _BINCODES["DIV"]
 OP_FLOOR_DIV, OP_MOD, OP_POWER, OP_MAXIMUM, OP_MINIMUM, OP_FMIN, OP_FMAX, OP_ARCTAN2, OP_HYPOT, OP_COPYSIGN=_BINCODES["FLOOR_DIV"], _BINCODES["MOD"], _BINCODES["POWER"], _BINCODES["MAXIMUM"], _BINCODES["MINIMUM"], _BINCODES["FMIN"], _BINCODES["FMAX"], _BINCODES["ARCTAN2"], _BINCODES["HYPOT"], _BINCODES["COPYSIGN"]
@@ -75,6 +79,17 @@ class DType:
   def char(self)->builtins.str:return self.format
   @property
   def str(self)->builtins.str:return self.typestr
+  @property
+  def bits(self)->builtins.int:return _DT_BITS[self]
+  @property
+  def storage_bits(self)->builtins.int:return _DT_STORAGE_BITS[self]
+  @property
+  def storage(self)->builtins.str:return _DT_STORAGE_KIND[self]
+  @property
+  def is_packed(self)->builtins.bool:return self.storage_bits<8
+  @property
+  def buffer_exportable(self)->builtins.bool:return self in _BUFFER_DTYPES
+  def storage_nbytes(self, size:int)->int:return _storage_nbytes_for(self, size)
 
 @dataclass(frozen=True, slots=True)
 class _FInfo:
@@ -133,17 +148,35 @@ complex128=DType("complex128", 13, "c", 16, 8, "=", "<c16", "D", builtins.comple
 cdouble=complex128
 clongdouble=complex128
 complex_=complex128
+# low-precision storage dtypes. These are real monpy dtypes, but Python's
+# array-interface / DLPack surfaces do not have portable scalar encodings for them.
+bfloat16=DType("bfloat16", 14, "f", 2, 2, "=", "", "", builtins.float)
+float8_e4m3fn=DType("float8_e4m3fn", 15, "q", 1, 1, "|", "", "", builtins.float)
+float8_e4m3fnuz=DType("float8_e4m3fnuz", 16, "q", 1, 1, "|", "", "", builtins.float)
+float8_e5m2=DType("float8_e5m2", 17, "q", 1, 1, "|", "", "", builtins.float)
+float8_e5m2fnuz=DType("float8_e5m2fnuz", 18, "q", 1, 1, "|", "", "", builtins.float)
+float8_e8m0fnu=DType("float8_e8m0fnu", 19, "q", 1, 1, "|", "", "", builtins.float)
+float4_e2m1fn=DType("float4_e2m1fn", 20, "q", 1, 1, "|", "", "", builtins.float)
 
-_DT:tuple[DType, ...]=(bool, int64, float32, float64, int32, int16, int8, uint64, uint32, uint16, uint8, float16, complex64, complex128)  # ordered by .code; idx == code
+_DT:tuple[DType, ...]=(bool, int64, float32, float64, int32, int16, int8, uint64, uint32, uint16, uint8, float16, complex64, complex128, bfloat16, float8_e4m3fn, float8_e4m3fnuz, float8_e5m2, float8_e5m2fnuz, float8_e8m0fnu, float4_e2m1fn)  # ordered by .code; idx == code
 _DTC:dict[int, DType]={d.code:d for d in _DT}                                                                                # code → DType
 _DTN:dict[str, DType]={d.name:d for d in _DT}|{"bool_":bool, "int_":int64, "float_":float64, "single":float32, "double":float64, "intp":int64, "half":float16, "ubyte":uint8, "ushort":uint16, "uintc":uint32, "ulonglong":uint64, "csingle":complex64, "cdouble":complex128, "clongdouble":complex128, "complex_":complex128} # name → DType
-_DTF:dict[str, DType]={d.format:d for d in _DT}|{"?":bool}
+_DTF:dict[str, DType]={d.format:d for d in _DT if d.format}|{"?":bool}
 _DTBT:dict[str, DType]={"|b1":bool, "|i1":int8, "|u1":uint8}|{p+s:d for s, d in[("i8", int64), ("i4", int32), ("i2", int16), ("u8", uint64), ("u4", uint32), ("u2", uint16), ("f2", float16), ("f4", float32), ("f8", float64), ("c8", complex64), ("c16", complex128)] for p in"<="}  # native/little-endian array-interface typestr → DType
-_DTK:dict[DType, int]={bool:DTYPE_KIND_BOOL, int64:DTYPE_KIND_SIGNED_INT, int32:DTYPE_KIND_SIGNED_INT, int16:DTYPE_KIND_SIGNED_INT, int8:DTYPE_KIND_SIGNED_INT, uint64:DTYPE_KIND_UNSIGNED_INT, uint32:DTYPE_KIND_UNSIGNED_INT, uint16:DTYPE_KIND_UNSIGNED_INT, uint8:DTYPE_KIND_UNSIGNED_INT, float32:DTYPE_KIND_REAL_FLOAT, float64:DTYPE_KIND_REAL_FLOAT, float16:DTYPE_KIND_REAL_FLOAT, complex64:DTYPE_KIND_COMPLEX_FLOAT, complex128:DTYPE_KIND_COMPLEX_FLOAT}
+_DTK:dict[DType, int]={bool:DTYPE_KIND_BOOL, int64:DTYPE_KIND_SIGNED_INT, int32:DTYPE_KIND_SIGNED_INT, int16:DTYPE_KIND_SIGNED_INT, int8:DTYPE_KIND_SIGNED_INT, uint64:DTYPE_KIND_UNSIGNED_INT, uint32:DTYPE_KIND_UNSIGNED_INT, uint16:DTYPE_KIND_UNSIGNED_INT, uint8:DTYPE_KIND_UNSIGNED_INT, float32:DTYPE_KIND_REAL_FLOAT, float64:DTYPE_KIND_REAL_FLOAT, float16:DTYPE_KIND_REAL_FLOAT, bfloat16:DTYPE_KIND_REAL_FLOAT, complex64:DTYPE_KIND_COMPLEX_FLOAT, complex128:DTYPE_KIND_COMPLEX_FLOAT, float8_e4m3fn:DTYPE_KIND_QUANT_FLOAT, float8_e4m3fnuz:DTYPE_KIND_QUANT_FLOAT, float8_e5m2:DTYPE_KIND_QUANT_FLOAT, float8_e5m2fnuz:DTYPE_KIND_QUANT_FLOAT, float8_e8m0fnu:DTYPE_KIND_QUANT_FLOAT, float4_e2m1fn:DTYPE_KIND_QUANT_FLOAT}
+_DT_BITS:dict[DType, int]={d:d.itemsize*8 for d in _DT}|{float4_e2m1fn:4}
+_DT_STORAGE_BITS:dict[DType, int]={d:d.itemsize*8 for d in _DT}|{float4_e2m1fn:4}
+_DT_STORAGE_KIND:dict[DType, str]={d:"value" for d in _DT}|{float4_e2m1fn:"packed_subbyte"}
+_BUFFER_DTYPES:set[DType]={bool, int64, int32, int16, int8, uint64, uint32, uint16, uint8, float16, float32, float64, complex64, complex128}
 _CASTING_CODES:dict[str, int]={"no":CASTING_NO, "equiv":CASTING_EQUIV, "safe":CASTING_SAFE, "same_kind":CASTING_SAME_KIND, "unsafe":CASTING_UNSAFE}
-_ISDTYPE_KINDS:dict[str, set[DType]]={"bool":{bool}, "signed integer":{int64, int32, int16, int8}, "unsigned integer":{uint64, uint32, uint16, uint8}, "integral":{int64, int32, int16, int8, uint64, uint32, uint16, uint8}, "real floating":{float32, float64, float16}, "complex floating":{complex64, complex128}, "numeric":{int64, int32, int16, int8, uint64, uint32, uint16, uint8, float32, float64, float16, complex64, complex128}}
-_FINFO:dict[DType, _FInfo]={float32:_FInfo(float32, 32, 1.1920928955078125e-07, 5.960464477539063e-08, 3.4028234663852886e38, -3.4028234663852886e38, 1.1754943508222875e-38, 1.1754943508222875e-38, 1e-06, 6, 23, 8, 128, -126, -23, -24), float64:_FInfo(float64, 64, 2.220446049250313e-16, 1.1102230246251565e-16, 1.7976931348623157e308, -1.7976931348623157e308, 2.2250738585072014e-308, 2.2250738585072014e-308, 1e-15, 15, 52, 11, 1024, -1022, -52, -53), float16:_FInfo(float16, 16, 0.0009765625, 0.00048828125, 65504.0, -65504.0, 6.103515625e-05, 6.103515625e-05, 1e-03, 3, 10, 5, 16, -14, -10, -11)}
+_ISDTYPE_KINDS:dict[str, set[DType]]={"bool":{bool}, "signed integer":{int64, int32, int16, int8}, "unsigned integer":{uint64, uint32, uint16, uint8}, "integral":{int64, int32, int16, int8, uint64, uint32, uint16, uint8}, "real floating":{float32, float64, float16, bfloat16}, "quantized floating":{float8_e4m3fn, float8_e4m3fnuz, float8_e5m2, float8_e5m2fnuz, float8_e8m0fnu, float4_e2m1fn}, "complex floating":{complex64, complex128}, "numeric":{int64, int32, int16, int8, uint64, uint32, uint16, uint8, float32, float64, float16, bfloat16, float8_e4m3fn, float8_e4m3fnuz, float8_e5m2, float8_e5m2fnuz, float8_e8m0fnu, float4_e2m1fn, complex64, complex128}}
+_FINFO:dict[DType, _FInfo]={float32:_FInfo(float32, 32, 1.1920928955078125e-07, 5.960464477539063e-08, 3.4028234663852886e38, -3.4028234663852886e38, 1.1754943508222875e-38, 1.1754943508222875e-38, 1e-06, 6, 23, 8, 128, -126, -23, -24), float64:_FInfo(float64, 64, 2.220446049250313e-16, 1.1102230246251565e-16, 1.7976931348623157e308, -1.7976931348623157e308, 2.2250738585072014e-308, 2.2250738585072014e-308, 1e-15, 15, 52, 11, 1024, -1022, -52, -53), float16:_FInfo(float16, 16, 0.0009765625, 0.00048828125, 65504.0, -65504.0, 6.103515625e-05, 6.103515625e-05, 1e-03, 3, 10, 5, 16, -14, -10, -11), bfloat16:_FInfo(bfloat16, 16, 0.0078125, 0.00390625, 3.3895313892515355e38, -3.3895313892515355e38, 1.1754943508222875e-38, 1.1754943508222875e-38, 1e-02, 2, 7, 8, 128, -126, -7, -8), float8_e4m3fn:_FInfo(float8_e4m3fn, 8, 0.125, 0.0625, 448.0, -448.0, 0.015625, 0.015625, 1e-01, 1, 3, 4, 8, -6, -3, -4), float8_e4m3fnuz:_FInfo(float8_e4m3fnuz, 8, 0.125, 0.0625, 240.0, -240.0, 0.0078125, 0.0078125, 1e-01, 1, 3, 4, 8, -7, -3, -4), float8_e5m2:_FInfo(float8_e5m2, 8, 0.25, 0.125, 57344.0, -57344.0, 6.103515625e-05, 6.103515625e-05, 1e-01, 0, 2, 5, 16, -14, -2, -3), float8_e5m2fnuz:_FInfo(float8_e5m2fnuz, 8, 0.25, 0.125, 57344.0, -57344.0, 3.0517578125e-05, 3.0517578125e-05, 1e-01, 0, 2, 5, 16, -15, -2, -3)}
 _IINFO:dict[DType, _IInfo]={int64:_IInfo(int64, 64, -9223372036854775808, 9223372036854775807), int32:_IInfo(int32, 32, -2147483648, 2147483647), int16:_IInfo(int16, 16, -32768, 32767), int8:_IInfo(int8, 8, -128, 127), uint64:_IInfo(uint64, 64, 0, 18446744073709551615), uint32:_IInfo(uint32, 32, 0, 4294967295), uint16:_IInfo(uint16, 16, 0, 65535), uint8:_IInfo(uint8, 8, 0, 255)}
+
+def _storage_nbytes_for(dtype_value:DType, size:int)->int:
+  if size<=0:return 0
+  bits=dtype_value.storage_bits
+  return (size*bits+7)//8
 
 # 4×4 promotion tables flattened to a 16-char digit string, indexed (lhs.code*4 + rhs.code).
 # Each char is the result DType's .code in the same _DT ordering. Numpy convention: int+float32→float64.
@@ -154,8 +187,8 @@ _BR:dict[int, dict[tuple[DType, DType], DType]]={OP_ADD:_NPT, OP_SUB:_NPT, OP_MU
                                               OP_FLOOR_DIV:_NPT, OP_MOD:_NPT, OP_POWER:_NPT,
                                               OP_MAXIMUM:_NPT, OP_MINIMUM:_NPT, OP_FMIN:_NPT, OP_FMAX:_NPT,
                                               OP_ARCTAN2:_DPT, OP_HYPOT:_DPT, OP_COPYSIGN:_DPT}                    # binary op → promotion table
-_UR:dict[DType, DType]={bool:float64, int64:float64, int32:float64, int16:float64, int8:float64, uint64:float64, uint32:float64, uint16:float64, uint8:float64, float16:float16, float32:float32, float64:float64, complex64:complex64, complex128:complex128}  # unary (sin/cos/exp/log) result: int kinds → f64
-_UR_PRESERVE:dict[DType, DType]={bool:int64, int64:int64, int32:int32, int16:int16, int8:int8, uint64:uint64, uint32:uint32, uint16:uint16, uint8:uint8, float16:float16, float32:float32, float64:float64, complex64:complex64, complex128:complex128}  # preserve-kind unary: bool → int64
+_UR:dict[DType, DType]={bool:float64, int64:float64, int32:float64, int16:float64, int8:float64, uint64:float64, uint32:float64, uint16:float64, uint8:float64, float16:float16, bfloat16:float32, float32:float32, float64:float64, float8_e4m3fn:float32, float8_e4m3fnuz:float32, float8_e5m2:float32, float8_e5m2fnuz:float32, float8_e8m0fnu:float32, float4_e2m1fn:float32, complex64:complex64, complex128:complex128}  # unary (sin/cos/exp/log) result: int kinds → f64
+_UR_PRESERVE:dict[DType, DType]={bool:int64, int64:int64, int32:int32, int16:int16, int8:int8, uint64:uint64, uint32:uint32, uint16:uint16, uint8:uint8, float16:float16, bfloat16:bfloat16, float32:float32, float64:float64, float8_e4m3fn:float32, float8_e4m3fnuz:float32, float8_e5m2:float32, float8_e5m2fnuz:float32, float8_e8m0fnu:float32, float4_e2m1fn:float32, complex64:complex64, complex128:complex128}  # preserve-kind unary: bool → int64
 _CFE="unable to avoid copy while creating a monpy array as requested"                                            # error msg for copy=False refusal
 _S1E="only size-1 arrays can be converted to python scalars"                                                     # error msg for non-size-1 → python scalar
 newaxis=None
@@ -410,6 +443,8 @@ class ndarray:
   @property
   def itemsize(self)->int:return self.dtype.itemsize
   @property
+  def nbytes(self)->int:return self.dtype.storage_nbytes(self.size)
+  @property
   def strides(self)->tuple[int, ...]:
     i=self.itemsize
     n=self.ndim
@@ -426,6 +461,7 @@ class ndarray:
     return self.transpose(tuple(range(self.ndim-2))+(self.ndim-1, self.ndim-2))
   @property
   def __array_interface__(self)->dict[str, object]:
+    if not self.dtype.buffer_exportable:raise BufferError(f"{self.dtype.name} has no portable __array_interface__ storage format")
     s, st, i=self.shape, self.strides, self.itemsize
     return{"version":3, "shape":s, "typestr":self.dtype.typestr, "data":(builtins.int(self._native.data_address()), False), "strides":None if _is_c_contig(s, st, i) else st}
   def __array_namespace__(self, *, api_version:str|None=None)->ModuleType:
@@ -633,6 +669,8 @@ class _DeferredArray:
   def size(self)->int:return math.prod(self.shape)
   @property
   def itemsize(self)->int:return self.dtype.itemsize
+  @property
+  def nbytes(self)->int:return self.dtype.storage_nbytes(self.size)
   @property
   def strides(self)->tuple[int, ...]:return self._materialize().strides
   @property
@@ -3074,4 +3112,4 @@ def __getattr__(name:str)->object:
     return getattr(kernels, name)
   raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-__all__=["DType", "Ufunc", "abs", "absolute", "add", "all", "any", "append", "arange", "arccos", "arcsin", "arctan", "arctan2", "argpartition", "argsort", "argwhere", "array", "array_split", "asarray", "ascontiguousarray", "argmax", "argmin", "asfortranarray", "astype", "atleast_1d", "atleast_2d", "atleast_3d", "average", "bincount", "block", "bool", "bool_", "broadcast_arrays", "broadcast_to", "can_cast", "cbrt", "cdouble", "ceil", "clongdouble", "column_stack", "complex_", "complex64", "complex128", "concatenate", "conj", "conjugate", "copy", "copysign", "cos", "cosh", "count_nonzero", "cross", "csingle", "cummax", "cummin", "cumprod", "cumsum", "deg2rad", "degrees", "delete", "diagonal", "diag_indices", "digitize", "divide", "dot", "dsplit", "dstack", "dtype", "einsum", "e", "empty", "empty_like", "equal", "exp", "exp2", "expm1", "expand_dims", "eye", "fabs", "finfo", "fix", "flatnonzero", "flatten", "flip", "fliplr", "flipud", "float_", "float16", "float32", "float64", "floor", "floor_divide", "fmax", "fmin", "frombuffer", "from_dlpack", "fromiter", "full", "full_like", "geomspace", "greater", "greater_equal", "half", "hsplit", "hstack", "hypot", "identity", "iinfo", "imag", "indices", "inf", "inner", "insert", "int_", "int8", "int16", "int32", "int64", "intersect1d", "intp", "isdtype", "isfinite", "isinf", "isin", "isnan", "issubdtype", "ix_", "kron", "less", "less_equal", "lexsort", "linalg", "layer_norm", "linspace", "log", "log2", "log10", "log1p", "logical_and", "logical_not", "logical_or", "logical_xor", "logspace", "matmul", "matrix_transpose", "matvec", "max", "maximum", "mean", "median", "meshgrid", "min", "minimum", "mod", "moveaxis", "multiply", "nan", "nanargmax", "nanargmin", "nancumprod", "nancumsum", "nanmax", "nanmean", "nanmedian", "nanmin", "nanpercentile", "nanprod", "nanquantile", "nanstd", "nansum", "nanvar", "ndarray", "negative", "newaxis", "nn", "nonzero", "not_equal", "ones", "ones_like", "outer", "pad", "partition", "percentile", "pi", "positive", "power", "prod", "promote_types", "ptp", "put", "put_along_axis", "quantile", "radians", "rad2deg", "ravel", "ravel_multi_index", "real", "reciprocal", "remainder", "repeat", "reshape", "result_type", "rint", "roll", "rot90", "scaled_masked_softmax", "searchsorted", "setdiff1d", "setxor1d", "sign", "signbit", "sin", "sin_add_mul", "sinh", "softmax", "sort", "split", "sqrt", "square", "squeeze", "stack", "std", "subtract", "sum", "swapaxes", "take", "take_along_axis", "tan", "tanh", "angle", "tensordot", "tile", "trace", "transpose", "tri", "trim_zeros", "triu", "tril", "triu_indices", "tril_indices", "true_divide", "trunc", "ubyte", "ufunc", "uint8", "uint16", "uint32", "uint64", "uintc", "ulonglong", "union1d", "unique", "unravel_index", "ushort", "var", "vdot", "vecdot", "vecmat", "vsplit", "vstack", "where", "zeros", "zeros_like"]+sorted(_KERNEL_LAZY_EXPORTS)
+__all__=["DType", "Ufunc", "abs", "absolute", "add", "all", "any", "append", "arange", "arccos", "arcsin", "arctan", "arctan2", "argpartition", "argsort", "argwhere", "array", "array_split", "asarray", "ascontiguousarray", "argmax", "argmin", "asfortranarray", "astype", "atleast_1d", "atleast_2d", "atleast_3d", "average", "bfloat16", "bincount", "block", "bool", "bool_", "broadcast_arrays", "broadcast_to", "can_cast", "cbrt", "cdouble", "ceil", "clongdouble", "column_stack", "complex_", "complex64", "complex128", "concatenate", "conj", "conjugate", "copy", "copysign", "cos", "cosh", "count_nonzero", "cross", "csingle", "cummax", "cummin", "cumprod", "cumsum", "deg2rad", "degrees", "delete", "diagonal", "diag_indices", "digitize", "divide", "dot", "dsplit", "dstack", "dtype", "einsum", "e", "empty", "empty_like", "equal", "exp", "exp2", "expm1", "expand_dims", "eye", "fabs", "finfo", "fix", "flatnonzero", "flatten", "flip", "fliplr", "flipud", "float_", "float16", "float32", "float4_e2m1fn", "float64", "float8_e4m3fn", "float8_e4m3fnuz", "float8_e5m2", "float8_e5m2fnuz", "float8_e8m0fnu", "floor", "floor_divide", "fmax", "fmin", "frombuffer", "from_dlpack", "fromiter", "full", "full_like", "geomspace", "greater", "greater_equal", "half", "hsplit", "hstack", "hypot", "identity", "iinfo", "imag", "indices", "inf", "inner", "insert", "int_", "int8", "int16", "int32", "int64", "intersect1d", "intp", "isdtype", "isfinite", "isinf", "isin", "isnan", "issubdtype", "ix_", "kron", "less", "less_equal", "lexsort", "linalg", "layer_norm", "linspace", "log", "log2", "log10", "log1p", "logical_and", "logical_not", "logical_or", "logical_xor", "logspace", "matmul", "matrix_transpose", "matvec", "max", "maximum", "mean", "median", "meshgrid", "min", "minimum", "mod", "moveaxis", "multiply", "nan", "nanargmax", "nanargmin", "nancumprod", "nancumsum", "nanmax", "nanmean", "nanmedian", "nanmin", "nanpercentile", "nanprod", "nanquantile", "nanstd", "nansum", "nanvar", "ndarray", "negative", "newaxis", "nn", "nonzero", "not_equal", "ones", "ones_like", "outer", "pad", "partition", "percentile", "pi", "positive", "power", "prod", "promote_types", "ptp", "put", "put_along_axis", "quantile", "radians", "rad2deg", "ravel", "ravel_multi_index", "real", "reciprocal", "remainder", "repeat", "reshape", "result_type", "rint", "roll", "rot90", "scaled_masked_softmax", "searchsorted", "setdiff1d", "setxor1d", "sign", "signbit", "sin", "sin_add_mul", "sinh", "softmax", "sort", "split", "sqrt", "square", "squeeze", "stack", "std", "subtract", "sum", "swapaxes", "take", "take_along_axis", "tan", "tanh", "angle", "tensordot", "tile", "trace", "transpose", "tri", "trim_zeros", "triu", "tril", "triu_indices", "tril_indices", "true_divide", "trunc", "ubyte", "ufunc", "uint8", "uint16", "uint32", "uint64", "uintc", "ulonglong", "union1d", "unique", "unravel_index", "ushort", "var", "vdot", "vecdot", "vecmat", "vsplit", "vstack", "where", "zeros", "zeros_like"]+sorted(_KERNEL_LAZY_EXPORTS)

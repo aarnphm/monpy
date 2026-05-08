@@ -27,6 +27,8 @@ from create import (
     dtype_item_size_py_ops,
     dtype_kind_code_py_ops,
     dtype_promote_types_py_ops,
+    dtype_storage_bits_py_ops,
+    dtype_storage_nbytes_py_ops,
     eig_ops,
     eigh_ops,
     empty_ops,
@@ -170,6 +172,8 @@ def PyInit__native() -> PythonObject:
         module.def_function[result_dtype_for_reduction_py_ops]("_result_dtype_for_reduction")
         module.def_function[domain_codes_py_ops]("_domain_codes")
         module.def_function[dtype_item_size_py_ops]("_dtype_itemsize")
+        module.def_function[dtype_storage_bits_py_ops]("_dtype_storage_bits")
+        module.def_function[dtype_storage_nbytes_py_ops]("_dtype_storage_nbytes")
         module.def_function[dtype_alignment_py_ops]("_dtype_alignment")
         module.def_function[dtype_kind_code_py_ops]("_dtype_kind")
         module.def_function[dtype_promote_types_py_ops]("_promote_types")
