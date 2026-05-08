@@ -1064,6 +1064,11 @@ def stack(arrays:Sequence[object], axis:int=0, *, out:object=None, dtype:object=
   if out is not None:raise NotImplementedError("stack out= not implemented in monpy v1")
   arrs=[asarray(a) for a in arrays]
   if not arrs:raise ValueError("stack: need at least one array")
+  if dtype is None:
+    ax0=axis+arrs[0].ndim+1 if axis<0 else axis
+    if ax0==0:
+      try:return ndarray._wrap(_native.stack_axis0([a._native for a in arrs], builtins.int(arrs[0]._native.dtype_code()), False))
+      except Exception:pass
   ref=arrs[0]
   ref_shape=ref.shape
   for a in arrs:
@@ -1085,6 +1090,9 @@ def hstack(arrays:Sequence[object])->ndarray:
 
 def vstack(arrays:Sequence[object])->ndarray:
   raw=[asarray(a) for a in arrays]
+  if raw:
+    try:return ndarray._wrap(_native.stack_axis0([a._native for a in raw], builtins.int(raw[0]._native.dtype_code()), True))
+    except Exception:pass
   if raw and builtins.all(a.ndim==1 for a in raw):
     row_width=raw[0].shape[0]
     if builtins.all(a.shape[0]==row_width for a in raw):

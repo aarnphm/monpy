@@ -57,6 +57,7 @@ from create import (
     sin_add_mul_ops,
     slice_1d_ops,
     slice_ops,
+    stack_axis0_ops,
     squeeze_all_ops,
     squeeze_axes_ops,
     solve_ops,
@@ -143,6 +144,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[where_ops]("where")
         module.def_function[reduce_ops]("reduce")
         module.def_function[reduce_axis_ops]("reduce_axis")
+        module.def_function[stack_axis0_ops]("stack_axis0")
         module.def_function[result_dtype_for_unary_py_ops]("_result_dtype_for_unary")
         module.def_function[result_dtype_for_binary_py_ops]("_result_dtype_for_binary")
         module.def_function[result_dtype_for_reduction_py_ops]("_result_dtype_for_reduction")

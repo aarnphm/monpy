@@ -140,3 +140,24 @@ def test_stack_axis0_fast_path_preserves_dtype_override() -> None:
 
   assert out.dtype == np.float32
   numpy.testing.assert_array_equal(numpy.asarray(out), expected)
+
+
+def test_stack_axis0_fast_path_falls_back_for_promotion() -> None:
+  a = np.arange(3, dtype=np.int64)
+  b = np.arange(3, 6, dtype=np.float32)
+  expected = numpy.stack([numpy.arange(3, dtype=numpy.int64), numpy.arange(3, 6, dtype=numpy.float32)], axis=0)
+
+  out = np.stack([a, b], axis=0)
+
+  assert out.dtype == np.float64
+  numpy.testing.assert_array_equal(numpy.asarray(out), expected)
+
+
+def test_vstack_rank2_matches_numpy() -> None:
+  a = np.asarray([[1, 2], [3, 4]], dtype=np.float32)
+  b = np.asarray([[5, 6]], dtype=np.float32)
+  expected = numpy.vstack([numpy.asarray(a), numpy.asarray(b)])
+
+  out = np.vstack([a, b])
+
+  numpy.testing.assert_array_equal(numpy.asarray(out), expected)

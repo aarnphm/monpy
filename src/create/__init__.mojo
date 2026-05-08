@@ -2047,6 +2047,55 @@ def concatenate_ops(
     return PythonObject(alloc=result^)
 
 
+def stack_axis0_ops(
+    arrays_obj: PythonObject, dtype_code_obj: PythonObject, require_rank1_obj: PythonObject
+) raises -> PythonObject:
+    from std.memory import memcpy as _memcpy
+
+    var n_arrays = Int(py=len(arrays_obj))
+    if n_arrays == 0:
+        raise Error("stack: need at least one array")
+    var dtype_code = Int(py=dtype_code_obj)
+    var require_rank1 = Bool(py=require_rank1_obj)
+    var first = arrays_obj[0].downcast_value_ptr[Array]()
+    var ndim = len(first[].shape)
+    if require_rank1 and ndim != 1:
+        raise Error("vstack: fast path only handles rank-1 inputs")
+    var out_shape = List[Int]()
+    out_shape.append(n_arrays)
+    for d in range(ndim):
+        out_shape.append(first[].shape[d])
+    var all_c_contig = True
+    for i in range(n_arrays):
+        var a = arrays_obj[i].downcast_value_ptr[Array]()
+        if len(a[].shape) != ndim:
+            raise Error("stack: arrays must have identical rank")
+        if a[].dtype_code != dtype_code:
+            raise Error("stack: dtype mismatch")
+        for d in range(ndim):
+            if a[].shape[d] != first[].shape[d]:
+                raise Error("stack: arrays must have identical shape")
+        if not is_c_contiguous(a[]):
+            all_c_contig = False
+    var result = make_empty_array(dtype_code, out_shape^)
+    var item_bytes = item_size(dtype_code)
+    var slab_elems = first[].size_value
+    var slab_bytes = slab_elems * item_bytes
+    for i in range(n_arrays):
+        var a = arrays_obj[i].downcast_value_ptr[Array]()
+        if all_c_contig:
+            _memcpy(
+                dest=result.data + i * slab_bytes,
+                src=a[].data + a[].offset_elems * item_bytes,
+                count=slab_bytes,
+            )
+        else:
+            var dst_base = i * slab_elems
+            for logical in range(slab_elems):
+                set_logical_from_f64(result, dst_base + logical, get_logical_as_f64(a[], logical))
+    return PythonObject(alloc=result^)
+
+
 def tril_ops(array_obj: PythonObject, k_obj: PythonObject) raises -> PythonObject:
     # Native lower-triangular: copy values where col <= row + k, zero otherwise.
     var src = array_obj.downcast_value_ptr[Array]()

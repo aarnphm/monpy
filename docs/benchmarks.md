@@ -307,3 +307,26 @@ Focused local result:
 The direct detector microbench moved from about 0.34 us to about 0.09 us while
 `tests/python/test_no_numpy_core.py` still verifies that importing the core
 package does not import NumPy.
+
+### 2026-05-08 native stack-axis-0 path
+
+The small join rows had a shape where native `concatenate` was already cheap,
+but `stack` and 1D `vstack` still paid Python shape validation, one native
+concatenate call, and then a second native reshape call. `src/create/__init__.mojo`
+now exposes `stack_axis0`, a single native entrypoint that validates identical
+input shape/dtype, builds the `[n_arrays] + input_shape` result, and copies each
+contiguous input slab directly. The Python `stack(axis=0)` and rank-1 `vstack`
+facades optimistically use it when no dtype override is requested, then fall
+back to the promotion/general-axis path on mismatch.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `array/views/stack_axis0_f32` | 9.191 | 3.731 | 2.610x | 1.051x |
+| `array/views/vstack_f32` | 9.678 | 3.700 | 2.926x | 1.127x |
+
+That is a 2.46:1 reduction for `stack_axis0_f32` and a 2.62:1 reduction for
+`vstack_f32`. `hstack` and plain `concatenate` did not move, as expected; those
+already route through the native concatenate leaf and need a different target if
+they become important.
