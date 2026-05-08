@@ -296,6 +296,46 @@ def reshape_ops(array_obj: PythonObject, shape_obj: PythonObject) raises -> Pyth
     return PythonObject(alloc=view^)
 
 
+def squeeze_all_ops(array_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var shape = List[Int]()
+    var strides = List[Int]()
+    for axis in range(len(src[].shape)):
+        if src[].shape[axis] != 1:
+            shape.append(src[].shape[axis])
+            strides.append(src[].strides[axis])
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    return PythonObject(alloc=result^)
+
+
+def squeeze_axes_ops(array_obj: PythonObject, axes_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var ndim = len(src[].shape)
+    var axes = int_list_from_py(axes_obj)
+    var drop = List[Bool]()
+    for _ in range(ndim):
+        drop.append(False)
+    for i in range(len(axes)):
+        var axis = axes[i]
+        if axis < 0:
+            axis += ndim
+        if axis < 0 or axis >= ndim:
+            raise Error("squeeze: axis out of range")
+        if src[].shape[axis] != 1:
+            raise Error("squeeze: cannot select an axis with size != 1")
+        if drop[axis]:
+            raise Error("squeeze: repeated axis")
+        drop[axis] = True
+    var shape = List[Int]()
+    var strides = List[Int]()
+    for axis in range(ndim):
+        if not drop[axis]:
+            shape.append(src[].shape[axis])
+            strides.append(src[].strides[axis])
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    return PythonObject(alloc=result^)
+
+
 def transpose_ops(array_obj: PythonObject, axes_obj: PythonObject) raises -> PythonObject:
     # Layout-algebra view: `select(L, axes)` permutes the top-level modes.
     # Equivalent to manual stride-list permutation but algebraically sourced.

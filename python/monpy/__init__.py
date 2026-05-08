@@ -938,25 +938,13 @@ def reshape(x:object, shape:int|Sequence[int])->ndarray:return asarray(x).reshap
 
 def squeeze(x:object, axis:int|Sequence[int]|None=None)->ndarray:
   arr=asarray(x)
-  old=arr.shape
-  n=len(old)
-  if axis is None:keep=tuple(d for d in old if d!=1)
-  else:
-    axes=(axis,) if isinstance(axis, builtins.int) else tuple(axis)
-    norm:list[int]=[]
-    for ax in axes:
-      ax_n=ax+n if ax<0 else ax
-      if ax_n<0 or ax_n>=n:raise ValueError("squeeze: axis out of range")
-      if old[ax_n]!=1:raise ValueError("squeeze: cannot select an axis with size != 1")
-      norm.append(ax_n)
-    if len(set(norm))!=len(norm):raise ValueError("squeeze: repeated axis")
-    drop=set(norm)
-    keep=tuple(old[i] for i in range(n) if i not in drop)
-  if not keep:keep=(1,)  # 0-d squeeze: numpy returns shape () not (1,) — but our reshape((1,)) is the conservative path; tests will tell.
-  if keep==(1,) and n>0 and builtins.all(d==1 for d in old):
-    # numpy squeezes a (1,1,...) array to scalar shape (); approximate via reshape().
-    return arr.reshape(())
-  return arr.reshape(keep)
+  try:
+    if axis is None:native=_native.squeeze_all(arr._native)
+    else:
+      axes=(axis,) if isinstance(axis, builtins.int) else tuple(axis)
+      native=_native.squeeze_axes(arr._native, axes)
+  except Exception as exc:raise ValueError(str(exc)) from exc
+  return ndarray._wrap(native, base=arr)
 
 def moveaxis(x:object, source:int|Sequence[int], destination:int|Sequence[int])->ndarray:
   arr=asarray(x)

@@ -94,6 +94,24 @@ def test_indices_matches_numpy() -> None:
   numpy.testing.assert_array_equal(res, expected)
 
 
+@pytest.mark.parametrize("axis", [None, 0, (0, 2), -4])
+def test_squeeze_matches_numpy(axis: int | tuple[int, ...] | None) -> None:
+  source = numpy.arange(20, dtype=numpy.float32).reshape(1, 4, 1, 5)
+  arr = np.asarray(source)
+
+  out = np.squeeze(arr, axis=axis)
+
+  numpy.testing.assert_array_equal(numpy.asarray(out), numpy.squeeze(source, axis=axis))
+  assert out.shape == numpy.squeeze(source, axis=axis).shape
+
+
+def test_squeeze_rejects_non_singleton_axis() -> None:
+  arr = np.asarray(numpy.zeros((1, 4, 1), dtype=numpy.float32))
+
+  with pytest.raises(ValueError, match="size != 1"):
+    np.squeeze(arr, axis=1)
+
+
 def test_ix_returns_outer_index_arrays() -> None:
   a = np.arange(3)
   b = np.arange(4)

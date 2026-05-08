@@ -57,6 +57,8 @@ from create import (
     sin_add_mul_ops,
     slice_1d_ops,
     slice_ops,
+    squeeze_all_ops,
+    squeeze_axes_ops,
     solve_ops,
     svd_ops,
     trace_ops,
@@ -117,6 +119,8 @@ def PyInit__native() -> PythonObject:
         module.def_function[linspace_ops]("linspace")
         module.def_function[indices_ops]("indices")
         module.def_function[reshape_ops]("reshape")
+        module.def_function[squeeze_all_ops]("squeeze_all")
+        module.def_function[squeeze_axes_ops]("squeeze_axes")
         module.def_function[transpose_ops]("transpose")
         module.def_function[transpose_full_reverse_ops]("transpose_full_reverse")
         module.def_function[slice_ops]("slice")

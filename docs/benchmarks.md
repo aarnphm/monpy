@@ -231,3 +231,30 @@ Focused local result:
 That is a 2.23:1 reduction in monpy wall time for the scalar row. Dense and
 transpose `ascontiguousarray` rows stayed within noise, which is the important
 guardrail for this wrapper-only change.
+
+### 2026-05-08 native squeeze view path
+
+`array/views/squeeze_axis0_f32` was the top remaining ratio in the next
+`array,strides` sweep. The benchmark still includes tiny-array construction on
+both sides, but the monpy half was also doing squeeze metadata in Python:
+fetching shape through the extension boundary, normalizing axes, building a
+drop set, then crossing back into native `reshape`.
+
+`src/create/__init__.mojo` now owns `squeeze_all` and `squeeze_axes`, so
+singleton-axis validation and view shape/stride construction happen in one
+native call. The Python facade is reduced to `asarray` plus one native view
+constructor.
+
+Focused local result:
+
+| run | monpy us | numpy us | monpy/numpy |
+| --- | ---: | ---: | ---: |
+| `results/local-sweep-20260508-heartbeat1/results.json` | 12.494 | 2.436 | 5.205x |
+| `results/local-sweep-20260508-native-squeeze/results.json` | 8.182 | 2.429 | 3.390x |
+
+That is a 1.53:1 reduction in monpy wall time for this row. The residual gap is
+mostly outside squeeze itself: a direct microbench of an existing monpy array
+showed `mnp.asarray(np.zeros(...))` around 4.2 us and native-backed squeeze
+around the low single-digit microsecond range. The next wrapper-pass target is
+therefore the NumPy-input marshaling family (`from_dlpack`, `asarray_zero_copy`,
+and small `array_copy`), not another squeeze-specialized kernel.
