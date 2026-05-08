@@ -485,5 +485,66 @@ Focused local result:
 | `array/decomp/pinv_8_f32` | 48.527 | 10.937 | 2.033x | 0.451x |
 
 All benchmarked pseudo-inverse rows now beat NumPy on this machine. The largest
-remaining deficit is no longer `pinv`; it is the view/import-heavy
-`squeeze_axis0_f32` row.
+remaining deficit at this checkpoint was no longer `pinv`; it was the
+view/import-heavy `squeeze_axis0_f32` row.
+
+### 2026-05-08 NumPy buffer-protocol ingest
+
+The direct NumPy ndarray ingest path still parsed NumPy metadata in Python:
+`dtype.str`, `shape`, `strides`, `ctypes.data`, `size`, and `flags.writeable`.
+The Python C API buffer protocol is a better contract for this job: one
+`PyObject_GetBuffer(..., PyBUF_RECORDS_RO)` request exposes the raw pointer,
+item size, shape, strides, readonly bit, and PEP-3118 format string. NumPy's
+own ndarray model is the same strided-memory contract, with `shape`, byte
+`strides`, `dtype`, and the data buffer as intrinsic array attributes.
+
+`runtime.ops_numpy._from_numpy_unchecked` now keeps only the NumPy-specific
+classification and dtype-request policy in Python, then delegates the actual
+borrow/copy/cast decision to the existing native `asarray_from_buffer` bridge.
+That removes the `ctypes.data` property and per-field Python tuple/int
+normalization from every NumPy ndarray import.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `array/interop/asarray_zero_copy_f32` | 5.042 | 3.792 | 2.593x | 1.941x |
+| `array/interop/asarray_zero_copy_f64` | 5.026 | 3.746 | 2.560x | 1.928x |
+| `array/interop/asarray_zero_copy_bool` | 4.978 | 3.741 | 2.524x | 1.949x |
+| `array/interop/asarray_zero_copy_i64` | 5.011 | 3.745 | 2.539x | 1.925x |
+| `array/interop/array_copy_f32` | 5.496 | 4.320 | 2.326x | 1.875x |
+| `array/interop/array_copy_f64` | 5.626 | 4.448 | 2.324x | 1.896x |
+| `array/interop/array_copy_bool` | 5.364 | 4.238 | 2.342x | 1.911x |
+| `array/interop/array_copy_i64` | 5.602 | 4.434 | 2.339x | 1.882x |
+| `array/interop/from_dlpack_f32` | 4.815 | 3.660 | 2.212x | 1.711x |
+
+The direct wrapper microbench for `mnp.asarray(np.arange(1024, dtype=float32),
+dtype=mnp.float32, copy=False)` moved from about 2.58 us to about 1.62 us, a
+1.59:1 reduction. The unchecked converter itself moved from about 2.37 us to
+about 1.37 us.
+
+Profile artifacts:
+
+- `results/profile-20260508-asarray-zero-copy-f32-buffer-bridge/manifest.json`
+  measured the patched monpy row at 4.030 us/call in the long child loop, with
+  84.8 MB max RSS, 63.2 MB physical footprint in `sample.txt`, and a 1,718 byte
+  traced Python allocation peak in the allocation pass.
+- `results/profile-20260508-asarray-zero-copy-f32-numpy/manifest.json` measured
+  the NumPy row at 1.993 us/call, with 87.4 MB max RSS, 63.2 MB physical
+  footprint in `sample.txt`, and a 1,550 byte traced Python allocation peak.
+- The macOS `sample(1)` stack for the patched monpy row still shows repeated
+  `std::ffi::_DLHandle::get_symbol` / dyld `dlsym` work under
+  `asarray_from_buffer_ops` (428 of 2,269 samples in this short capture). The
+  next native interop pass should remove that dynamic symbol lookup from the
+  per-call path before chasing smaller Python wrapper costs.
+
+References used for the direction:
+
+- [Python C API buffer protocol](https://docs.python.org/3/c-api/buffer.html):
+  `Py_buffer` carries `buf`, `itemsize`, `format`, `ndim`, `shape`, `strides`,
+  and `readonly`, and `PyBUF_RECORDS_RO` requests shape, strides, format, and
+  read-only-compatible export.
+- [NumPy ndarray reference](https://numpy.org/doc/stable/reference/arrays.ndarray.html):
+  ndarray memory layout is defined by a data buffer, shape, dtype/itemsize, and
+  byte strides; NumPy also notes that strided views are first-class and
+  algorithms may handle arbitrary strides.
