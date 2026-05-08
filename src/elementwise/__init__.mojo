@@ -1328,9 +1328,7 @@ def maybe_unary_preserve_contiguous(src: Array, mut result: Array, op: Int) rais
         return True
     # 11-way real-dtype dispatch via unary helper. f16 not in `unary_preserve_contig_typed`
     # support set yet (only the 10 real-vec dtypes), so explicit fallback below.
-    if dispatch_real_typed_simd_unary[unary_preserve_contig_typed](
-        src.dtype_code, src, result, src.size_value, op
-    ):
+    if dispatch_real_typed_simd_unary[unary_preserve_contig_typed](src.dtype_code, src, result, src.size_value, op):
         return True
     return False
 
@@ -1993,13 +1991,7 @@ and `maybe_unary_contiguous` (float-only sub-variant, integer dtypes raise).
 
 def dispatch_real_typed_simd_unary[
     kernel: UnaryContigKernel,
-](
-    dtype_code: Int,
-    src: Array,
-    mut result: Array,
-    size: Int,
-    op: Int,
-) raises -> Bool:
+](dtype_code: Int, src: Array, mut result: Array, size: Int, op: Int,) raises -> Bool:
     """11-way real-dtype dispatch for unary kernels (src ptr → out ptr, both same dtype).
 
     Caller invariant: `src.dtype_code == result.dtype_code` and both arrays are
@@ -2858,9 +2850,7 @@ def maybe_binary_rank2_transposed_tile[
     return True
 
 
-def maybe_binary_rank3_axis0_tile[
-    dtype: DType
-](lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
+def maybe_binary_rank3_axis0_tile[dtype: DType](lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
     # Batched variant of the rank-2 transposed tile. Covers layouts like
     # C-contig rank-3 `.transpose((2, 0, 1))`: each middle-axis slice is a
     # rank-2 transpose with input stride-1 on axis 0 and c-contig output.
@@ -3317,12 +3307,16 @@ def maybe_binary_contiguous(lhs: Array, rhs: Array, mut result: Array, op: Int) 
     ):
         if maybe_binary_rank2_transposed_tile[DType.float32](lhs, rhs, result, op):
             return True
+        if maybe_binary_rank3_axis0_tile[DType.float32](lhs, rhs, result, op):
+            return True
     elif (
         lhs.dtype_code == ArrayDType.FLOAT64.value
         and rhs.dtype_code == ArrayDType.FLOAT64.value
         and result.dtype_code == ArrayDType.FLOAT64.value
     ):
         if maybe_binary_rank2_transposed_tile[DType.float64](lhs, rhs, result, op):
+            return True
+        if maybe_binary_rank3_axis0_tile[DType.float64](lhs, rhs, result, op):
             return True
     elif (
         lhs.dtype_code == ArrayDType.INT64.value
@@ -3331,12 +3325,16 @@ def maybe_binary_contiguous(lhs: Array, rhs: Array, mut result: Array, op: Int) 
     ):
         if maybe_binary_rank2_transposed_tile[DType.int64](lhs, rhs, result, op):
             return True
+        if maybe_binary_rank3_axis0_tile[DType.int64](lhs, rhs, result, op):
+            return True
     elif (
         lhs.dtype_code == ArrayDType.INT32.value
         and rhs.dtype_code == ArrayDType.INT32.value
         and result.dtype_code == ArrayDType.INT32.value
     ):
         if maybe_binary_rank2_transposed_tile[DType.int32](lhs, rhs, result, op):
+            return True
+        if maybe_binary_rank3_axis0_tile[DType.int32](lhs, rhs, result, op):
             return True
     elif (
         lhs.dtype_code == ArrayDType.UINT64.value
@@ -3345,12 +3343,16 @@ def maybe_binary_contiguous(lhs: Array, rhs: Array, mut result: Array, op: Int) 
     ):
         if maybe_binary_rank2_transposed_tile[DType.uint64](lhs, rhs, result, op):
             return True
+        if maybe_binary_rank3_axis0_tile[DType.uint64](lhs, rhs, result, op):
+            return True
     elif (
         lhs.dtype_code == ArrayDType.UINT32.value
         and rhs.dtype_code == ArrayDType.UINT32.value
         and result.dtype_code == ArrayDType.UINT32.value
     ):
         if maybe_binary_rank2_transposed_tile[DType.uint32](lhs, rhs, result, op):
+            return True
+        if maybe_binary_rank3_axis0_tile[DType.uint32](lhs, rhs, result, op):
             return True
     if maybe_binary_same_shape_strided(lhs, rhs, result, op):
         return True

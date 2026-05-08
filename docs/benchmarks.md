@@ -133,9 +133,9 @@ Focused local result on the M3 Pro checkout:
 | run | monpy us | numpy us | monpy/numpy |
 | --- | ---: | ---: | ---: |
 | `results/local-sweep-20260508-pass0/results.json` | 30.653 | 8.404 | 3.648x |
-| `results/local-sweep-20260508-rank3-dispatch/results.json` | 18.544 | 7.931 | 2.373x |
+| `results/local-sweep-20260508-rank3-source-dispatch/results.json` | 19.064 | 8.210 | 2.263x |
 
-That is a 1.65:1 reduction in monpy wall time for this row. The row still does
+That is a 1.61:1 reduction in monpy wall time for this row. The row still does
 not beat numpy, so the next optimization pass should use sampled profiles and
 hardware counters before adding another kernel. The likely split to verify is
 Python wrapper time versus tile shuffle/store pressure versus library-assisted
