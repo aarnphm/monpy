@@ -748,7 +748,7 @@ def asarray(obj:object, dtype:object=None, *, copy:builtins.bool|None=None, devi
     if copy is False:raise ValueError(_CFE)
     return arr.astype(tgt, copy=True)
   if isinstance(obj, _DeferredArray):return asarray(obj._materialize(), dtype=dtype, copy=copy, device=device)
-  if runtime.ops_numpy.is_array_input(obj):return runtime.ops_numpy.from_numpy(obj, dtype=dtype, copy=copy, device=device)
+  if runtime.ops_numpy.is_array_input(obj):return runtime.ops_numpy._from_numpy_unchecked(obj, dtype=dtype, copy=copy, device=device)
   tc=-1 if dtype is None else _resolve_dtype(dtype).code
   cf=-1 if copy is None else (1 if copy else 0)                                                                                # tri-state: -1 default, 0 never, 1 always
   try:
@@ -2571,7 +2571,7 @@ def ascontiguousarray(a:object, dtype:object=None, *, device:object=None)->ndarr
 def from_dlpack(x:object, /, *, device:object=None, copy:builtins.bool|None=None)->ndarray:
   if device is not None and device!="cpu":raise NotImplementedError("monpy v1 only supports cpu arrays")
   if runtime.ops_numpy.is_array_input(x):
-    try:return runtime.ops_numpy.from_numpy(x, copy=copy, device=device)
+    try:return runtime.ops_numpy._from_numpy_unchecked(x, copy=copy, device=device)
     except ValueError as exc:
       if copy is False and "readonly" in str(exc):raise BufferError(str(exc)) from exc
       raise

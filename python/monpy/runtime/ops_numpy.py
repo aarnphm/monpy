@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import typing
+import sys
 from monpy.utils import LazyLoader
 
 if typing.TYPE_CHECKING:
@@ -23,6 +24,10 @@ def is_dtype_input(value:object)->bool:
   )
 
 def is_array_input(value:object)->bool:
+  numpy_module=sys.modules.get("numpy")
+  if numpy_module is not None:
+    ndarray=getattr(numpy_module, "ndarray", None)
+    if ndarray is not None:return isinstance(value, ndarray)
   return any(
     _is_numpy_module_name(getattr(base, "__module__", None)) and getattr(base, "__name__", None)=="ndarray"
     for base in type(value).__mro__
@@ -64,13 +69,16 @@ def to_numpy(arr:object, dtype:object=None, copy:bool|None=None)->NDArray[typing
       self.__array_interface__=a.__array_interface__
   return numpy.asarray(typing.cast(typing.Any, _Owner(monpy_arr)), dtype=typing.cast(typing.Any, dtype), copy=copy)
 
-def from_numpy(arr:object, dtype:object=None, copy:bool|None=None, device:object=None)->_mp.ndarray:
+def _from_numpy_unchecked(arr:object, dtype:object=None, copy:bool|None=None, device:object=None)->_mp.ndarray:
   if device is not None and device!="cpu":raise NotImplementedError("monpy v1 only supports cpu arrays")
-  if not is_array_input(arr):raise TypeError("from_numpy() expects a numpy.ndarray")
   return _mp._ai_asarray(arr, dtype=dtype, copy=copy)
 
+def from_numpy(arr:object, dtype:object=None, copy:bool|None=None, device:object=None)->_mp.ndarray:
+  if not is_array_input(arr):raise TypeError("from_numpy() expects a numpy.ndarray")
+  return _from_numpy_unchecked(arr, dtype=dtype, copy=copy, device=device)
+
 def asarray(obj:object, dtype:object=None, copy:bool|None=None, device:object=None)->_mp.ndarray:
-  if is_array_input(obj):return from_numpy(obj, dtype=dtype, copy=copy, device=device)
+  if is_array_input(obj):return _from_numpy_unchecked(obj, dtype=dtype, copy=copy, device=device)
   resolved=None if dtype is None else resolve_dtype(dtype)
   return _mp.asarray(obj, dtype=resolved, copy=copy, device=device)
 

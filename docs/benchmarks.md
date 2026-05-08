@@ -282,3 +282,28 @@ Focused local result:
 That is a 1.56:1 reduction in monpy wall time for NumPy-backed DLPack imports.
 The row now sits with the rest of the small NumPy-input marshaling family rather
 than standing out as a separate capsule-parser tax.
+
+### 2026-05-08 NumPy input detector fast path
+
+The remaining `array/interop/asarray_zero_copy_*` rows all enter through the
+NumPy-input detector. The old detector scanned the Python MRO looking for a base
+named `numpy.ndarray`; useful before NumPy is imported, but wasteful in the
+benchmark path where NumPy is already live. The detector now checks
+`sys.modules["numpy"].ndarray` with `isinstance` when available, then falls back
+to the import-free MRO scan. The hot `asarray` and NumPy-backed `from_dlpack`
+facades also use an unchecked internal converter after the detector succeeds,
+so the same ndarray is not classified twice.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `array/interop/asarray_zero_copy_f32` | 6.097 | 5.207 | 3.104x | 2.699x |
+| `array/interop/asarray_zero_copy_f64` | 5.955 | 5.213 | 3.024x | 2.644x |
+| `array/interop/asarray_zero_copy_bool` | 6.082 | 5.229 | 3.062x | 2.697x |
+| `array/interop/asarray_zero_copy_i64` | 5.960 | 5.199 | 3.062x | 2.654x |
+| `array/interop/from_dlpack_f32` | 5.669 | 4.963 | 2.587x | 2.290x |
+
+The direct detector microbench moved from about 0.34 us to about 0.09 us while
+`tests/python/test_no_numpy_core.py` still verifies that importing the core
+package does not import NumPy.
