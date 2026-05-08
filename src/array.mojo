@@ -296,7 +296,7 @@ def clone_int_list(values: List[Int]) -> List[Int]:
 
 
 # ============================================================
-# Array ↔ Layout adapter (phase 2 entry point).
+# Array ↔ Layout adapter
 #
 # `as_layout` builds a flat-rank Layout from an Array's shape/strides.
 # `array_with_layout` produces a view whose shape/strides come from a
@@ -318,6 +318,32 @@ def as_layout(array: Array) raises -> Layout:
     for axis in range(len(array.shape)):
         shape_children.append(IntTuple.leaf(array.shape[axis]))
         stride_children.append(IntTuple.leaf(array.strides[axis]))
+    return Layout(IntTuple.nested(shape_children^), IntTuple.nested(stride_children^))
+
+
+def as_broadcast_layout(array: Array, out_shape: List[Int]) raises -> Layout:
+    """Layout of `array` virtually broadcast to `out_shape`. Returned
+    layout has the same flat rank as `out_shape`; broadcast modes carry
+    stride 0 (either freshly added outer axes, or size-1 axes expanded
+    against `out_shape`). Used by walkers that need a single rank-
+    aligned cursor per operand against the output shape."""
+    var out_ndim = len(out_shape)
+    var arr_ndim = len(array.shape)
+    if arr_ndim > out_ndim:
+        raise Error("as_broadcast_layout: array rank exceeds out_shape rank")
+    var shape_children = List[IntTuple]()
+    var stride_children = List[IntTuple]()
+    for out_axis in range(out_ndim):
+        var arr_axis = out_axis - (out_ndim - arr_ndim)
+        if arr_axis < 0:
+            shape_children.append(IntTuple.leaf(out_shape[out_axis]))
+            stride_children.append(IntTuple.leaf(0))
+        elif array.shape[arr_axis] == 1 and out_shape[out_axis] != 1:
+            shape_children.append(IntTuple.leaf(out_shape[out_axis]))
+            stride_children.append(IntTuple.leaf(0))
+        else:
+            shape_children.append(IntTuple.leaf(array.shape[arr_axis]))
+            stride_children.append(IntTuple.leaf(array.strides[arr_axis]))
     return Layout(IntTuple.nested(shape_children^), IntTuple.nested(stride_children^))
 
 
@@ -403,6 +429,29 @@ def has_zero_strides(array: Array) -> Bool:
     return False
 
 
+def is_linearly_addressable(array: Array) raises -> Bool:
+    """True if the physical-offset span equals `size_value - 1` — the
+    array's elements occupy a contiguous block of `size_value` slots,
+    and a flat scan `data[offset_elems .. offset_elems + size_value)`
+    visits every element exactly once. Holds for any permutation of
+    c/f-contiguous storage (transpose, swapaxes, etc.).
+    For commutative reductions (sum/min/max/prod), this lets us skip
+    the LayoutIter walk and stride contig — a big win when the logical
+    iteration order has a non-unit innermost stride."""
+    if array.size_value <= 1:
+        return True
+    if has_zero_strides(array) or has_negative_strides(array):
+        return False
+    var max_off = 0
+    for axis in range(len(array.shape)):
+        var d = array.shape[axis]
+        var s = array.strides[axis]
+        if d == 0:
+            return False
+        max_off += (d - 1) * s
+    return max_off + 1 == array.size_value
+
+
 def physical_offset(array: Array, logical: Int) raises -> Int:
     if logical < 0 or logical >= array.size_value:
         raise Error("array index out of bounds")
@@ -414,25 +463,6 @@ def physical_offset(array: Array, logical: Int) raises -> Int:
             var coord = remainder % dim
             remainder = remainder // dim
             physical += coord * array.strides[axis]
-    return physical
-
-
-def broadcast_physical_offset(array: Array, logical: Int, out_shape: List[Int]) raises -> Int:
-    var out_ndim = len(out_shape)
-    var array_ndim = len(array.shape)
-    var physical = array.offset_elems
-    var remainder = logical
-    for out_axis in range(out_ndim - 1, -1, -1):
-        var dim = out_shape[out_axis]
-        var coord = 0
-        if dim != 0:
-            coord = remainder % dim
-            remainder = remainder // dim
-        var array_axis = out_axis - (out_ndim - array_ndim)
-        if array_axis >= 0:
-            if array.shape[array_axis] == 1:
-                coord = 0
-            physical += coord * array.strides[array_axis]
     return physical
 
 
@@ -551,17 +581,6 @@ def get_physical_as_f64(array: Array, physical: Int) raises -> Float64:
 
 def get_logical_as_f64(array: Array, logical: Int) raises -> Float64:
     return get_physical_as_f64(array, physical_offset(array, logical))
-
-
-def get_broadcast_as_f64(array: Array, logical: Int, out_shape: List[Int]) raises -> Float64:
-    return get_physical_as_f64(array, broadcast_physical_offset(array, logical, out_shape))
-
-
-def get_broadcast_as_bool(array: Array, logical: Int, out_shape: List[Int]) raises -> Bool:
-    var physical = broadcast_physical_offset(array, logical, out_shape)
-    if array.dtype_code == DTYPE_BOOL:
-        return get_physical_bool(array, physical)
-    return get_physical_as_f64(array, physical) != 0.0
 
 
 def set_physical_from_f64(mut array: Array, physical: Int, value: Float64) raises:

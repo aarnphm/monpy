@@ -34,8 +34,8 @@ observed upstream tree shape:
 
 the top-level public namespace is a poor implementation guide by itself. in the
 local numpy `2.4.4` install, numpy exposes 495 public top-level names; monpy
-currently exports 45 public names, with 43 overlapping numpy names. that means
-the raw namespace gap is 452 names, roughly 91 percent of numpy's public
+currently exports 259 public names, with 251 overlapping numpy names. that means
+the raw namespace gap is 244 names, roughly 49 percent of numpy's public
 top-level namespace. the real gap is larger than that, because numpy's internals
 also define behavior behind those names.
 
@@ -45,15 +45,16 @@ covered or partially covered today:
 
 - array construction from python scalars, lists, tuples, supported numpy arrays,
   array-interface objects, and cpu dlpack producers.
-- dtype set with full kernel support: `bool`, `int64`, `float32`, `float64`.
-- dtype set with metadata only (allocation raises `NotImplementedError`
-  with `"phase-5a kernel work"` until kernels land): `int32`, `int16`,
-  `int8`, plus `intp` alias.
+- dtype set with allocation, promotion, casting metadata, and arithmetic:
+  `bool`, signed integers (`int8`/`int16`/`int32`/`int64`), unsigned integers
+  (`uint8`/`uint16`/`uint32`/`uint64`), `float16`/`float32`/`float64`, and
+  `complex64`/`complex128`.
 - storage ownership for managed arrays, borrowed external arrays, and views.
 - shape and stride metadata, c/f-contiguous checks, negative strides, zero
   strides, basic view safety.
-- indexing for integers, slices, reverse slices, ellipsis, and zero-dimensional
-  scalar access, plus `newaxis` / `None` insertion.
+- indexing for integers, slices, reverse slices, ellipsis, zero-dimensional
+  scalar access, `newaxis` / `None` insertion, boolean masks, and
+  integer-array fancy indexing, including assignment.
 - creation: `empty`, `zeros`, `ones`, `full`, `empty_like`, `zeros_like`,
   `ones_like`, `full_like`, `copy`, `ascontiguousarray`, `arange`, `linspace`,
   `eye`, `identity`, `tri`, `atleast_1d`/`atleast_2d`/`atleast_3d`,
@@ -63,16 +64,20 @@ covered or partially covered today:
     `broadcast_to`, `expand_dims`, `flip`, `fliplr`, `flipud`, `rot90`,
     `squeeze`, `moveaxis`, `swapaxes`, `diagonal`, `trace`.
   - copy-out: `ravel`, `flatten`, `concatenate`, `stack`, `hstack`,
-    `vstack`, `dstack`, `column_stack` (current implementation goes
-    through python-level per-element flat-write; native LayoutIter
-    kernel is the recorded perf follow-up).
-- elementwise functions: `add`, `subtract`, `multiply`, `divide`, `sin`, `cos`,
-  `exp`, `log`, `where`, and the explicit `sin_add_mul` fused kernel.
-- reductions with `axis=None`: `sum`, `mean`, `min`, `max`, `argmax`.
+    `vstack`, `dstack`, `column_stack`, `split`, `array_split`, `hsplit`,
+    `vsplit`, `dsplit`, `block`, `roll`, `repeat`, `tile`, `pad`,
+    `append`, `insert`, `delete`, `trim_zeros`, and `broadcast_arrays`.
+- elementwise functions: arithmetic, comparisons, logical operations,
+  predicates, common transcendentals, complex conjugate/real/imag/angle, and
+  the explicit `sin_add_mul` fused kernel.
+- reductions and statistics: `sum`, `mean`, `min`, `max`, `prod`, `all`, `any`,
+  `argmin`, `argmax`, cumulative variants, nan-aware variants, `std`, `var`,
+  `median`, `quantile`, `percentile`, `average`, and `count_nonzero`.
 - matmul for 1-d and 2-d operands, including several dense and strided layout
   cases.
-- linalg namespace: `matmul`, `matrix_transpose`, `solve`, `inv`, `det`,
-  `LinAlgError`.
+- linalg namespace: `matmul`, `matrix_transpose`, `solve`, `inv`, `det`, `qr`,
+  `cholesky`, `eig`, `eigh`, `svd`, `lstsq`, `pinv`, `matrix_rank`, norm
+  helpers, tensor helpers, and `LinAlgError`.
 - internal infrastructure (no public surface): vendored CuTe-style
   layout algebra at `src/cute/` — `IntTuple`, `Layout`, `composition`,
   `coalesce`, `complement`, `select`/`transpose`, `logical_divide`,
@@ -81,16 +86,14 @@ covered or partially covered today:
 
 major local blockers already called out in compatibility coverage:
 
-- unsupported dtype families: complex, object, string, structured, unsigned,
-  datetime.
-- phase-5a "registered but unallocatable" dtypes: int32/int16/int8 raise
-  `NotImplementedError` on allocation; metadata layer (kind, itemsize,
-  alignment, byteorder, format-char, iinfo, can_cast, result_type,
-  promote_types, isdtype) is fully wired.
-- boolean indexing and integer-array fancy indexing.
-- axis-aware reductions and reduction keyword controls.
+- unsupported dtype families: object, string, structured, datetime, and
+  timedelta.
 - higher-rank matmul.
-- full ufunc objects and ufunc methods.
+- full numpy random, fft, masked-array, string, polynomial, io, testing, and
+  f2py subsystems.
+- deep ufunc/reduction tail: `where=` keyword support on ufuncs, `reduceat`,
+  complete floating-point error-state behavior, and the c-api-level machinery
+  behind numpy's extension ecosystem.
 
 ## missing core library
 
@@ -235,17 +238,18 @@ monpy implementation note:
 
 ### indexing and assignment
 
-basic indexing exists. advanced indexing is still missing.
+basic indexing, boolean masks, integer-array fancy indexing, assignment,
+`take`, `put`, `take_along_axis`, `put_along_axis`, `nonzero`, `argwhere`,
+`flatnonzero`, `where(condition)` form, `indices`, `ix_`,
+`ravel_multi_index`, `unravel_index`, `diag_indices`, `tril_indices`, and
+`triu_indices` exist for the adapted v1 surface.
 
 missing pieces:
 
-- boolean indexing and assignment.
-- integer-array fancy indexing and assignment.
-- mixed basic and advanced indexing semantics.
-- `take`, `put`, `take_along_axis`, `put_along_axis`, `nonzero`, `argwhere`,
-  `flatnonzero`, `where(condition)` form.
-- helpers: `indices`, `ix_`, `ravel_multi_index`, `unravel_index`,
-  `diag_indices`, `tril_indices`, `triu_indices`.
+- the full numpy mixed basic/advanced indexing contract for every exotic
+  broadcast placement.
+- advanced indexing performance work that keeps gathers/scatters inside native
+  typed loops instead of Python-level coordinate walks.
 
 monpy implementation note:
 
@@ -257,22 +261,19 @@ monpy implementation note:
 many missing functions can become python-level wrappers after core view and
 iterator semantics are correct.
 
-shipped (phase 6a / 6b):
+shipped (phase 6a / 6b plus the 2026-05-07 tail):
 
 - creation helpers: `eye`, `identity`, `tri`, `meshgrid`, `logspace`,
   `geomspace`, `atleast_1d`, `atleast_2d`, `atleast_3d`, `indices`, `ix_`.
 - manipulation helpers: `flip`, `fliplr`, `flipud`, `rot90`,
   `squeeze`, `moveaxis`, `swapaxes`, `ravel`, `flatten`,
   `concatenate`, `stack`, `hstack`, `vstack`, `dstack`,
-  `column_stack`.
+  `column_stack`, `block`, `split`, `array_split`, `hsplit`,
+  `vsplit`, `dsplit`, `roll`, `repeat`, `tile`, `pad`, `append`,
+  `insert`, `delete`, `trim_zeros`, and `broadcast_arrays`.
 
 still missing:
 
-- creation helpers: `frombuffer`, `fromiter`, `asfortranarray`
-  (needs F-order support that monpy v1 doesn't have), `tril`, `triu`.
-- manipulation helpers: `block`, `split`, `array_split`, `hsplit`,
-  `vsplit`, `dsplit`, `roll`, `repeat`, `tile`, `pad`, `append`,
-  `insert`, `delete`, `trim_zeros`, `broadcast_arrays`.
 - memory checks: `shares_memory`, `may_share_memory`, contiguity helpers.
 
 implementation notes:

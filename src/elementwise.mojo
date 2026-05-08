@@ -138,6 +138,8 @@ from domain import (
 )
 from array import (
     Array,
+    as_broadcast_layout,
+    as_layout,
     contiguous_as_f64,
     contiguous_f16_ptr,
     contiguous_f32_ptr,
@@ -158,12 +160,16 @@ from array import (
     has_negative_strides,
     has_zero_strides,
     is_c_contiguous,
+    is_linearly_addressable,
+    item_size,
     physical_offset,
     same_shape,
     set_contiguous_from_f64,
     set_logical_from_f64,
     set_logical_from_i64,
 )
+from cute.iter import LayoutIter, MultiLayoutIter
+from cute.layout import Layout
 
 
 def apply_binary_f64(lhs: Float64, rhs: Float64, op: Int) raises -> Float64:
@@ -744,6 +750,284 @@ def reduce_sum_typed[
     return acc
 
 
+def reduce_strided_typed[dtype: DType](src: Array, op: Int) raises -> Float64:
+    # Strided reduction via typed-pointer scalar walk. Two paths:
+    #   1. linearly-addressable (transpose / swapaxes of c-contig):
+    #      flat scan `data[offset .. offset+size)`. Cache-friendly even
+    #      when the *logical* iteration order has a non-unit innermost
+    #      stride. This is the .T.sum() fast path — important because
+    #      reductions are commutative so iteration order is free.
+    #   2. genuinely non-linear (sliced views, broadcasts): `LayoutIter`
+    #      cursor walk over the logical shape.
+    # Both accumulate in `Scalar[dtype]` natively and return Float64
+    # for the f64-set boundary.
+    var ptr = src.data.bitcast[Scalar[dtype]]()
+    if is_linearly_addressable(src):
+        var base = src.offset_elems
+        var n = src.size_value
+        if op == REDUCE_SUM or op == REDUCE_MEAN:
+            var out: Float64
+            comptime if dtype.is_floating_point():
+                # Reuse the SIMD-vectorised contig reduce kernel (4-way
+                # parallel accumulators). Same primitive as the c-contig
+                # path; just rebased onto `offset_elems`.
+                out = reduce_sum_typed[dtype](ptr + base, n)
+            else:
+                var acc = Scalar[dtype](0)
+                for i in range(n):
+                    acc += ptr[base + i]
+                out = Float64(acc)
+            if op == REDUCE_MEAN:
+                out = out / Float64(n)
+            return out
+        if op == REDUCE_PROD:
+            var acc = Scalar[dtype](1)
+            for i in range(n):
+                acc *= ptr[base + i]
+            return Float64(acc)
+        if n == 0:
+            raise Error("reduce_strided_typed: empty source")
+        if op == REDUCE_MIN:
+            var acc = ptr[base]
+            for i in range(1, n):
+                var v = ptr[base + i]
+                if v < acc:
+                    acc = v
+            return Float64(acc)
+        if op == REDUCE_MAX:
+            var acc = ptr[base]
+            for i in range(1, n):
+                var v = ptr[base + i]
+                if v > acc:
+                    acc = v
+            return Float64(acc)
+        raise Error("reduce_strided_typed: unsupported op")
+    var layout = as_layout(src)
+    var item = item_size(src.dtype_code)
+    var iter = LayoutIter(layout, item, src.offset_elems * item)
+    if op == REDUCE_SUM or op == REDUCE_MEAN:
+        var acc = Scalar[dtype](0)
+        while iter.has_next():
+            acc += ptr[iter.element_index()]
+            iter.step()
+        var out = Float64(acc)
+        if op == REDUCE_MEAN:
+            out = out / Float64(src.size_value)
+        return out
+    if op == REDUCE_PROD:
+        var acc = Scalar[dtype](1)
+        while iter.has_next():
+            acc *= ptr[iter.element_index()]
+            iter.step()
+        return Float64(acc)
+    # MIN / MAX: read the first element as the seed.
+    if not iter.has_next():
+        raise Error("reduce_strided_typed: empty source")
+    var acc = ptr[iter.element_index()]
+    iter.step()
+    if op == REDUCE_MIN:
+        while iter.has_next():
+            var v = ptr[iter.element_index()]
+            if v < acc:
+                acc = v
+            iter.step()
+        return Float64(acc)
+    if op == REDUCE_MAX:
+        while iter.has_next():
+            var v = ptr[iter.element_index()]
+            if v > acc:
+                acc = v
+            iter.step()
+        return Float64(acc)
+    raise Error("reduce_strided_typed: unsupported op")
+
+
+def binary_strided_walk_typed[dtype: DType](lhs: Array, rhs: Array, mut result: Array, op: Int) raises:
+    # Strided binary walker for same-dtype broadcasts. Output is c-contig
+    # (just allocated), so we walk it as a flat counter and maintain
+    # incremental cursors for lhs/rhs in element units. Strides for
+    # broadcast dims (size-1 source against >1 target, or freshly added
+    # outer axes) are zeroed out — same semantics as
+    # `as_broadcast_layout` but inlined to skip per-step `* item_size`
+    # multiplications and the List[List[Int]] indexing in
+    # MultiLayoutIter. Net: ~30× faster on a 256² .T + 1D add.
+    var lhs_ptr = lhs.data.bitcast[Scalar[dtype]]()
+    var rhs_ptr = rhs.data.bitcast[Scalar[dtype]]()
+    var out_ptr = result.data.bitcast[Scalar[dtype]]()
+    var ndim = len(result.shape)
+    var n = result.size_value
+    var lhs_ndim = len(lhs.shape)
+    var rhs_ndim = len(rhs.shape)
+    var lhs_strides = List[Int]()
+    var rhs_strides = List[Int]()
+    for d in range(ndim):
+        var l_axis = d - (ndim - lhs_ndim)
+        var r_axis = d - (ndim - rhs_ndim)
+        if l_axis < 0 or (lhs.shape[l_axis] == 1 and result.shape[d] != 1):
+            lhs_strides.append(0)
+        else:
+            lhs_strides.append(lhs.strides[l_axis])
+        if r_axis < 0 or (rhs.shape[r_axis] == 1 and result.shape[d] != 1):
+            rhs_strides.append(0)
+        else:
+            rhs_strides.append(rhs.strides[r_axis])
+    if ndim == 0:
+        # rank-0 result: single scalar.
+        out_ptr[result.offset_elems] = apply_binary_typed_vec[dtype, 1](
+            SIMD[dtype, 1](lhs_ptr[lhs.offset_elems]),
+            SIMD[dtype, 1](rhs_ptr[rhs.offset_elems]),
+            op,
+        )[0]
+        return
+    var coords = List[Int]()
+    for _ in range(ndim):
+        coords.append(0)
+    var lhs_idx = lhs.offset_elems
+    var rhs_idx = rhs.offset_elems
+    var out_idx = result.offset_elems
+    var visited = 0
+    while visited < n:
+        out_ptr[out_idx] = apply_binary_typed_vec[dtype, 1](
+            SIMD[dtype, 1](lhs_ptr[lhs_idx]),
+            SIMD[dtype, 1](rhs_ptr[rhs_idx]),
+            op,
+        )[0]
+        visited += 1
+        if visited >= n:
+            break
+        out_idx += 1
+        var axis = ndim - 1
+        while axis >= 0:
+            coords[axis] += 1
+            lhs_idx += lhs_strides[axis]
+            rhs_idx += rhs_strides[axis]
+            if coords[axis] < result.shape[axis]:
+                break
+            var rollback_lhs = coords[axis] * lhs_strides[axis]
+            var rollback_rhs = coords[axis] * rhs_strides[axis]
+            lhs_idx -= rollback_lhs
+            rhs_idx -= rollback_rhs
+            coords[axis] = 0
+            axis -= 1
+
+
+def maybe_binary_strided_typed(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
+    # Dispatch the strided binary walker by dtype. Requires lhs, rhs,
+    # and result to share a dtype (the common broadcast case for same-
+    # type ops). Mixed-dtype broadcasts still take the f64 round-trip
+    # walker upstream.
+    if lhs.dtype_code != rhs.dtype_code or lhs.dtype_code != result.dtype_code:
+        return False
+    if lhs.dtype_code == DTYPE_FLOAT64:
+        binary_strided_walk_typed[DType.float64](lhs, rhs, result, op)
+        return True
+    if lhs.dtype_code == DTYPE_FLOAT32:
+        binary_strided_walk_typed[DType.float32](lhs, rhs, result, op)
+        return True
+    if lhs.dtype_code == DTYPE_INT64:
+        binary_strided_walk_typed[DType.int64](lhs, rhs, result, op)
+        return True
+    if lhs.dtype_code == DTYPE_INT32:
+        binary_strided_walk_typed[DType.int32](lhs, rhs, result, op)
+        return True
+    if lhs.dtype_code == DTYPE_INT16:
+        binary_strided_walk_typed[DType.int16](lhs, rhs, result, op)
+        return True
+    if lhs.dtype_code == DTYPE_INT8:
+        binary_strided_walk_typed[DType.int8](lhs, rhs, result, op)
+        return True
+    if lhs.dtype_code == DTYPE_UINT64:
+        binary_strided_walk_typed[DType.uint64](lhs, rhs, result, op)
+        return True
+    if lhs.dtype_code == DTYPE_UINT32:
+        binary_strided_walk_typed[DType.uint32](lhs, rhs, result, op)
+        return True
+    if lhs.dtype_code == DTYPE_UINT16:
+        binary_strided_walk_typed[DType.uint16](lhs, rhs, result, op)
+        return True
+    if lhs.dtype_code == DTYPE_UINT8:
+        binary_strided_walk_typed[DType.uint8](lhs, rhs, result, op)
+        return True
+    return False
+
+
+def maybe_reduce_strided_typed(src: Array, mut result: Array, op: Int) raises -> Bool:
+    # Dispatch to typed strided reduction by source dtype. Returns True
+    # iff the typed kernel handled it. Skips:
+    # - contig source (handled upstream by `maybe_reduce_contiguous`),
+    # - argmax / argmin (need index tracking — separate path),
+    # - all / any (boolean short-circuit — separate path),
+    # - bool / complex (no native typed accumulator),
+    # - mismatched accumulator semantics (e.g. int sum→i64 promotion).
+    if op != REDUCE_SUM and op != REDUCE_MEAN and op != REDUCE_PROD and op != REDUCE_MIN and op != REDUCE_MAX:
+        return False
+    if src.dtype_code == DTYPE_FLOAT64:
+        var acc = reduce_strided_typed[DType.float64](src, op)
+        set_logical_from_f64(result, 0, acc)
+        return True
+    if src.dtype_code == DTYPE_FLOAT32:
+        var acc = reduce_strided_typed[DType.float32](src, op)
+        set_logical_from_f64(result, 0, acc)
+        return True
+    if src.dtype_code == DTYPE_INT64:
+        var acc = reduce_strided_typed[DType.int64](src, op)
+        if op == REDUCE_MEAN:
+            set_logical_from_f64(result, 0, acc)
+        else:
+            set_logical_from_i64(result, 0, Int64(acc))
+        return True
+    if src.dtype_code == DTYPE_INT32:
+        var acc = reduce_strided_typed[DType.int32](src, op)
+        if op == REDUCE_MEAN:
+            set_logical_from_f64(result, 0, acc)
+        else:
+            set_logical_from_i64(result, 0, Int64(acc))
+        return True
+    if src.dtype_code == DTYPE_INT16:
+        var acc = reduce_strided_typed[DType.int16](src, op)
+        if op == REDUCE_MEAN:
+            set_logical_from_f64(result, 0, acc)
+        else:
+            set_logical_from_i64(result, 0, Int64(acc))
+        return True
+    if src.dtype_code == DTYPE_INT8:
+        var acc = reduce_strided_typed[DType.int8](src, op)
+        if op == REDUCE_MEAN:
+            set_logical_from_f64(result, 0, acc)
+        else:
+            set_logical_from_i64(result, 0, Int64(acc))
+        return True
+    if src.dtype_code == DTYPE_UINT64:
+        var acc = reduce_strided_typed[DType.uint64](src, op)
+        if op == REDUCE_MEAN:
+            set_logical_from_f64(result, 0, acc)
+        else:
+            set_logical_from_i64(result, 0, Int64(acc))
+        return True
+    if src.dtype_code == DTYPE_UINT32:
+        var acc = reduce_strided_typed[DType.uint32](src, op)
+        if op == REDUCE_MEAN:
+            set_logical_from_f64(result, 0, acc)
+        else:
+            set_logical_from_i64(result, 0, Int64(acc))
+        return True
+    if src.dtype_code == DTYPE_UINT16:
+        var acc = reduce_strided_typed[DType.uint16](src, op)
+        if op == REDUCE_MEAN:
+            set_logical_from_f64(result, 0, acc)
+        else:
+            set_logical_from_i64(result, 0, Int64(acc))
+        return True
+    if src.dtype_code == DTYPE_UINT8:
+        var acc = reduce_strided_typed[DType.uint8](src, op)
+        if op == REDUCE_MEAN:
+            set_logical_from_f64(result, 0, acc)
+        else:
+            set_logical_from_i64(result, 0, Int64(acc))
+        return True
+    return False
+
+
 def unary_contig_typed[
     dtype: DType
 ](
@@ -945,6 +1229,38 @@ def maybe_unary_preserve_contiguous(src: Array, mut result: Array, op: Int) rais
             op,
         )
         return True
+    if src.dtype_code == DTYPE_INT16:
+        unary_preserve_contig_typed[DType.int16](
+            contiguous_i16_ptr(src),
+            contiguous_i16_ptr(result),
+            src.size_value,
+            op,
+        )
+        return True
+    if src.dtype_code == DTYPE_INT8:
+        unary_preserve_contig_typed[DType.int8](
+            contiguous_i8_ptr(src),
+            contiguous_i8_ptr(result),
+            src.size_value,
+            op,
+        )
+        return True
+    if src.dtype_code == DTYPE_UINT16:
+        unary_preserve_contig_typed[DType.uint16](
+            contiguous_u16_ptr(src),
+            contiguous_u16_ptr(result),
+            src.size_value,
+            op,
+        )
+        return True
+    if src.dtype_code == DTYPE_UINT8:
+        unary_preserve_contig_typed[DType.uint8](
+            contiguous_u8_ptr(src),
+            contiguous_u8_ptr(result),
+            src.size_value,
+            op,
+        )
+        return True
     return False
 
 
@@ -954,15 +1270,20 @@ def is_float_dtype(dtype_code: Int) -> Bool:
 
 def is_typed_simd_dtype(dtype_code: Int) -> Bool:
     """Returns True for dtypes that have a typed-vec SIMD dispatch path
-    in `maybe_binary_same_shape_contiguous` and friends. Phase 5b/c
-    extension: int32/int64/uint32/uint64 join the f32/f64 fast paths."""
+    in `maybe_binary_same_shape_contiguous` and friends. All ints + f16
+    join the f32/f64 fast paths."""
     return (
         dtype_code == DTYPE_FLOAT32
         or dtype_code == DTYPE_FLOAT64
+        or dtype_code == DTYPE_FLOAT16
         or dtype_code == DTYPE_INT64
         or dtype_code == DTYPE_INT32
+        or dtype_code == DTYPE_INT16
+        or dtype_code == DTYPE_INT8
         or dtype_code == DTYPE_UINT64
         or dtype_code == DTYPE_UINT32
+        or dtype_code == DTYPE_UINT16
+        or dtype_code == DTYPE_UINT8
     )
 
 
@@ -1850,6 +2171,46 @@ def maybe_binary_scalar_contiguous(
             scalar_on_left,
         )
         return True
+    if array.dtype_code == DTYPE_INT16 and result.dtype_code == DTYPE_INT16:
+        binary_scalar_contig_typed[DType.int16](
+            contiguous_i16_ptr(array),
+            Int16(Int(scalar_value)),
+            contiguous_i16_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
+    if array.dtype_code == DTYPE_INT8 and result.dtype_code == DTYPE_INT8:
+        binary_scalar_contig_typed[DType.int8](
+            contiguous_i8_ptr(array),
+            Int8(Int(scalar_value)),
+            contiguous_i8_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
+    if array.dtype_code == DTYPE_UINT16 and result.dtype_code == DTYPE_UINT16:
+        binary_scalar_contig_typed[DType.uint16](
+            contiguous_u16_ptr(array),
+            UInt16(Int(scalar_value)),
+            contiguous_u16_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
+    if array.dtype_code == DTYPE_UINT8 and result.dtype_code == DTYPE_UINT8:
+        binary_scalar_contig_typed[DType.uint8](
+            contiguous_u8_ptr(array),
+            UInt8(Int(scalar_value)),
+            contiguous_u8_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
     for i in range(result.size_value):
         var lhs = contiguous_as_f64(array, i)
         var rhs = scalar_value
@@ -1999,6 +2360,46 @@ def maybe_binary_scalar_value_contiguous(
             scalar_on_left,
         )
         return True
+    if array.dtype_code == DTYPE_INT16 and result.dtype_code == DTYPE_INT16:
+        binary_scalar_contig_typed[DType.int16](
+            contiguous_i16_ptr(array),
+            Int16(Int(scalar_value)),
+            contiguous_i16_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
+    if array.dtype_code == DTYPE_INT8 and result.dtype_code == DTYPE_INT8:
+        binary_scalar_contig_typed[DType.int8](
+            contiguous_i8_ptr(array),
+            Int8(Int(scalar_value)),
+            contiguous_i8_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
+    if array.dtype_code == DTYPE_UINT16 and result.dtype_code == DTYPE_UINT16:
+        binary_scalar_contig_typed[DType.uint16](
+            contiguous_u16_ptr(array),
+            UInt16(Int(scalar_value)),
+            contiguous_u16_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
+    if array.dtype_code == DTYPE_UINT8 and result.dtype_code == DTYPE_UINT8:
+        binary_scalar_contig_typed[DType.uint8](
+            contiguous_u8_ptr(array),
+            UInt8(Int(scalar_value)),
+            contiguous_u8_ptr(result),
+            result.size_value,
+            op,
+            scalar_on_left,
+        )
+        return True
     for i in range(result.size_value):
         var lhs = contiguous_as_f64(array, i)
         var rhs = scalar_value
@@ -2089,6 +2490,50 @@ def maybe_binary_row_broadcast_contiguous(
             contiguous_u32_ptr(matrix),
             contiguous_u32_ptr(row),
             contiguous_u32_ptr(result),
+            rows,
+            cols,
+            op,
+            row_on_left,
+        )
+        return True
+    if matrix.dtype_code == DTYPE_INT16 and row.dtype_code == DTYPE_INT16 and result.dtype_code == DTYPE_INT16:
+        binary_row_broadcast_contig_typed[DType.int16](
+            contiguous_i16_ptr(matrix),
+            contiguous_i16_ptr(row),
+            contiguous_i16_ptr(result),
+            rows,
+            cols,
+            op,
+            row_on_left,
+        )
+        return True
+    if matrix.dtype_code == DTYPE_INT8 and row.dtype_code == DTYPE_INT8 and result.dtype_code == DTYPE_INT8:
+        binary_row_broadcast_contig_typed[DType.int8](
+            contiguous_i8_ptr(matrix),
+            contiguous_i8_ptr(row),
+            contiguous_i8_ptr(result),
+            rows,
+            cols,
+            op,
+            row_on_left,
+        )
+        return True
+    if matrix.dtype_code == DTYPE_UINT16 and row.dtype_code == DTYPE_UINT16 and result.dtype_code == DTYPE_UINT16:
+        binary_row_broadcast_contig_typed[DType.uint16](
+            contiguous_u16_ptr(matrix),
+            contiguous_u16_ptr(row),
+            contiguous_u16_ptr(result),
+            rows,
+            cols,
+            op,
+            row_on_left,
+        )
+        return True
+    if matrix.dtype_code == DTYPE_UINT8 and row.dtype_code == DTYPE_UINT8 and result.dtype_code == DTYPE_UINT8:
+        binary_row_broadcast_contig_typed[DType.uint8](
+            contiguous_u8_ptr(matrix),
+            contiguous_u8_ptr(row),
+            contiguous_u8_ptr(result),
             rows,
             cols,
             op,
@@ -2247,6 +2692,168 @@ def maybe_binary_rank2_transposed_tile[
         i += 1
     result.backend_code = BACKEND_FUSED
     return True
+
+
+def maybe_binary_rank2_transposed_tile_bcast_1d[
+    dtype: DType
+](lhs: Array, rhs: Array, mut result: Array, op: Int, rhs_on_left: Bool) raises -> Bool:
+    # 4×4 SIMD-tile path for the column-broadcast pattern: lhs is rank-2
+    # F-contig (stride[0] == 1, the layout `.T` produces from a c-contig
+    # rank-2 source) and rhs is rank-1 broadcasting along axis 0 of lhs
+    # (rhs.shape[0] == lhs.shape[1]). Without this the generic walker
+    # picks a strided inner axis with no SIMD coverage — the .T + 1D
+    # pattern hits ~120× monpy/numpy on the scalar walker.
+    #
+    # Strategy mirrors `maybe_binary_rank2_transposed_tile`: load 4
+    # contiguous SIMD vectors from lhs along the stride-1 axis 0, splat
+    # the 4 corresponding rhs scalars, do 4 SIMD ops, transpose 4×4 in
+    # registers, emit 4 contiguous SIMD stores into c-contig result.
+    if len(lhs.shape) != 2 or len(rhs.shape) != 1:
+        return False
+    if lhs.strides[0] != 1:
+        return False
+    if rhs.shape[0] != lhs.shape[1]:
+        return False
+    if rhs.strides[0] != 1:
+        return False
+    if not is_c_contiguous(result):
+        return False
+    if not same_shape(lhs.shape, result.shape):
+        return False
+    var rows = lhs.shape[0]
+    var cols = lhs.shape[1]
+    if rows < 4 or cols < 4:
+        return False
+    var lhs_col_stride = lhs.strides[1]
+    var result_row_stride = result.strides[0]
+    var lhs_data = lhs.data.bitcast[Scalar[dtype]]() + lhs.offset_elems
+    var rhs_data = rhs.data.bitcast[Scalar[dtype]]() + rhs.offset_elems
+    var result_data = result.data.bitcast[Scalar[dtype]]() + result.offset_elems
+    comptime tile = 4
+    var main_rows = rows - (rows % tile)
+    var main_cols = cols - (cols % tile)
+    var i = 0
+    while i < main_rows:
+        var j = 0
+        while j < main_cols:
+            var l0 = (lhs_data + i + j * lhs_col_stride).load[width=tile](0)
+            var l1 = (lhs_data + i + (j + 1) * lhs_col_stride).load[width=tile](0)
+            var l2 = (lhs_data + i + (j + 2) * lhs_col_stride).load[width=tile](0)
+            var l3 = (lhs_data + i + (j + 3) * lhs_col_stride).load[width=tile](0)
+            var r0 = SIMD[dtype, tile](rhs_data[j])
+            var r1 = SIMD[dtype, tile](rhs_data[j + 1])
+            var r2 = SIMD[dtype, tile](rhs_data[j + 2])
+            var r3 = SIMD[dtype, tile](rhs_data[j + 3])
+            var s0: SIMD[dtype, tile]
+            var s1: SIMD[dtype, tile]
+            var s2: SIMD[dtype, tile]
+            var s3: SIMD[dtype, tile]
+            if rhs_on_left:
+                s0 = r0 + l0 if op == OP_ADD else apply_binary_typed_vec[dtype, tile](r0, l0, op)
+                s1 = r1 + l1 if op == OP_ADD else apply_binary_typed_vec[dtype, tile](r1, l1, op)
+                s2 = r2 + l2 if op == OP_ADD else apply_binary_typed_vec[dtype, tile](r2, l2, op)
+                s3 = r3 + l3 if op == OP_ADD else apply_binary_typed_vec[dtype, tile](r3, l3, op)
+            else:
+                s0 = l0 + r0 if op == OP_ADD else apply_binary_typed_vec[dtype, tile](l0, r0, op)
+                s1 = l1 + r1 if op == OP_ADD else apply_binary_typed_vec[dtype, tile](l1, r1, op)
+                s2 = l2 + r2 if op == OP_ADD else apply_binary_typed_vec[dtype, tile](l2, r2, op)
+                s3 = l3 + r3 if op == OP_ADD else apply_binary_typed_vec[dtype, tile](l3, r3, op)
+            var u0 = s0.shuffle[0, 4, 1, 5](s1)
+            var u1 = s0.shuffle[2, 6, 3, 7](s1)
+            var u2 = s2.shuffle[0, 4, 1, 5](s3)
+            var u3 = s2.shuffle[2, 6, 3, 7](s3)
+            var t0 = u0.shuffle[0, 1, 4, 5](u2)
+            var t1 = u0.shuffle[2, 3, 6, 7](u2)
+            var t2 = u1.shuffle[0, 1, 4, 5](u3)
+            var t3 = u1.shuffle[2, 3, 6, 7](u3)
+            (result_data + i * result_row_stride + j).store(0, t0)
+            (result_data + (i + 1) * result_row_stride + j).store(0, t1)
+            (result_data + (i + 2) * result_row_stride + j).store(0, t2)
+            (result_data + (i + 3) * result_row_stride + j).store(0, t3)
+            j += tile
+        # column tail (residual cols within main rows): scalar walk
+        while j < cols:
+            comptime for k in range(tile):
+                var lv = lhs_data[i + k + j * lhs_col_stride]
+                var rv = rhs_data[j]
+                var lhs_v = lv
+                var rhs_v = rv
+                if rhs_on_left:
+                    lhs_v = rv
+                    rhs_v = lv
+                if op == OP_ADD:
+                    result_data[(i + k) * result_row_stride + j] = lhs_v + rhs_v
+                else:
+                    result_data[(i + k) * result_row_stride + j] = apply_binary_typed_vec[dtype, 1](
+                        SIMD[dtype, 1](lhs_v), SIMD[dtype, 1](rhs_v), op
+                    )[0]
+            j += 1
+        i += tile
+    # row tail (residual rows): scalar walk
+    while i < rows:
+        var j = 0
+        while j < cols:
+            var lv = lhs_data[i + j * lhs_col_stride]
+            var rv = rhs_data[j]
+            var lhs_v = lv
+            var rhs_v = rv
+            if rhs_on_left:
+                lhs_v = rv
+                rhs_v = lv
+            if op == OP_ADD:
+                result_data[i * result_row_stride + j] = lhs_v + rhs_v
+            else:
+                result_data[i * result_row_stride + j] = apply_binary_typed_vec[dtype, 1](
+                    SIMD[dtype, 1](lhs_v), SIMD[dtype, 1](rhs_v), op
+                )[0]
+            j += 1
+        i += 1
+    result.backend_code = BACKEND_FUSED
+    return True
+
+
+def maybe_binary_column_broadcast_dispatch(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
+    # Dispatch the column-broadcast tile kernel by dtype. Tries both
+    # operand orderings (matrix on left, then 1D on left).
+    if lhs.dtype_code != rhs.dtype_code or lhs.dtype_code != result.dtype_code:
+        return False
+    if lhs.dtype_code == DTYPE_FLOAT32:
+        if maybe_binary_rank2_transposed_tile_bcast_1d[DType.float32](lhs, rhs, result, op, False):
+            return True
+        if maybe_binary_rank2_transposed_tile_bcast_1d[DType.float32](rhs, lhs, result, op, True):
+            return True
+        return False
+    if lhs.dtype_code == DTYPE_FLOAT64:
+        if maybe_binary_rank2_transposed_tile_bcast_1d[DType.float64](lhs, rhs, result, op, False):
+            return True
+        if maybe_binary_rank2_transposed_tile_bcast_1d[DType.float64](rhs, lhs, result, op, True):
+            return True
+        return False
+    if lhs.dtype_code == DTYPE_INT64:
+        if maybe_binary_rank2_transposed_tile_bcast_1d[DType.int64](lhs, rhs, result, op, False):
+            return True
+        if maybe_binary_rank2_transposed_tile_bcast_1d[DType.int64](rhs, lhs, result, op, True):
+            return True
+        return False
+    if lhs.dtype_code == DTYPE_INT32:
+        if maybe_binary_rank2_transposed_tile_bcast_1d[DType.int32](lhs, rhs, result, op, False):
+            return True
+        if maybe_binary_rank2_transposed_tile_bcast_1d[DType.int32](rhs, lhs, result, op, True):
+            return True
+        return False
+    if lhs.dtype_code == DTYPE_UINT64:
+        if maybe_binary_rank2_transposed_tile_bcast_1d[DType.uint64](lhs, rhs, result, op, False):
+            return True
+        if maybe_binary_rank2_transposed_tile_bcast_1d[DType.uint64](rhs, lhs, result, op, True):
+            return True
+        return False
+    if lhs.dtype_code == DTYPE_UINT32:
+        if maybe_binary_rank2_transposed_tile_bcast_1d[DType.uint32](lhs, rhs, result, op, False):
+            return True
+        if maybe_binary_rank2_transposed_tile_bcast_1d[DType.uint32](rhs, lhs, result, op, True):
+            return True
+        return False
+    return False
 
 
 def maybe_binary_same_shape_strided(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
@@ -2465,6 +3072,8 @@ def maybe_binary_contiguous(lhs: Array, rhs: Array, mut result: Array, op: Int) 
         if maybe_binary_rank2_transposed_tile[DType.uint32](lhs, rhs, result, op):
             return True
     if maybe_binary_same_shape_strided(lhs, rhs, result, op):
+        return True
+    if maybe_binary_column_broadcast_dispatch(lhs, rhs, result, op):
         return True
     return False
 

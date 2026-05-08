@@ -40,21 +40,22 @@ covered v1 behavior:
 - layout predicates live with native shape metadata: c-contiguous,
   f-contiguous, zero-stride, negative-stride, physical offset, and explicit
   `materialize_c_contiguous(src)` for copy-before-kernel call sites.
-- the public dtype set remains `bool`, `int64`, `float32`, and `float64`.
-  native-endian cpu array-interface inputs outside that set raise explicitly.
-- matmul fast paths may use blas only for positive-stride dense rank-2 layouts.
-  scalar mojo remains the correctness fallback, and higher-rank matmul stays
-  blocked until batch-broadcast semantics are implemented.
-- `linalg.solve`, `linalg.inv`, and `linalg.det` use Accelerate LAPACK for
-  macos f32/f64 inputs and a partial-pivot LU fallback for portability and
-  non-accelerated dtype paths. backend markers remain observable on array
-  results.
+- the public dtype set covers `bool`, signed and unsigned integer families
+  through 64-bit, `float16`/`float32`/`float64`, and `complex64`/`complex128`.
+  object, string, structured, datetime, and timedelta dtypes still raise
+  explicitly.
+- matmul fast paths may use blas for dense rank-2 layouts, including complex
+  `cgemm`/`zgemm`. scalar mojo remains the correctness fallback, and higher-rank
+  matmul stays blocked until batch-broadcast semantics are implemented.
+- `linalg.solve`, `linalg.inv`, `linalg.det`, `qr`, `cholesky`, `eig`, `eigh`,
+  `svd`, `lstsq`, `pinv`, and rank helpers use Accelerate/LAPACK where
+  available, with mojo fallbacks for the smaller v1 surface. backend markers
+  remain observable on array results.
 
 ## still out of scope
 
 - non-cpu devices, including metal-backed arrays.
-- broad numpy dtype families such as complex, object, string, structured,
-  unsigned, datetime, and narrow integer arrays.
-- higher-rank matmul and axis-specific reductions.
-- full numpy ufunc objects and their `out=`, `where=`, casting, reduce, and
-  accumulate machinery.
+- object, string, structured, datetime, and timedelta dtype families.
+- higher-rank matmul.
+- the deep ufunc tail: `where=` keyword support, `reduceat`, and numpy's full
+  floating-point error-state machinery.

@@ -344,3 +344,149 @@ def test_where_broadcasts_scalars_and_arrays() -> None:
     np.where(cond, 1, rhs),
     numpy.where([[True, False, True], [False, True, False]], 1, [10, 20, 30]),
   )
+
+
+def test_reshape_on_noncontiguous_view_matches_numpy() -> None:
+  # Cute composition path: reshape a transposed (non-contig) view.
+  # Pre-cleanup, monpy raised "reshape() only supports c-contiguous";
+  # post-cleanup, the layout algebra handles it (with a copy fallback
+  # if the composition raises on shape misalignment).
+  arr = np.arange(24, dtype=np.int64).reshape((2, 3, 4))
+  oracle = numpy.arange(24, dtype=numpy.int64).reshape((2, 3, 4))
+
+  monpy_t = arr.transpose((2, 0, 1))
+  np_t = oracle.transpose((2, 0, 1))
+
+  assert_same_values(monpy_t.reshape((4, 6)), np_t.reshape((4, 6)))
+  assert_same_values(monpy_t.reshape((24,)), np_t.reshape((24,)))
+
+  larger = np.arange(60, dtype=np.int64).reshape((3, 4, 5))
+  oracle_larger = numpy.arange(60, dtype=numpy.int64).reshape((3, 4, 5))
+  assert_same_values(
+    larger.transpose((1, 0, 2)).reshape((12, 5)),
+    oracle_larger.transpose((1, 0, 2)).reshape((12, 5)),
+  )
+
+
+def test_block_matches_numpy() -> None:
+  assert_same_values(
+    np.block([[1, 2], [3, 4]]),
+    numpy.block([[1, 2], [3, 4]]),
+  )
+
+  A = np.eye(2, dtype=np.float64)
+  B = np.zeros((2, 3), dtype=np.float64)
+  C = np.zeros((3, 2), dtype=np.float64)
+  D = np.eye(3, dtype=np.float64)
+  assert_same_values(
+    np.block([[A, B], [C, D]]),
+    numpy.block([[numpy.eye(2), numpy.zeros((2, 3))], [numpy.zeros((3, 2)), numpy.eye(3)]]),
+  )
+
+
+def test_take_along_axis_matches_numpy() -> None:
+  arr = np.asarray([[10, 20, 30], [40, 50, 60]])
+  oracle = numpy.array([[10, 20, 30], [40, 50, 60]])
+  idx = np.asarray([[0, 2, 1], [2, 1, 0]])
+  np_idx = numpy.array([[0, 2, 1], [2, 1, 0]])
+
+  assert_same_values(
+    np.take_along_axis(arr, idx, axis=1),
+    numpy.take_along_axis(oracle, np_idx, axis=1),
+  )
+
+  neg_idx = np.asarray([[-1, 0, 1], [0, -1, 1]])
+  np_neg_idx = numpy.array([[-1, 0, 1], [0, -1, 1]])
+  assert_same_values(
+    np.take_along_axis(arr, neg_idx, axis=1),
+    numpy.take_along_axis(oracle, np_neg_idx, axis=1),
+  )
+
+  broadcast_idx = np.asarray([[0, 1, 2]])
+  np_broadcast_idx = numpy.array([[0, 1, 2]])
+  assert_same_values(
+    np.take_along_axis(arr, broadcast_idx, axis=1),
+    numpy.take_along_axis(oracle, np_broadcast_idx, axis=1),
+  )
+
+
+def test_put_along_axis_matches_numpy() -> None:
+  monpy_target = np.zeros((2, 3), dtype=np.int64)
+  np_target = numpy.zeros((2, 3), dtype=numpy.int64)
+  monpy_idx = np.asarray([[0], [2]])
+  np_idx = numpy.array([[0], [2]])
+  monpy_vals = np.asarray([[99], [77]])
+  np_vals = numpy.array([[99], [77]])
+
+  np.put_along_axis(monpy_target, monpy_idx, monpy_vals, axis=1)
+  numpy.put_along_axis(np_target, np_idx, np_vals, axis=1)
+  assert_same_values(monpy_target, np_target)
+
+  monpy_target = np.zeros((2, 3), dtype=np.int64)
+  np_target = numpy.zeros((2, 3), dtype=numpy.int64)
+  monpy_idx = np.asarray([[0, 1, 2], [2, 1, 0]])
+  np_idx = numpy.array([[0, 1, 2], [2, 1, 0]])
+  np.put_along_axis(monpy_target, monpy_idx, np.asarray([7, 8, 9]), axis=1)
+  numpy.put_along_axis(np_target, np_idx, numpy.array([7, 8, 9]), axis=1)
+  assert_same_values(monpy_target, np_target)
+
+  monpy_target = np.zeros((2, 3), dtype=np.int64)
+  np_target = numpy.zeros((2, 3), dtype=numpy.int64)
+  np.put_along_axis(monpy_target, monpy_idx, np.asarray([[7], [8]]), axis=1)
+  numpy.put_along_axis(np_target, np_idx, numpy.array([[7], [8]]), axis=1)
+  assert_same_values(monpy_target, np_target)
+
+  monpy_target = np.zeros((2, 3), dtype=np.int64)
+  np_target = numpy.zeros((2, 3), dtype=numpy.int64)
+  monpy_idx = np.asarray([[-1], [0]])
+  np_idx = numpy.array([[-1], [0]])
+  np.put_along_axis(monpy_target, monpy_idx, np.asarray([[99], [77]]), axis=1)
+  numpy.put_along_axis(np_target, np_idx, numpy.array([[99], [77]]), axis=1)
+  assert_same_values(monpy_target, np_target)
+
+  monpy_target = np.zeros((2, 3), dtype=np.int64)
+  np_target = numpy.zeros((2, 3), dtype=numpy.int64)
+  monpy_idx = np.asarray([[0, 1, 2]])
+  np_idx = numpy.array([[0, 1, 2]])
+  np.put_along_axis(monpy_target, monpy_idx, np.asarray([[4, 5, 6]]), axis=1)
+  numpy.put_along_axis(np_target, np_idx, numpy.array([[4, 5, 6]]), axis=1)
+  assert_same_values(monpy_target, np_target)
+
+
+def test_put_matches_numpy() -> None:
+  monpy_arr = np.zeros((2, 3), dtype=np.int64)
+  np_arr = numpy.zeros((2, 3), dtype=numpy.int64)
+  np.put(monpy_arr, [0, 4], [10, 20])
+  numpy.put(np_arr, [0, 4], [10, 20])
+  assert_same_values(monpy_arr, np_arr)
+
+  monpy_arr = np.zeros((2, 3), dtype=np.int64)
+  np_arr = numpy.zeros((2, 3), dtype=numpy.int64)
+  np.put(monpy_arr, [-1, 0], [70, 80])
+  numpy.put(np_arr, [-1, 0], [70, 80])
+  assert_same_values(monpy_arr, np_arr)
+
+  with pytest.raises(IndexError):
+    np.put(np.zeros((2, 3), dtype=np.int64), [6], [1])
+
+
+def test_pad_modes_match_numpy() -> None:
+  arr = np.asarray([1, 2, 3, 4])
+  np_arr = numpy.array([1, 2, 3, 4])
+  for mode in ("edge", "reflect", "symmetric", "wrap"):
+    assert_same_values(
+      np.pad(arr, 2, mode=mode),
+      numpy.pad(np_arr, 2, mode=mode),
+    )
+    assert_same_values(
+      np.pad(arr, 7, mode=mode),
+      numpy.pad(np_arr, 7, mode=mode),
+    )
+
+  arr2 = np.asarray([[1, 2, 3], [4, 5, 6]])
+  np_arr2 = numpy.array([[1, 2, 3], [4, 5, 6]])
+  for mode in ("edge", "reflect", "symmetric", "wrap"):
+    assert_same_values(
+      np.pad(arr2, ((1, 1), (2, 1)), mode=mode),
+      numpy.pad(np_arr2, ((1, 1), (2, 1)), mode=mode),
+    )

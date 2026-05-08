@@ -85,13 +85,17 @@ from elementwise import (
     lu_inverse_into,
     lu_solve_into,
     maybe_matmul_contiguous,
+    maybe_binary_strided_typed,
     maybe_reduce_contiguous,
+    maybe_reduce_strided_typed,
     maybe_sin_add_mul_contiguous,
     maybe_unary_contiguous,
     maybe_unary_rank2_strided,
 )
 from array import (
     Array,
+    array_with_layout,
+    as_broadcast_layout,
     as_layout,
     broadcast_shape,
     cast_copy_array,
@@ -101,8 +105,6 @@ from array import (
     contiguous_i64_ptr,
     copy_c_contiguous,
     fill_all_from_py,
-    get_broadcast_as_bool,
-    get_broadcast_as_f64,
     get_physical_as_f64,
     get_physical_bool,
     get_physical_c128_imag,
@@ -136,7 +138,10 @@ from array import (
     shape_size,
     slice_length,
 )
-from cute.iter import LayoutIter
+from cute.iter import LayoutIter, MultiLayoutIter
+from cute.layout import Layout, make_layout_row_major
+from cute.functional import select as cute_select
+from cute.int_tuple import IntTuple
 
 
 # Python-callable entrypoints.
@@ -310,33 +315,41 @@ def indices_ops(dimensions_obj: PythonObject, dtype_obj: PythonObject) raises ->
 
 
 def reshape_ops(array_obj: PythonObject, shape_obj: PythonObject) raises -> PythonObject:
+    # Layout-algebra view: c-contig source → fresh row-major layout over
+    # the new shape (no data movement). Non-contig source → materialize
+    # a c-contig copy first, then reshape it. Matches numpy: reshape
+    # returns a view when possible, a copy when not.
     var src = array_obj.downcast_value_ptr[Array]()
-    if not is_c_contiguous(src[]):
-        raise Error("reshape() only supports c-contiguous arrays for now")
-    var shape = int_list_from_py(shape_obj)
-    var new_size = shape_size(shape)
+    var new_shape = int_list_from_py(shape_obj)
+    var new_size = shape_size(new_shape)
     if new_size != src[].size_value:
         raise Error("cannot reshape array to requested size")
-    var strides = make_c_strides(shape)
-    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
-    return PythonObject(alloc=result^)
+    if is_c_contiguous(src[]):
+        var shape_tuple = IntTuple.flat(clone_int_list(new_shape))
+        var new_layout = make_layout_row_major(shape_tuple^)
+        var view = array_with_layout(src[], new_layout)
+        return PythonObject(alloc=view^)
+    var copied = copy_c_contiguous(src[])
+    var shape_tuple = IntTuple.flat(clone_int_list(new_shape))
+    var copy_layout = make_layout_row_major(shape_tuple^)
+    var view = array_with_layout(copied, copy_layout)
+    return PythonObject(alloc=view^)
 
 
 def transpose_ops(array_obj: PythonObject, axes_obj: PythonObject) raises -> PythonObject:
+    # Layout-algebra view: `select(L, axes)` permutes the top-level modes.
+    # Equivalent to manual stride-list permutation but algebraically sourced.
     var src = array_obj.downcast_value_ptr[Array]()
     var axes = int_list_from_py(axes_obj)
     if len(axes) != len(src[].shape):
         raise Error("transpose() axes length must match ndim")
-    var shape = List[Int]()
-    var strides = List[Int]()
     for i in range(len(axes)):
-        var axis = axes[i]
-        if axis < 0 or axis >= len(src[].shape):
+        if axes[i] < 0 or axes[i] >= len(src[].shape):
             raise Error("transpose() axis out of bounds")
-        shape.append(src[].shape[axis])
-        strides.append(src[].strides[axis])
-    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
-    return PythonObject(alloc=result^)
+    var src_layout = as_layout(src[])
+    var permuted = cute_select(src_layout, axes)
+    var view = array_with_layout(src[], permuted)
+    return PythonObject(alloc=view^)
 
 
 def flip_ops(
@@ -430,28 +443,27 @@ def slice_ops(
 
 
 def broadcast_to_ops(array_obj: PythonObject, shape_obj: PythonObject) raises -> PythonObject:
+    # Layout-algebra view: build the broadcast layout (stride-zero
+    # injection on size-1 / new outer dims) and materialize a view.
     var src = array_obj.downcast_value_ptr[Array]()
-    var shape = int_list_from_py(shape_obj)
-    var ndim_out = len(shape)
+    var out_shape = int_list_from_py(shape_obj)
+    var ndim_out = len(out_shape)
     var ndim_src = len(src[].shape)
     if ndim_src > ndim_out:
         raise Error("cannot broadcast to fewer dimensions")
-    var strides = List[Int]()
+    # Validate broadcast compatibility before delegating to the layout
+    # builder — `as_broadcast_layout` injects stride-0 silently on
+    # size-1 mismatches but doesn't catch hard incompatibilities.
     for out_axis in range(ndim_out):
         var src_axis = out_axis - (ndim_out - ndim_src)
-        if src_axis < 0:
-            strides.append(0)
-        else:
+        if src_axis >= 0:
             var src_dim = src[].shape[src_axis]
-            var out_dim = shape[out_axis]
-            if src_dim == out_dim:
-                strides.append(src[].strides[src_axis])
-            elif src_dim == 1:
-                strides.append(0)
-            else:
+            var out_dim = out_shape[out_axis]
+            if src_dim != out_dim and src_dim != 1:
                 raise Error("shape is not broadcastable")
-    var result = make_view_array(src[], shape^, strides^, shape_size(shape), src[].offset_elems)
-    return PythonObject(alloc=result^)
+    var bcast_layout = as_broadcast_layout(src[], out_shape)
+    var view = array_with_layout(src[], bcast_layout)
+    return PythonObject(alloc=view^)
 
 
 def expand_dims_ops(array_obj: PythonObject, axis_obj: PythonObject) raises -> PythonObject:
@@ -615,8 +627,8 @@ def unary_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObj
     var dst_iter = LayoutIter(dst_layout, dst_item, result.offset_elems * dst_item)
     while src_iter.has_next():
         var value = get_physical_as_f64(src[], src_iter.element_index())
-        var out = apply_unary_f64(value, op)
-        set_physical_from_f64(result, dst_iter.element_index(), out)
+        var output = apply_unary_f64(value, op)
+        set_physical_from_f64(result, dst_iter.element_index(), output)
         src_iter.step()
         dst_iter.step()
     return PythonObject(alloc=result^)
@@ -720,9 +732,9 @@ def apply_unary_complex_f64(re: Float64, im: Float64, op: Int) raises -> Tuple[F
 
 def binary_dispatch_ops(lhs: Array, rhs: Array, op: Int) raises -> Array:
     # Internal binary_ops dispatch core. Allocates the result and runs the
-    # contiguous / strided fast paths; if all fail, falls back to the
-    # broadcast-divmod walker. Used by both the Python `binary_ops` function and
-    # the Array.add/sub/mul/div method shortcuts.
+    # contiguous / strided fast paths; if all fail, walks via
+    # MultiLayoutIter so the broadcast divmod amortizes across the whole
+    # iteration instead of paying per element.
     var dtype_code = result_dtype_for_binary(lhs.dtype_code, rhs.dtype_code, op)
     var same = same_shape(lhs.shape, rhs.shape)
     var shape: List[Int]
@@ -735,10 +747,38 @@ def binary_dispatch_ops(lhs: Array, rhs: Array, op: Int) raises -> Array:
         return result^
     if maybe_binary_contiguous(lhs, rhs, result, op):
         return result^
-    for i in range(result.size_value):
-        var lval = get_broadcast_as_f64(lhs, i, result.shape)
-        var rval = get_broadcast_as_f64(rhs, i, result.shape)
-        set_logical_from_f64(result, i, apply_binary_f64(lval, rval, op))
+    # Typed strided walker: same-dtype broadcasts skip the f64 dispatch
+    # cascade entirely. Most ops in practice (arithmetic on matching
+    # dtypes) hit this. Mixed-dtype broadcasts fall through.
+    if maybe_binary_strided_typed(lhs, rhs, result, op):
+        return result^
+    # Strided fallback: cursor walk via MultiLayoutIter. Each operand
+    # carries stride-zero modes for broadcast dimensions; the output is
+    # contiguous (we just allocated it).
+    var lhs_layout = as_broadcast_layout(lhs, result.shape)
+    var rhs_layout = as_broadcast_layout(rhs, result.shape)
+    var out_layout = as_layout(result)
+    var item_lhs = item_size(lhs.dtype_code)
+    var item_rhs = item_size(rhs.dtype_code)
+    var item_out = item_size(result.dtype_code)
+    var operand_layouts = List[Layout]()
+    operand_layouts.append(lhs_layout^)
+    operand_layouts.append(rhs_layout^)
+    operand_layouts.append(out_layout^)
+    var item_sizes = List[Int]()
+    item_sizes.append(item_lhs)
+    item_sizes.append(item_rhs)
+    item_sizes.append(item_out)
+    var base_offsets = List[Int]()
+    base_offsets.append(lhs.offset_elems * item_lhs)
+    base_offsets.append(rhs.offset_elems * item_rhs)
+    base_offsets.append(result.offset_elems * item_out)
+    var iter = MultiLayoutIter(result.shape, operand_layouts^, item_sizes^, base_offsets^)
+    while iter.has_next():
+        var lval = get_physical_as_f64(lhs, iter.element_index(0))
+        var rval = get_physical_as_f64(rhs, iter.element_index(1))
+        set_physical_from_f64(result, iter.element_index(2), apply_binary_f64(lval, rval, op))
+        iter.step()
     return result^
 
 
@@ -855,10 +895,30 @@ def binary_into_ops(
             raise Error("out shape does not match binary result shape")
         if maybe_binary_contiguous(lhs[], rhs[], dst[], op):
             return PythonObject(None)
-    for i in range(dst[].size_value):
-        var lval = get_broadcast_as_f64(lhs[], i, dst[].shape)
-        var rval = get_broadcast_as_f64(rhs[], i, dst[].shape)
-        set_logical_from_f64(dst[], i, apply_binary_f64(lval, rval, op))
+    var lhs_layout = as_broadcast_layout(lhs[], dst[].shape)
+    var rhs_layout = as_broadcast_layout(rhs[], dst[].shape)
+    var dst_layout = as_layout(dst[])
+    var item_lhs = item_size(lhs[].dtype_code)
+    var item_rhs = item_size(rhs[].dtype_code)
+    var item_dst = item_size(dst[].dtype_code)
+    var operand_layouts = List[Layout]()
+    operand_layouts.append(lhs_layout^)
+    operand_layouts.append(rhs_layout^)
+    operand_layouts.append(dst_layout^)
+    var item_sizes = List[Int]()
+    item_sizes.append(item_lhs)
+    item_sizes.append(item_rhs)
+    item_sizes.append(item_dst)
+    var base_offsets = List[Int]()
+    base_offsets.append(lhs[].offset_elems * item_lhs)
+    base_offsets.append(rhs[].offset_elems * item_rhs)
+    base_offsets.append(dst[].offset_elems * item_dst)
+    var iter = MultiLayoutIter(dst[].shape, operand_layouts^, item_sizes^, base_offsets^)
+    while iter.has_next():
+        var lval = get_physical_as_f64(lhs[], iter.element_index(0))
+        var rval = get_physical_as_f64(rhs[], iter.element_index(1))
+        set_physical_from_f64(dst[], iter.element_index(2), apply_binary_f64(lval, rval, op))
+        iter.step()
     return PythonObject(None)
 
 
@@ -879,13 +939,21 @@ def binary_scalar_ops(
     var scalar_value = scalar_py_as_f64(scalar_obj, scalar_dtype)
     if maybe_binary_scalar_value_contiguous(array[], scalar_value, result, op, scalar_on_left):
         return PythonObject(alloc=result^)
-    for i in range(result.size_value):
-        var lhs = get_logical_as_f64(array[], i)
+    var src_layout = as_layout(array[])
+    var dst_layout = as_layout(result)
+    var src_item = item_size(array[].dtype_code)
+    var dst_item = item_size(result.dtype_code)
+    var src_iter = LayoutIter(src_layout, src_item, array[].offset_elems * src_item)
+    var dst_iter = LayoutIter(dst_layout, dst_item, result.offset_elems * dst_item)
+    while src_iter.has_next():
+        var lhs = get_physical_as_f64(array[], src_iter.element_index())
         var rhs = scalar_value
         if scalar_on_left:
             lhs = scalar_value
-            rhs = get_logical_as_f64(array[], i)
-        set_logical_from_f64(result, i, apply_binary_f64(lhs, rhs, op))
+            rhs = get_physical_as_f64(array[], src_iter.element_index())
+        set_physical_from_f64(result, dst_iter.element_index(), apply_binary_f64(lhs, rhs, op))
+        src_iter.step()
+        dst_iter.step()
     return PythonObject(alloc=result^)
 
 
@@ -956,11 +1024,31 @@ def sin_add_mul_ops(
     var result = make_empty_array(dtype_code, shape^)
     if maybe_sin_add_mul_contiguous(lhs[], rhs[], scalar_value, result):
         return PythonObject(alloc=result^)
-    for i in range(result.size_value):
-        var out = sin(get_broadcast_as_f64(lhs[], i, result.shape)) + (
-            get_broadcast_as_f64(rhs[], i, result.shape) * scalar_value
+    var lhs_layout = as_broadcast_layout(lhs[], result.shape)
+    var rhs_layout = as_broadcast_layout(rhs[], result.shape)
+    var out_layout = as_layout(result)
+    var item_lhs = item_size(lhs[].dtype_code)
+    var item_rhs = item_size(rhs[].dtype_code)
+    var item_out = item_size(result.dtype_code)
+    var operand_layouts = List[Layout]()
+    operand_layouts.append(lhs_layout^)
+    operand_layouts.append(rhs_layout^)
+    operand_layouts.append(out_layout^)
+    var item_sizes = List[Int]()
+    item_sizes.append(item_lhs)
+    item_sizes.append(item_rhs)
+    item_sizes.append(item_out)
+    var base_offsets = List[Int]()
+    base_offsets.append(lhs[].offset_elems * item_lhs)
+    base_offsets.append(rhs[].offset_elems * item_rhs)
+    base_offsets.append(result.offset_elems * item_out)
+    var iter = MultiLayoutIter(result.shape, operand_layouts^, item_sizes^, base_offsets^)
+    while iter.has_next():
+        var output = sin(get_physical_as_f64(lhs[], iter.element_index(0))) + (
+            get_physical_as_f64(rhs[], iter.element_index(1)) * scalar_value
         )
-        set_logical_from_f64(result, i, out)
+        set_physical_from_f64(result, iter.element_index(2), output)
+        iter.step()
     result.backend_code = BACKEND_FUSED
     return PythonObject(alloc=result^)
 
@@ -974,12 +1062,51 @@ def where_ops(cond_obj: PythonObject, lhs_obj: PythonObject, rhs_obj: PythonObje
     var shape = broadcast_shape(tmp, rhs[])
     var dtype_code = result_dtype_for_binary(lhs[].dtype_code, rhs[].dtype_code, OP_ADD)
     var result = make_empty_array(dtype_code, shape^)
-    for i in range(result.size_value):
-        if get_broadcast_as_bool(cond[], i, result.shape):
-            set_logical_from_f64(result, i, get_broadcast_as_f64(lhs[], i, result.shape))
+    var cond_layout = as_broadcast_layout(cond[], result.shape)
+    var lhs_layout = as_broadcast_layout(lhs[], result.shape)
+    var rhs_layout = as_broadcast_layout(rhs[], result.shape)
+    var out_layout = as_layout(result)
+    var item_cond = item_size(cond[].dtype_code)
+    var item_lhs = item_size(lhs[].dtype_code)
+    var item_rhs = item_size(rhs[].dtype_code)
+    var item_out = item_size(result.dtype_code)
+    var operand_layouts = List[Layout]()
+    operand_layouts.append(cond_layout^)
+    operand_layouts.append(lhs_layout^)
+    operand_layouts.append(rhs_layout^)
+    operand_layouts.append(out_layout^)
+    var item_sizes = List[Int]()
+    item_sizes.append(item_cond)
+    item_sizes.append(item_lhs)
+    item_sizes.append(item_rhs)
+    item_sizes.append(item_out)
+    var base_offsets = List[Int]()
+    base_offsets.append(cond[].offset_elems * item_cond)
+    base_offsets.append(lhs[].offset_elems * item_lhs)
+    base_offsets.append(rhs[].offset_elems * item_rhs)
+    base_offsets.append(result.offset_elems * item_out)
+    var iter = MultiLayoutIter(result.shape, operand_layouts^, item_sizes^, base_offsets^)
+    while iter.has_next():
+        var cond_phys = iter.element_index(0)
+        var picked: Float64
+        if cond[].dtype_code == DTYPE_BOOL:
+            picked = 1.0 if get_physical_bool(cond[], cond_phys) else 0.0
         else:
-            set_logical_from_f64(result, i, get_broadcast_as_f64(rhs[], i, result.shape))
+            picked = get_physical_as_f64(cond[], cond_phys)
+        if picked != 0.0:
+            set_physical_from_f64(result, iter.element_index(3), get_physical_as_f64(lhs[], iter.element_index(1)))
+        else:
+            set_physical_from_f64(result, iter.element_index(3), get_physical_as_f64(rhs[], iter.element_index(2)))
+        iter.step()
     return PythonObject(alloc=result^)
+
+
+def _reduce_strided_iter(src: Array) raises -> LayoutIter:
+    """LayoutIter wrapping `src` for strided whole-array reductions.
+    Caller drives `step()` and reads `element_index()`."""
+    var src_layout = as_layout(src)
+    var src_item = item_size(src.dtype_code)
+    return LayoutIter(src_layout, src_item, src.offset_elems * src_item)
 
 
 def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
@@ -992,10 +1119,13 @@ def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonOb
             raise Error("argmax/argmin cannot reduce an empty array")
         if op == REDUCE_ARGMAX and maybe_argmax_contiguous(src[], result):
             return PythonObject(alloc=result^)
+        var iter = _reduce_strided_iter(src[])
         var best_index = 0
-        var best_value = get_logical_as_f64(src[], 0)
-        for i in range(1, src[].size_value):
-            var value = get_logical_as_f64(src[], i)
+        var best_value = get_physical_as_f64(src[], iter.element_index())
+        iter.step()
+        var i = 1
+        while iter.has_next():
+            var value = get_physical_as_f64(src[], iter.element_index())
             if op == REDUCE_ARGMAX:
                 if value > best_value:
                     best_value = value
@@ -1004,6 +1134,8 @@ def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonOb
                 if value < best_value:
                     best_value = value
                     best_index = i
+            iter.step()
+            i += 1
         set_logical_from_i64(result, 0, Int64(best_index))
         return PythonObject(alloc=result^)
     if op == REDUCE_ALL or op == REDUCE_ANY:
@@ -1013,18 +1145,21 @@ def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonOb
             var v: Float64 = 1.0 if op == REDUCE_ALL else 0.0
             set_logical_from_f64(result, 0, v)
             return PythonObject(alloc=result^)
+        var iter = _reduce_strided_iter(src[])
         if op == REDUCE_ALL:
-            for i in range(src[].size_value):
-                if get_logical_as_f64(src[], i) == 0.0:
+            while iter.has_next():
+                if get_physical_as_f64(src[], iter.element_index()) == 0.0:
                     set_logical_from_f64(result, 0, 0.0)
                     return PythonObject(alloc=result^)
+                iter.step()
             set_logical_from_f64(result, 0, 1.0)
             return PythonObject(alloc=result^)
         # REDUCE_ANY
-        for i in range(src[].size_value):
-            if get_logical_as_f64(src[], i) != 0.0:
+        while iter.has_next():
+            if get_physical_as_f64(src[], iter.element_index()) != 0.0:
                 set_logical_from_f64(result, 0, 1.0)
                 return PythonObject(alloc=result^)
+            iter.step()
         set_logical_from_f64(result, 0, 0.0)
         return PythonObject(alloc=result^)
     var result_dtype = result_dtype_for_reduction(src[].dtype_code, op)
@@ -1040,27 +1175,38 @@ def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonOb
         raise Error("cannot reduce an empty array")
     if maybe_reduce_contiguous(src[], result, op):
         return PythonObject(alloc=result^)
-    var acc = get_logical_as_f64(src[], 0)
+    if maybe_reduce_strided_typed(src[], result, op):
+        return PythonObject(alloc=result^)
+    var iter = _reduce_strided_iter(src[])
+    var acc: Float64
     if op == REDUCE_SUM or op == REDUCE_MEAN:
         acc = 0.0
-        for i in range(src[].size_value):
-            acc += get_logical_as_f64(src[], i)
+        while iter.has_next():
+            acc += get_physical_as_f64(src[], iter.element_index())
+            iter.step()
         if op == REDUCE_MEAN:
             acc = acc / Float64(src[].size_value)
     elif op == REDUCE_PROD:
         acc = 1.0
-        for i in range(src[].size_value):
-            acc *= get_logical_as_f64(src[], i)
+        while iter.has_next():
+            acc *= get_physical_as_f64(src[], iter.element_index())
+            iter.step()
     elif op == REDUCE_MIN:
-        for i in range(1, src[].size_value):
-            var value = get_logical_as_f64(src[], i)
+        acc = get_physical_as_f64(src[], iter.element_index())
+        iter.step()
+        while iter.has_next():
+            var value = get_physical_as_f64(src[], iter.element_index())
             if value < acc:
                 acc = value
+            iter.step()
     elif op == REDUCE_MAX:
-        for i in range(1, src[].size_value):
-            var value = get_logical_as_f64(src[], i)
+        acc = get_physical_as_f64(src[], iter.element_index())
+        iter.step()
+        while iter.has_next():
+            var value = get_physical_as_f64(src[], iter.element_index())
             if value > acc:
                 acc = value
+            iter.step()
     else:
         raise Error("unknown reduction op")
     set_logical_from_f64(result, 0, acc)
@@ -1079,10 +1225,18 @@ def unary_preserve_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> 
     var result = make_empty_array(dtype_code, shape^)
     if maybe_unary_preserve_contiguous(src[], result, op):
         return PythonObject(alloc=result^)
-    for i in range(src[].size_value):
-        var value = get_logical_as_f64(src[], i)
-        var out = apply_unary_f64(value, op)
-        set_logical_from_f64(result, i, out)
+    var src_layout = as_layout(src[])
+    var dst_layout = as_layout(result)
+    var src_item = item_size(src[].dtype_code)
+    var dst_item = item_size(result.dtype_code)
+    var src_iter = LayoutIter(src_layout, src_item, src[].offset_elems * src_item)
+    var dst_iter = LayoutIter(dst_layout, dst_item, result.offset_elems * dst_item)
+    while src_iter.has_next():
+        var value = get_physical_as_f64(src[], src_iter.element_index())
+        var output = apply_unary_f64(value, op)
+        set_physical_from_f64(result, dst_iter.element_index(), output)
+        src_iter.step()
+        dst_iter.step()
     return PythonObject(alloc=result^)
 
 
@@ -1091,7 +1245,8 @@ def compare_ops(
     rhs_obj: PythonObject,
     op_obj: PythonObject,
 ) raises -> PythonObject:
-    """Elementwise comparison; returns a bool array. Operands broadcast."""
+    """Elementwise comparison; returns a bool array. Operands broadcast.
+    Walks via MultiLayoutIter so the broadcast divmod amortizes."""
     var lhs = lhs_obj.downcast_value_ptr[Array]()
     var rhs = rhs_obj.downcast_value_ptr[Array]()
     var op = Int(py=op_obj)
@@ -1102,9 +1257,28 @@ def compare_ops(
     else:
         shape = broadcast_shape(lhs[], rhs[])
     var result = make_empty_array(DTYPE_BOOL, shape^)
-    for i in range(result.size_value):
-        var lval = get_broadcast_as_f64(lhs[], i, result.shape)
-        var rval = get_broadcast_as_f64(rhs[], i, result.shape)
+    var lhs_layout = as_broadcast_layout(lhs[], result.shape)
+    var rhs_layout = as_broadcast_layout(rhs[], result.shape)
+    var out_layout = as_layout(result)
+    var item_lhs = item_size(lhs[].dtype_code)
+    var item_rhs = item_size(rhs[].dtype_code)
+    var item_out = item_size(result.dtype_code)
+    var operand_layouts = List[Layout]()
+    operand_layouts.append(lhs_layout^)
+    operand_layouts.append(rhs_layout^)
+    operand_layouts.append(out_layout^)
+    var item_sizes = List[Int]()
+    item_sizes.append(item_lhs)
+    item_sizes.append(item_rhs)
+    item_sizes.append(item_out)
+    var base_offsets = List[Int]()
+    base_offsets.append(lhs[].offset_elems * item_lhs)
+    base_offsets.append(rhs[].offset_elems * item_rhs)
+    base_offsets.append(result.offset_elems * item_out)
+    var iter = MultiLayoutIter(result.shape, operand_layouts^, item_sizes^, base_offsets^)
+    while iter.has_next():
+        var lval = get_physical_as_f64(lhs[], iter.element_index(0))
+        var rval = get_physical_as_f64(rhs[], iter.element_index(1))
         var output: Bool
         if op == CMP_EQ:
             output = lval == rval
@@ -1120,7 +1294,8 @@ def compare_ops(
             output = lval >= rval
         else:
             raise Error("unknown comparison op")
-        set_logical_from_f64(result, i, 1.0 if output else 0.0)
+        set_physical_from_f64(result, iter.element_index(2), 1.0 if output else 0.0)
+        iter.step()
     return PythonObject(alloc=result^)
 
 
@@ -1130,7 +1305,7 @@ def logical_ops(
     op_obj: PythonObject,
 ) raises -> PythonObject:
     """Elementwise logical_and / or / xor. Operates on truthiness of any
-    numeric input; result is bool."""
+    numeric input; result is bool. Walks via MultiLayoutIter."""
     var lhs = lhs_obj.downcast_value_ptr[Array]()
     var rhs = rhs_obj.downcast_value_ptr[Array]()
     var op = Int(py=op_obj)
@@ -1141,53 +1316,77 @@ def logical_ops(
     else:
         shape = broadcast_shape(lhs[], rhs[])
     var result = make_empty_array(DTYPE_BOOL, shape^)
-    for i in range(result.size_value):
-        var l_truthy = get_broadcast_as_f64(lhs[], i, result.shape) != 0.0
-        var r_truthy = get_broadcast_as_f64(rhs[], i, result.shape) != 0.0
-        var out: Bool
+    var lhs_layout = as_broadcast_layout(lhs[], result.shape)
+    var rhs_layout = as_broadcast_layout(rhs[], result.shape)
+    var out_layout = as_layout(result)
+    var item_lhs = item_size(lhs[].dtype_code)
+    var item_rhs = item_size(rhs[].dtype_code)
+    var item_out = item_size(result.dtype_code)
+    var operand_layouts = List[Layout]()
+    operand_layouts.append(lhs_layout^)
+    operand_layouts.append(rhs_layout^)
+    operand_layouts.append(out_layout^)
+    var item_sizes = List[Int]()
+    item_sizes.append(item_lhs)
+    item_sizes.append(item_rhs)
+    item_sizes.append(item_out)
+    var base_offsets = List[Int]()
+    base_offsets.append(lhs[].offset_elems * item_lhs)
+    base_offsets.append(rhs[].offset_elems * item_rhs)
+    base_offsets.append(result.offset_elems * item_out)
+    var iter = MultiLayoutIter(result.shape, operand_layouts^, item_sizes^, base_offsets^)
+    while iter.has_next():
+        var l_truthy = get_physical_as_f64(lhs[], iter.element_index(0)) != 0.0
+        var r_truthy = get_physical_as_f64(rhs[], iter.element_index(1)) != 0.0
+        var output: Bool
         if op == LOGIC_AND:
-            out = l_truthy and r_truthy
+            output = l_truthy and r_truthy
         elif op == LOGIC_OR:
-            out = l_truthy or r_truthy
+            output = l_truthy or r_truthy
         elif op == LOGIC_XOR:
-            out = l_truthy != r_truthy
+            output = l_truthy != r_truthy
         else:
             raise Error("unknown logical op")
-        var el = 0.0
-        if out:
-            el = 1.0
-        set_logical_from_f64(result, i, el)
+        set_physical_from_f64(result, iter.element_index(2), 1.0 if output else 0.0)
+        iter.step()
     return PythonObject(alloc=result^)
 
 
 def predicate_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
-    """Unary predicate (isnan / isinf / isfinite / signbit). Returns bool."""
+    """Unary predicate (isnan / isinf / isfinite / signbit). Returns
+    bool. Walks via LayoutIter so the divmod amortizes across the
+    iteration."""
     var src = array_obj.downcast_value_ptr[Array]()
     var op = Int(py=op_obj)
     var shape = clone_int_list(src[].shape)
     var result = make_empty_array(DTYPE_BOOL, shape^)
-    for i in range(src[].size_value):
-        var value = get_logical_as_f64(src[], i)
-        var out: Bool
+    var src_layout = as_layout(src[])
+    var dst_layout = as_layout(result)
+    var src_item = item_size(src[].dtype_code)
+    var dst_item = item_size(result.dtype_code)
+    var src_iter = LayoutIter(src_layout, src_item, src[].offset_elems * src_item)
+    var dst_iter = LayoutIter(dst_layout, dst_item, result.offset_elems * dst_item)
+    while src_iter.has_next():
+        var value = get_physical_as_f64(src[], src_iter.element_index())
+        var output: Bool
         if op == PRED_ISNAN:
-            out = isnan(value)
+            output = isnan(value)
         elif op == PRED_ISINF:
-            out = isinf(value)
+            output = isinf(value)
         elif op == PRED_ISFINITE:
-            out = not (isnan(value) or isinf(value))
+            output = not (isnan(value) or isinf(value))
         elif op == PRED_SIGNBIT:
             # numpy.signbit returns True for -0.0, so use bitcast.
-            out = value < 0.0
+            output = value < 0.0
             if value == 0.0:
                 # negative-zero → True via bitcast.
                 var bits = SIMD[DType.float64, 1](value).cast[DType.uint64]()[0]
-                out = (bits >> 63) != 0
+                output = (bits >> 63) != 0
         else:
             raise Error("unknown predicate op")
-        var el = 0.0
-        if out:
-            el = 1.0
-        set_logical_from_f64(result, i, el)
+        set_physical_from_f64(result, dst_iter.element_index(), 1.0 if output else 0.0)
+        src_iter.step()
+        dst_iter.step()
     return PythonObject(alloc=result^)
 
 
@@ -2172,8 +2371,23 @@ def copyto_ops(dst_obj: PythonObject, src_obj: PythonObject) raises -> PythonObj
     var shape = broadcast_shape(src[], dst[])
     if not same_shape(shape, dst[].shape):
         raise Error("copyto() source is not broadcastable to destination")
-    for i in range(dst[].size_value):
-        set_logical_from_f64(dst[], i, get_broadcast_as_f64(src[], i, dst[].shape))
+    var src_layout = as_broadcast_layout(src[], dst[].shape)
+    var dst_layout = as_layout(dst[])
+    var src_item = item_size(src[].dtype_code)
+    var dst_item = item_size(dst[].dtype_code)
+    var operand_layouts = List[Layout]()
+    operand_layouts.append(src_layout^)
+    operand_layouts.append(dst_layout^)
+    var item_sizes = List[Int]()
+    item_sizes.append(src_item)
+    item_sizes.append(dst_item)
+    var base_offsets = List[Int]()
+    base_offsets.append(src[].offset_elems * src_item)
+    base_offsets.append(dst[].offset_elems * dst_item)
+    var iter = MultiLayoutIter(dst[].shape, operand_layouts^, item_sizes^, base_offsets^)
+    while iter.has_next():
+        set_physical_from_f64(dst[], iter.element_index(1), get_physical_as_f64(src[], iter.element_index(0)))
+        iter.step()
     return PythonObject(None)
 
 

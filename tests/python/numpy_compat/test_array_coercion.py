@@ -220,6 +220,8 @@ def test_numpy_array_strided_view_copy_false_preserves_view_storage() -> None:
   [
     "object",
     "str",
+    "datetime64[ns]",
+    "timedelta64[ns]",
     [("field", numpy.int64)],
   ],
 )
@@ -261,9 +263,7 @@ def test_phase5c_float16_dtype_allocation_works() -> None:
 
 @pytest.mark.parametrize("dtype_name", ["int32", "int16", "int8"])
 def test_phase5a_int_dtype_allocation_works(dtype_name: str) -> None:
-  # Phase-5a int kernels landed: int32/16/8 are now fully allocatable, with
-  # arithmetic going through the f64 round-trip path until SIMD-typed
-  # kernels cover them.
+  # Phase-5a int kernels landed: int32/16/8 are fully allocatable and arithmetic preserves dtype.
   dtype = getattr(np, dtype_name)
   arr = np.asarray([1, 2, 3], dtype=dtype)
   assert arr.dtype == dtype
