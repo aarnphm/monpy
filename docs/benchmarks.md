@@ -108,3 +108,35 @@ python .github/scripts/posts.py \
   results/$(date +%F)/manifest.json \
   --comment-output benchmark-comment.md
 ```
+
+## Local Optimization Log
+
+### 2026-05-08 rank-3 transposed add dispatch
+
+The first post-refactor hot spot was the `strides/rank3_transpose_add_f32`
+case. The input shape is `32x32x32`; both operands are c-contiguous arrays
+viewed as `.transpose((2, 0, 1))`, so the logical output is contiguous but the
+inputs have a stride-1 axis that is not the innermost logical axis.
+
+`src/elementwise/__init__.mojo` now routes matching same-dtype rank-3 layouts
+through `maybe_binary_rank3_axis0_tile`, the batched form of the existing rank-2
+transpose tile. The kernel processes each middle-axis slice as a 4x4 register
+tile:
+
+1. Load four stride-1 SIMD vectors from each operand.
+2. Apply the binary op in registers.
+3. Transpose the 4x4 tile with `shuffle`.
+4. Store four contiguous rows into the c-contiguous result.
+
+Focused local result on the M3 Pro checkout:
+
+| run | monpy us | numpy us | monpy/numpy |
+| --- | ---: | ---: | ---: |
+| `results/local-sweep-20260508-pass0/results.json` | 30.653 | 8.404 | 3.648x |
+| `results/local-sweep-20260508-rank3-dispatch/results.json` | 18.544 | 7.931 | 2.373x |
+
+That is a 1.65:1 reduction in monpy wall time for this row. The row still does
+not beat numpy, so the next optimization pass should use sampled profiles and
+hardware counters before adding another kernel. The likely split to verify is
+Python wrapper time versus tile shuffle/store pressure versus library-assisted
+iterator behavior in numpy.

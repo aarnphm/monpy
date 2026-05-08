@@ -87,6 +87,18 @@ def test_broadcasted_binary_ops_match_numpy() -> None:
   assert_same_values(lhs / rhs, oracle_lhs / oracle_rhs)
 
 
+def test_rank3_transposed_binary_add_uses_tiled_kernel() -> None:
+  values = numpy.arange(8 * 8 * 8, dtype=numpy.float32).reshape((8, 8, 8))
+  rhs_values = numpy.flip(values, axis=2).copy()
+  lhs = np.asarray(values, dtype=np.float32)
+  rhs = np.asarray(rhs_values, dtype=np.float32)
+
+  result = lhs.transpose((2, 0, 1)) + rhs.transpose((2, 0, 1))
+
+  assert_same_values(result, values.transpose((2, 0, 1)) + rhs_values.transpose((2, 0, 1)))
+  assert result._native.used_fused()
+
+
 def test_scalar_binary_ops_match_numpy() -> None:
   arr = np.asarray([[1, 2, 3], [4, 5, 6]], dtype=np.int64)
   oracle = numpy.asarray([[1, 2, 3], [4, 5, 6]], dtype=numpy.int64)
