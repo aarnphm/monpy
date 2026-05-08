@@ -1,16 +1,11 @@
 # monpy roadmap
 
-monpy is aiming at a cpu-only, numpy-shaped v1 before broader device work.
-
-see [numpy-port-gaps.md](numpy-port-gaps.md) for the missing numpy library map:
+see [[numpy-port-gaps]] for the missing numpy library map:
 dtype/scalar machinery, coercion, strided iteration, ufunc dispatch, indexing,
 reductions, linalg/tensor operations, random, fft, strings, masked arrays, io,
 and compatibility modules.
 
-## roadmap-minus-7
-
-roadmap-minus-7 moves array interchange and linear algebra from explicit gaps to
-covered v1 behavior:
+## roadmap
 
 - numpy array inputs are accepted by `array()` and `asarray()` for supported
   cpu dtypes. `copy=False` shares storage when no dtype conversion is needed,
@@ -67,5 +62,5 @@ covered v1 behavior:
 - non-cpu devices, including metal-backed arrays.
 - object, string, structured, datetime, and timedelta dtype families.
 - higher-rank matmul.
-- the deep ufunc tail: `where=` keyword support, `reduceat`, and numpy's full
-  floating-point error-state machinery.
+- the deep ufunc tail: `where=` keyword support, `reduceat`, and numpy's full floating-point error-state machinery.
+- mojo concurrent build is still subpar
