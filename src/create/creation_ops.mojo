@@ -20,9 +20,7 @@ from array import (
     as_layout,
     broadcast_shape,
     clone_int_list,
-    contiguous_f32_ptr,
-    contiguous_f64_ptr,
-    contiguous_i64_ptr,
+    contiguous_ptr,
     copy_c_contiguous,
     fill_all_from_py,
     get_physical_as_f64,
@@ -230,7 +228,7 @@ def indices_ops(dimensions_obj: PythonObject, dtype_obj: PythonObject) raises ->
     var result = make_empty_array(ArrayDType.INT64.value, out_shape^)
     if rank == 0 or plane_size == 0:
         return PythonObject(alloc=result^)
-    var out = contiguous_i64_ptr(result)
+    var out = contiguous_ptr[DType.int64](result)
     for axis in range(rank):
         var stride = strides[axis]
         var dim = dims[axis]
@@ -257,7 +255,7 @@ def eye_ops(
     shape.append(m)
     var result = make_empty_array(dtype_code, shape^)
     if dtype_code == ArrayDType.FLOAT32.value:
-        var out_ptr = contiguous_f32_ptr(result)
+        var out_ptr = contiguous_ptr[DType.float32](result)
         for i in range(n * m):
             out_ptr[i] = Float32(0.0)
         var start_i = 0 if k >= 0 else -k
@@ -271,7 +269,7 @@ def eye_ops(
                 out_ptr[i * m + col] = Float32(1.0)
         return PythonObject(alloc=result^)
     if dtype_code == ArrayDType.FLOAT64.value:
-        var out_ptr = contiguous_f64_ptr(result)
+        var out_ptr = contiguous_ptr[DType.float64](result)
         for i in range(n * m):
             out_ptr[i] = 0.0
         var start_i = 0 if k >= 0 else -k
@@ -315,7 +313,7 @@ def tri_ops(
     shape.append(m)
     var result = make_empty_array(dtype_code, shape^)
     if dtype_code == ArrayDType.FLOAT32.value:
-        var out_ptr = contiguous_f32_ptr(result)
+        var out_ptr = contiguous_ptr[DType.float32](result)
         for r in range(n):
             var row_limit = r + k + 1
             if row_limit < 0:
@@ -329,7 +327,7 @@ def tri_ops(
                     out_ptr[r * m + c] = Float32(0.0)
         return PythonObject(alloc=result^)
     if dtype_code == ArrayDType.FLOAT64.value:
-        var out_ptr = contiguous_f64_ptr(result)
+        var out_ptr = contiguous_ptr[DType.float64](result)
         for r in range(n):
             var row_limit = r + k + 1
             if row_limit < 0:

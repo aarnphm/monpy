@@ -23,13 +23,12 @@ from array import (
     as_broadcast_layout,
     as_layout,
     clone_int_list,
-    contiguous_f32_ptr,
-    contiguous_f64_ptr,
+    contiguous_ptr,
     copy_c_contiguous,
     get_logical_as_f64,
+    get_physical,
     get_physical_as_f64,
     get_physical_bool,
-    get_physical_i64,
     int_list_from_py,
     is_c_contiguous,
     item_size,
@@ -441,7 +440,7 @@ def trace_ops(
     if src[].dtype_code == ArrayDType.INT64.value:
         var acc = Int64(0)
         for i in range(diag_len):
-            acc += get_physical_i64(src[], diag_offset + i * diag_stride)
+            acc += get_physical[DType.int64](src[], diag_offset + i * diag_stride)
         set_logical_from_i64(result, 0, acc)
     elif src[].dtype_code == ArrayDType.BOOL.value:
         var acc = Int64(0)
@@ -600,8 +599,8 @@ def tril_ops(array_obj: PythonObject, k_obj: PythonObject) raises -> PythonObjec
     for d in range(ndim - 2):
         batch *= src[].shape[d]
     if src[].dtype_code == ArrayDType.FLOAT32.value and is_c_contiguous(src[]):
-        var src_ptr = contiguous_f32_ptr(src[])
-        var out_ptr = contiguous_f32_ptr(result)
+        var src_ptr = contiguous_ptr[DType.float32](src[])
+        var out_ptr = contiguous_ptr[DType.float32](result)
         for b in range(batch):
             for r in range(rows):
                 for c in range(cols):
@@ -612,8 +611,8 @@ def tril_ops(array_obj: PythonObject, k_obj: PythonObject) raises -> PythonObjec
                         out_ptr[idx] = Float32(0.0)
         return PythonObject(alloc=result^)
     if src[].dtype_code == ArrayDType.FLOAT64.value and is_c_contiguous(src[]):
-        var src_ptr = contiguous_f64_ptr(src[])
-        var out_ptr = contiguous_f64_ptr(result)
+        var src_ptr = contiguous_ptr[DType.float64](src[])
+        var out_ptr = contiguous_ptr[DType.float64](result)
         for b in range(batch):
             for r in range(rows):
                 for c in range(cols):
@@ -651,8 +650,8 @@ def triu_ops(array_obj: PythonObject, k_obj: PythonObject) raises -> PythonObjec
     for d in range(ndim - 2):
         batch *= src[].shape[d]
     if src[].dtype_code == ArrayDType.FLOAT32.value and is_c_contiguous(src[]):
-        var src_ptr = contiguous_f32_ptr(src[])
-        var out_ptr = contiguous_f32_ptr(result)
+        var src_ptr = contiguous_ptr[DType.float32](src[])
+        var out_ptr = contiguous_ptr[DType.float32](result)
         for b in range(batch):
             for r in range(rows):
                 for c in range(cols):
@@ -663,8 +662,8 @@ def triu_ops(array_obj: PythonObject, k_obj: PythonObject) raises -> PythonObjec
                         out_ptr[idx] = Float32(0.0)
         return PythonObject(alloc=result^)
     if src[].dtype_code == ArrayDType.FLOAT64.value and is_c_contiguous(src[]):
-        var src_ptr = contiguous_f64_ptr(src[])
-        var out_ptr = contiguous_f64_ptr(result)
+        var src_ptr = contiguous_ptr[DType.float64](src[])
+        var out_ptr = contiguous_ptr[DType.float64](result)
         for b in range(batch):
             for r in range(rows):
                 for c in range(cols):
