@@ -2570,6 +2570,11 @@ def ascontiguousarray(a:object, dtype:object=None, *, device:object=None)->ndarr
 
 def from_dlpack(x:object, /, *, device:object=None, copy:builtins.bool|None=None)->ndarray:
   if device is not None and device!="cpu":raise NotImplementedError("monpy v1 only supports cpu arrays")
+  if runtime.ops_numpy.is_array_input(x):
+    try:return runtime.ops_numpy.from_numpy(x, copy=copy, device=device)
+    except ValueError as exc:
+      if copy is False and "readonly" in str(exc):raise BufferError(str(exc)) from exc
+      raise
   from . import _dlpack
   return _dlpack.from_dlpack(x, copy)
 

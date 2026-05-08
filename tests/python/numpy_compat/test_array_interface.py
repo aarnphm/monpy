@@ -167,6 +167,16 @@ def test_dlpack_import_from_numpy_cpu_protocol_shares_when_copy_false() -> None:
   assert source[0, 0] == pytest.approx(-1.0)
 
 
+def test_dlpack_import_from_numpy_reversed_view_preserves_strides() -> None:
+  source = numpy.arange(6, dtype=numpy.int64)[::-1]
+  arr = np.from_dlpack(source, copy=False)
+
+  source[1] = 77
+
+  assert arr.tolist() == [5, 77, 3, 2, 1, 0]
+  assert arr.strides == (-8,)
+
+
 def test_dlpack_import_copy_true_detaches_from_numpy_source() -> None:
   source = numpy.arange(4, dtype=numpy.int64)
   arr = np.from_dlpack(source, copy=True)

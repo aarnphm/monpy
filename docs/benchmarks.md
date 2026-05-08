@@ -258,3 +258,27 @@ showed `mnp.asarray(np.zeros(...))` around 4.2 us and native-backed squeeze
 around the low single-digit microsecond range. The next wrapper-pass target is
 therefore the NumPy-input marshaling family (`from_dlpack`, `asarray_zero_copy`,
 and small `array_copy`), not another squeeze-specialized kernel.
+
+### 2026-05-08 NumPy DLPack fast path
+
+`array/interop/from_dlpack_f32` was routing NumPy inputs through the generic
+Python DLPack capsule parser. That path remains necessary for arbitrary DLPack
+producers, but NumPy ndarrays already expose the buffer metadata monpy needs
+through the existing array-interface ingest. The top-level `from_dlpack` facade
+now recognizes NumPy ndarray inputs and delegates to the same zero-copy
+`from_numpy` path used by `asarray`.
+
+The fast path preserves the important DLPack copy-policy behavior: `copy=True`
+detaches, writable `copy=False` shares storage, and readonly `copy=False` still
+raises `BufferError`.
+
+Focused local result:
+
+| run | monpy us | numpy us | monpy/numpy |
+| --- | ---: | ---: | ---: |
+| `results/local-sweep-20260508-native-squeeze/results.json` | 8.824 | 2.182 | 4.052x |
+| `results/local-sweep-20260508-dlpack-numpy-fastpath/results.json` | 5.669 | 2.172 | 2.587x |
+
+That is a 1.56:1 reduction in monpy wall time for NumPy-backed DLPack imports.
+The row now sits with the rest of the small NumPy-input marshaling family rather
+than standing out as a separate capsule-parser tax.
