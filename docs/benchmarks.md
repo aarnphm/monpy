@@ -457,3 +457,33 @@ Focused local result:
 
 Direct microbenchmarks moved `mnp.logspace(0.0, 1.0, num=50)` from about 20.3
 us to about 2.3 us. The full benchmark row now beats NumPy for this case.
+
+### 2026-05-08 native pinv via least squares
+
+`array/decomp/pinv_8_f64` was spending most of its time outside the final
+numeric result. A `sample(1)` profile of `pinv_8_f64` measured about 56 us per
+call with a 64 MB physical footprint; the hot stack included the LAPACK SVD
+(`DGESDD` / `DGEBRD` / BLAS `DGEMV`) and a separate Python composition layer
+that built `s_inv`, transposed `U`/`VT`, broadcast-multiplied, and matmul'd the
+pieces back together. The `xctrace` time and CPU-counter captures completed,
+but the allocations template timed out after 63 seconds in Instruments startup.
+
+For the matrix `A`, `pinv(A)` is the minimum-norm solution operator for
+`A X = I`. Monpy now calls the existing LAPACK `gelsd` least-squares path with
+an identity right-hand side inside one native `linalg_pinv` entrypoint. This
+keeps the existing monpy cutoff convention (`eps(dtype) * max(m, n)`) while
+removing the Python SVD post-processing graph.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `array/decomp/pinv_2_f64` | 33.683 | 6.824 | 2.145x | 0.437x |
+| `array/decomp/pinv_4_f64` | 39.188 | 8.349 | 2.252x | 0.481x |
+| `array/decomp/pinv_8_f64` | 54.852 | 12.864 | 2.811x | 0.655x |
+| `array/decomp/pinv_32_f64` | 136.756 | 54.235 | 2.424x | 0.963x |
+| `array/decomp/pinv_8_f32` | 48.527 | 10.937 | 2.033x | 0.451x |
+
+All benchmarked pseudo-inverse rows now beat NumPy on this machine. The largest
+remaining deficit is no longer `pinv`; it is the view/import-heavy
+`squeeze_axis0_f32` row.

@@ -47,6 +47,7 @@ from create import (
     materialize_c_contiguous_ops,
     matmul_ops,
     pad_constant_ops,
+    pinv_ops,
     predicate_ops,
     qr_ops,
     reduce_axis_ops,
@@ -170,6 +171,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[eig_ops]("linalg_eig")
         module.def_function[svd_ops]("linalg_svd")
         module.def_function[lstsq_ops]("linalg_lstsq")
+        module.def_function[pinv_ops]("linalg_pinv")
         module.def_function[concatenate_ops]("concatenate")
         module.def_function[tril_ops]("tril")
         module.def_function[triu_ops]("triu")

@@ -2489,6 +2489,41 @@ def lstsq_ops(a_obj: PythonObject, b_obj: PythonObject, rcond_obj: PythonObject)
     return out
 
 
+def pinv_ops(a_obj: PythonObject, rcond_obj: PythonObject) raises -> PythonObject:
+    var a = a_obj.downcast_value_ptr[Array]()
+    if len(a[].shape) != 2:
+        raise Error("linalg.pinv: input must be rank-2")
+    var m = a[].shape[0]
+    var n = a[].shape[1]
+    var dtype_code = result_dtype_for_linalg(a[].dtype_code)
+    var x_shape = List[Int]()
+    x_shape.append(n)
+    x_shape.append(m)
+    var x = make_empty_array(dtype_code, x_shape^)
+    if m == 0 or n == 0:
+        return PythonObject(alloc=x^)
+    var rhs_shape = List[Int]()
+    rhs_shape.append(m)
+    rhs_shape.append(m)
+    var rhs = make_empty_array(dtype_code, rhs_shape^)
+    for row in range(m):
+        for col in range(m):
+            set_logical_from_f64(rhs, row * m + col, 1.0 if row == col else 0.0)
+    var k = m if m < n else n
+    var s_shape = List[Int]()
+    s_shape.append(k)
+    var s = make_empty_array(dtype_code, s_shape^)
+    var rank_buf = Int(0)
+    var rank_ptr = rebind[UnsafePointer[Int, MutExternalOrigin]](UnsafePointer(to=rank_buf))
+    if dtype_code == ArrayDType.FLOAT32.value:
+        var rcond_f32 = Float32(Float64(py=rcond_obj))
+        lapack_lstsq_f32_into(a[], rhs, x, s, rcond_f32, rank_ptr)
+    else:
+        var rcond_f64 = Float64(py=rcond_obj)
+        lapack_lstsq_f64_into(a[], rhs, x, s, rcond_f64, rank_ptr)
+    return PythonObject(alloc=x^)
+
+
 def fill_ops(array_obj: PythonObject, value_obj: PythonObject) raises -> PythonObject:
     var dst = array_obj.downcast_value_ptr[Array]()
     fill_all_from_py(dst[], value_obj)

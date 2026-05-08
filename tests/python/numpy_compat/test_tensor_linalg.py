@@ -248,6 +248,16 @@ def test_pinv_round_trips_within_pseudoinverse_axiom() -> None:
   numpy.testing.assert_allclose(out, a, atol=1e-10)
 
 
+def test_pinv_matches_numpy_with_monpy_default_cutoff() -> None:
+  rng = numpy.random.default_rng(14)
+  a = rng.standard_normal((5, 3))
+  rcond = numpy.finfo(numpy.float64).eps * max(a.shape)
+
+  p = mp.linalg.pinv(mp.asarray(a, dtype=mp.float64))
+
+  numpy.testing.assert_allclose(numpy.asarray(p), numpy.linalg.pinv(a, rcond=rcond), rtol=1e-12, atol=1e-12)
+
+
 def test_matrix_rank_matches_numpy() -> None:
   a = numpy.asarray([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [1.0, 0.0, 1.0]])
   rk_mp = mp.linalg.matrix_rank(mp.asarray(a, dtype=mp.float64))

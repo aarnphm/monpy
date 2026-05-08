@@ -497,21 +497,7 @@ def pinv(a, rcond=None, hermitian=False):
   A=_floatify(asarray(a))
   if A.ndim!=2:raise ValueError("pinv: input must be rank-2")
   m, n=A.shape
-  u, s, vt=svd(A, full_matrices=False, compute_uv=True)
-  smax=max(float(s._native.get_scalar(i)) for i in range(s.size)) if s.size>0 else 0.0
   if rcond is None:rcond=_eps_for(A.dtype)*max(m, n)
-  cutoff=rcond*smax
-  # Build s_inv: 1/s_i where s_i > cutoff, else 0.
-  from . import zeros as _zeros
-  s_inv=_zeros(s.shape, dtype=s.dtype)
-  for i in range(s.size):
-    val=float(s._native.get_scalar(i))
-    if val>cutoff:_native.fill(typing.cast(ndarray, s_inv[i:i+1])._native, 1.0/val)
-  # pinv = V * diag(s_inv) * U.T
-  V=matrix_transpose(vt)
-  Ut=matrix_transpose(u)
-  # multiply rows of Ut by s_inv (broadcast along axis 0).
-  scaled=multiply(reshape(s_inv, (s_inv.shape[0], 1)), Ut)
-  return matmul(V, scaled)
+  return ndarray(_w(_native.linalg_pinv, A._native, float(rcond)))
 
 __all__=["LinAlgError", "cholesky", "cross", "det", "dot", "eig", "eigh", "eigvals", "eigvalsh", "inner", "inv", "kron", "lstsq", "matmul", "matrix_norm", "matrix_power", "matrix_rank", "matrix_transpose", "matvec", "multi_dot", "norm", "outer", "pinv", "qr", "slogdet", "solve", "svd", "svdvals", "tensordot", "tensorinv", "tensorsolve", "trace", "vdot", "vecdot", "vecmat", "vector_norm"]
