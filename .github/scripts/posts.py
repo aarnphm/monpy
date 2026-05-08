@@ -16,10 +16,6 @@ from pathlib import Path
 from typing import Any, cast
 
 MARKER = "<!-- monpy-bench -->"
-LEGACY_MARKERS = (
-  "<!-- monpy-benchmark-sweep -->",
-  "<!-- monpy-array-core-benchmark -->",
-)
 API_VERSION = "2026-03-10"
 COMMENT_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
@@ -261,9 +257,7 @@ def request_json(
   return json.loads(raw)
 
 
-def existing_comment_id(
-  *, repo: str, sha: str, token: str, markers: Sequence[str]
-) -> int | None:
+def existing_comment_id(*, repo: str, sha: str, token: str, marker: str) -> int | None:
   comments = request_json(
     "GET",
     f"/repos/{repo}/commits/{sha}/comments?per_page=100",
@@ -271,23 +265,22 @@ def existing_comment_id(
   )
   if not isinstance(comments, list):
     raise TypeError("github comments response was not a list")
-  for marker in markers:
-    for comment in comments:
-      if not isinstance(comment, Mapping):
-        continue
-      comment = cast(Mapping[str, object], comment)
-      body = comment.get("body")
-      comment_id = comment.get("id")
-      if isinstance(body, str) and marker in body and isinstance(comment_id, int):
-        return comment_id
+  for comment in comments:
+    if not isinstance(comment, Mapping):
+      continue
+    comment = cast(Mapping[str, object], comment)
+    body = comment.get("body")
+    comment_id = comment.get("id")
+    if isinstance(body, str) and marker in body and isinstance(comment_id, int):
+      return comment_id
   return None
 
 
-def upsert_commit_comment(body: str, *, markers: Sequence[str]) -> str:
+def upsert_commit_comment(body: str, *, marker: str) -> str:
   repo = os.environ["GITHUB_REPOSITORY"]
   sha = os.environ["GITHUB_SHA"]
   token = os.environ["GITHUB_TOKEN"]
-  comment_id = existing_comment_id(repo=repo, sha=sha, token=token, markers=markers)
+  comment_id = existing_comment_id(repo=repo, sha=sha, token=token, marker=marker)
   if comment_id is None:
     response = request_json(
       "POST",
@@ -370,27 +363,16 @@ def main() -> None:
     help="stable key for a platform-specific commit comment, for example arm or ubuntu",
   )
   parser.add_argument("--comment-title", default="monpy benchmark sweep")
-  parser.add_argument(
-    "--migrate-legacy-comment",
-    action="store_true",
-    help="allow this keyed comment to claim the old single-comment benchmark markers",
-  )
   parser.add_argument("--post", action="store_true")
   args = parser.parse_args()
 
   payload = load_payload(args.results_json)
   marker = comment_marker(args.comment_key)
-  if args.comment_key is None:
-    markers = (MARKER, *LEGACY_MARKERS)
-  elif args.migrate_legacy_comment:
-    markers = (marker, MARKER, *LEGACY_MARKERS)
-  else:
-    markers = (marker,)
   body = render_comment(payload, marker=marker, title=args.comment_title)
   if args.comment_output is not None:
     args.comment_output.write_text(body + "\n", encoding="utf-8")
   if args.post:
-    url = upsert_commit_comment(body, markers=markers)
+    url = upsert_commit_comment(body, marker=marker)
     if url:
       print(url)
 

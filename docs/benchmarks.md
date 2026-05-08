@@ -102,9 +102,6 @@ python .github/scripts/posts.py \
   --post
 ```
 
-The ARM job also passes `--migrate-legacy-comment` so the old single benchmark comment is claimed by
-the ARM-specific marker. Ubuntu omits that flag and creates or updates only the Ubuntu comment.
-
 The comment includes a `winner` column. `monpy` means the median ratio was below `0.995x`; `numpy` means it was above `1.005x`; values inside that band are reported as `tie`.
 
 The post helper also accepts `manifest.json` when the manifest points at json results:
