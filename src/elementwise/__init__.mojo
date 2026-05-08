@@ -240,12 +240,24 @@ def apply_unary_f64(value: Float64, op: Int) raises -> Float64:
 def apply_binary_typed_vec[
     dtype: DType, width: Int
 ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width], op: Int) raises -> SIMD[dtype, width]:
-    # Comptime-typed parametric variant of apply_binary_*_vec. Once a kernel
-    # has dispatched on dtype at the runtime boundary, all subsequent SIMD
-    # work is dtype-monomorphic — this function lets us write each kernel
-    # body once instead of duplicating the f32 / f64 paths.
-    # Float-only ops (FLOOR_DIV-with-floor, ARCTAN2, HYPOT, COPYSIGN, NaN-
-    # propagation in MAXIMUM/MINIMUM/FMIN/FMAX) gate via `comptime if`.
+    # Comptime-typed parametric SIMD binary kernel — body of every
+    # `binary_*_contig_typed` callsite after the runtime dtype dispatch.
+    #
+    # Edge cases by op family:
+    # - FLOOR_DIV: float path is `floor(lhs/rhs)`, integer path is `lhs // rhs`
+    #   (Mojo's // already floors toward -inf for ints, matching Python/numpy).
+    # - DIV: integer divide-by-zero traps; float divide-by-zero produces IEEE
+    #   ±inf (signed) or NaN (0/0) and propagates lane-wise.
+    # - MAXIMUM/MINIMUM: NaN-propagating per numpy. Implemented via `select`
+    #   so a single NaN lane poisons the whole result.
+    # - FMIN/FMAX: NaN-suppressing (per IEEE 754-2008 minNum/maxNum) — when
+    #   one side is NaN the other side wins. Float-only.
+    # - ARCTAN2/HYPOT/COPYSIGN: float-only; gated `comptime if dtype !=
+    #   DType.float16` because Mojo KGEN can't legalize the f16 externs.
+    #   Upstream `dtype_result_for_binary` promotes f16 inputs to f32/f64
+    #   so this path never sees f16 for these three ops.
+    # - POWER: integer base with negative exponent traps; float `**` calls
+    #   libm `pow`, with `0**0 = 1` per IEEE 754.
     if op == BinaryOp.ADD.value:
         return lhs + rhs
     if op == BinaryOp.SUB.value:
@@ -794,11 +806,23 @@ def reduce_sum_typed[
 ](
     src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
 ) raises -> Float64 where dtype.is_floating_point():
-    # Comptime-typed sum kernel using 4 parallel SIMD accumulators to break
-    # the FADD latency dependency chain. With one accumulator the loop is
-    # bound by FADD latency (~3 cycles on M1); four accumulators let the
-    # pipeline issue ~4 FADDs per cycle, which roughly halves time at 1M+
-    # elements vs a single-accumulator loop.
+    # 4-parallel SIMD accumulator sum — breaks the FADD latency dependency.
+    #
+    # Single-accumulator loop:
+    #   acc = acc + v[i]   ; next iteration depends on previous → ~latency-bound
+    #   On Apple Silicon FADD = 3 cyc latency, 1 cyc throughput. Each cycle is a
+    #   wasted issue slot because the next FADD must wait for the previous
+    #   result. Effective throughput: 1 add per 3 cycles.
+    #
+    # 4-accumulator loop:
+    #   a0,a1,a2,a3 are independent → pipeline can issue all 4 in flight,
+    #   one per cycle. Effective throughput: 4 adds per 3 cycles ≈ 4× speedup
+    #   for memory-resident workloads. Final `reduce_add` collapses 4
+    #   accumulators down to a scalar via tree reduction.
+    #
+    # Promotes to Float64 accumulator regardless of input width to bound
+    # the f32 sum's catastrophic cancellation risk (numpy.sum on f32
+    # already promotes internally on linalg paths).
     comptime width = simd_width_of[dtype]()
     comptime block = width * 4
     var acc0 = SIMD[dtype, width](0)
@@ -1762,8 +1786,22 @@ def complex_binary_contig_typed[
     n_elems: Int,
     op: Int,
 ) raises where dtype.is_floating_point():
-    # Complex arithmetic over interleaved (real, imag) pairs. n_elems is
-    # the count of complex elements; each occupies 2 lanes of `dtype`.
+    # Complex arithmetic over interleaved (real, imag) pairs. `dtype` is the
+    # underlying float (f32 → complex64, f64 → complex128). `n_elems` counts
+    # complex values; storage is 2 × n_elems lanes of `dtype`.
+    #
+    # ADD/SUB: linear in components. Reuse the real-typed kernel over the
+    # 2 × n_elems-wide vector — no special handling needed.
+    #
+    # MUL: schoolbook FMA — `(a+bi)(c+di) = (ac − bd) + (ad + bc)i`.
+    # Two FMAs per real lane (`fma(a, c, -b*d)`, `fma(a, d, b*c)`) give
+    # componentwise error ≤ √2·ulp·|result|. Avoids Karatsuba's loss of
+    # significance on the difference of products.
+    #
+    # DIV: Smith 1962 algorithm — for `(a+bi)/(c+di)`, branch on |c| vs |d|
+    # to scale by the larger denominator first. Without this, computing
+    # `c² + d²` overflows for moderate |c|, |d| even when the quotient is
+    # representable. Cross-ref `docs/research/complex-kernels.md §2`.
     if op == BinaryOp.ADD.value or op == BinaryOp.SUB.value:
         # Componentwise on the float pairs: add/sub treats interleaved
         # storage as a 2N float vector. Reuse the existing typed kernel.
@@ -4592,6 +4630,24 @@ def lapack_eig_f64_real_into(
     mut vr_out: Array,
     compute_eigenvectors: Bool,
 ) raises -> Bool:
+    # LAPACK dgeev for a real n×n input — eigenvalues come back in compressed
+    # WR/WI form because real matrices have real eigenvalues OR conjugate-pair
+    # complex eigenvalues, never odd-out complex.
+    #
+    # Encoding (per LAPACK docs):
+    # - real eigenvalue at index i: WR[i] = λ, WI[i] = 0
+    # - complex conjugate pair at indices (i, i+1): WI[i] > 0, WI[i+1] < 0,
+    #   with WR[i] == WR[i+1] (the shared real part) and WI[i+1] == -WI[i]
+    #   (the imaginary parts negated). Eigenvalues are WR[i] ± WI[i]·j.
+    #
+    # Eigenvector compression mirrors this. For a real eigenvalue, column i
+    # of VR is the real eigenvector. For a conjugate pair, columns i and i+1
+    # of VR hold the real and imaginary parts of one complex eigenvector;
+    # the conjugate-pair partner is implicit (real part copied, imag negated).
+    #
+    # `all_real` short-circuit: if every WI[i] is zero the caller can skip
+    # the complex unpack and treat WR directly as a real eigenvalue array.
+    # Cross-ref `docs/research/blas-lapack-dispatch.md §4.2`.
     var n = a.shape[0]
     var buf = alloc[Float64](n * n)
     var wr = alloc[Float64](n if n > 0 else 1)
