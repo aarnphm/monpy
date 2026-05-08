@@ -625,6 +625,96 @@ def get_lapack_dgetrf_function() raises -> lapack_dgetrf_type:
 
 
 @always_inline
+def call_vv[
+    dt: DType,
+    func_name_f32: StaticString,
+    func_name_f64: StaticString,
+](
+    out_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    src_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    count_value: Int,
+) raises:
+    """Parametric libvMath unary dispatcher — picks f32/f64 symbol from `dt`."""
+    comptime if dt == DType.float32:
+        call_vv_f32[func_name_f32](
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](out_ptr),
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](src_ptr),
+            count_value,
+        )
+    else:
+        call_vv_f64[func_name_f64](
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](out_ptr),
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](src_ptr),
+            count_value,
+        )
+
+
+@always_inline
+def call_vdsp_binary[
+    dt: DType,
+    func_name_f32: StaticString,
+    func_name_f64: StaticString,
+](
+    lhs_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    rhs_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    count_value: Int,
+) raises:
+    """Parametric vDSP binary dispatcher — picks f32/f64 symbol from `dt`."""
+    comptime if dt == DType.float32:
+        call_vdsp_binary_f32[func_name_f32](
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](lhs_ptr),
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](rhs_ptr),
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](out_ptr),
+            count_value,
+        )
+    else:
+        call_vdsp_binary_f64[func_name_f64](
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](lhs_ptr),
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](rhs_ptr),
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](out_ptr),
+            count_value,
+        )
+
+
+@always_inline
+def call_vdsp_binary_strided[
+    dt: DType,
+    func_name_f32: StaticString,
+    func_name_f64: StaticString,
+](
+    lhs_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    lhs_stride: Int,
+    rhs_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    rhs_stride: Int,
+    out_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    out_stride: Int,
+    count_value: Int,
+) raises:
+    """Parametric strided vDSP binary dispatcher."""
+    comptime if dt == DType.float32:
+        call_vdsp_binary_strided_f32[func_name_f32](
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](lhs_ptr),
+            lhs_stride,
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](rhs_ptr),
+            rhs_stride,
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](out_ptr),
+            out_stride,
+            count_value,
+        )
+    else:
+        call_vdsp_binary_strided_f64[func_name_f64](
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](lhs_ptr),
+            lhs_stride,
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](rhs_ptr),
+            rhs_stride,
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](out_ptr),
+            out_stride,
+            count_value,
+        )
+
+
+@always_inline
 def call_vv_f32[
     func_name: StaticString
 ](

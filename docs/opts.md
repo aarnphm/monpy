@@ -19,10 +19,10 @@ tile:
 
 Focused local result on the M3 Pro checkout:
 
-| run | monpy us | numpy us | monpy/numpy |
-| --- | ---: | ---: | ---: |
-| `results/local-sweep-20260508-pass0/results.json` | 30.653 | 8.404 | 3.648x |
-| `results/local-sweep-20260508-rank3-source-dispatch/results.json` | 19.064 | 8.210 | 2.263x |
+| run                                                               | monpy us | numpy us | monpy/numpy |
+| ----------------------------------------------------------------- | -------: | -------: | ----------: |
+| `results/local-sweep-20260508-pass0/results.json`                 |   30.653 |    8.404 |      3.648x |
+| `results/local-sweep-20260508-rank3-source-dispatch/results.json` |   19.064 |    8.210 |      2.263x |
 
 That is a 1.61:1 reduction in monpy wall time for this row. The row still does
 not beat numpy, so the next optimization pass should use sampled profiles and
@@ -112,10 +112,10 @@ inputs directly as `full((1,), scalar, dtype=...)`.
 
 Focused local result:
 
-| run | monpy us | numpy us | monpy/numpy |
-| --- | ---: | ---: | ---: |
-| `results/local-sweep-20260508-pass0/results.json` | 7.808 | 2.216 | 3.524x |
-| `results/local-sweep-20260508-scalar-ascontig/results.json` | 3.498 | 2.164 | 1.618x |
+| run                                                         | monpy us | numpy us | monpy/numpy |
+| ----------------------------------------------------------- | -------: | -------: | ----------: |
+| `results/local-sweep-20260508-pass0/results.json`           |    7.808 |    2.216 |      3.524x |
+| `results/local-sweep-20260508-scalar-ascontig/results.json` |    3.498 |    2.164 |      1.618x |
 
 That is a 2.23:1 reduction in monpy wall time for the scalar row. Dense and
 transpose `ascontiguousarray` rows stayed within noise, which is the important
@@ -136,10 +136,10 @@ constructor.
 
 Focused local result:
 
-| run | monpy us | numpy us | monpy/numpy |
-| --- | ---: | ---: | ---: |
-| `results/local-sweep-20260508-heartbeat1/results.json` | 12.494 | 2.436 | 5.205x |
-| `results/local-sweep-20260508-native-squeeze/results.json` | 8.182 | 2.429 | 3.390x |
+| run                                                        | monpy us | numpy us | monpy/numpy |
+| ---------------------------------------------------------- | -------: | -------: | ----------: |
+| `results/local-sweep-20260508-heartbeat1/results.json`     |   12.494 |    2.436 |      5.205x |
+| `results/local-sweep-20260508-native-squeeze/results.json` |    8.182 |    2.429 |      3.390x |
 
 That is a 1.53:1 reduction in monpy wall time for this row. The residual gap is
 mostly outside squeeze itself: a direct microbench of an existing monpy array
@@ -163,10 +163,10 @@ raises `BufferError`.
 
 Focused local result:
 
-| run | monpy us | numpy us | monpy/numpy |
-| --- | ---: | ---: | ---: |
-| `results/local-sweep-20260508-native-squeeze/results.json` | 8.824 | 2.182 | 4.052x |
-| `results/local-sweep-20260508-dlpack-numpy-fastpath/results.json` | 5.669 | 2.172 | 2.587x |
+| run                                                               | monpy us | numpy us | monpy/numpy |
+| ----------------------------------------------------------------- | -------: | -------: | ----------: |
+| `results/local-sweep-20260508-native-squeeze/results.json`        |    8.824 |    2.182 |      4.052x |
+| `results/local-sweep-20260508-dlpack-numpy-fastpath/results.json` |    5.669 |    2.172 |      2.587x |
 
 That is a 1.56:1 reduction in monpy wall time for NumPy-backed DLPack imports.
 The row now sits with the rest of the small NumPy-input marshaling family rather
@@ -185,13 +185,13 @@ so the same ndarray is not classified twice.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `array/interop/asarray_zero_copy_f32` | 6.097 | 5.207 | 3.104x | 2.699x |
-| `array/interop/asarray_zero_copy_f64` | 5.955 | 5.213 | 3.024x | 2.644x |
-| `array/interop/asarray_zero_copy_bool` | 6.082 | 5.229 | 3.062x | 2.697x |
-| `array/interop/asarray_zero_copy_i64` | 5.960 | 5.199 | 3.062x | 2.654x |
-| `array/interop/from_dlpack_f32` | 5.669 | 4.963 | 2.587x | 2.290x |
+| row                                    | previous monpy us | new monpy us | previous ratio | new ratio |
+| -------------------------------------- | ----------------: | -----------: | -------------: | --------: |
+| `array/interop/asarray_zero_copy_f32`  |             6.097 |        5.207 |         3.104x |    2.699x |
+| `array/interop/asarray_zero_copy_f64`  |             5.955 |        5.213 |         3.024x |    2.644x |
+| `array/interop/asarray_zero_copy_bool` |             6.082 |        5.229 |         3.062x |    2.697x |
+| `array/interop/asarray_zero_copy_i64`  |             5.960 |        5.199 |         3.062x |    2.654x |
+| `array/interop/from_dlpack_f32`        |             5.669 |        4.963 |         2.587x |    2.290x |
 
 The direct detector microbench moved from about 0.34 us to about 0.09 us while
 `tests/python/test_no_numpy_core.py` still verifies that importing the core
@@ -210,10 +210,10 @@ back to the promotion/general-axis path on mismatch.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `array/views/stack_axis0_f32` | 9.191 | 3.731 | 2.610x | 1.051x |
-| `array/views/vstack_f32` | 9.678 | 3.700 | 2.926x | 1.127x |
+| row                           | previous monpy us | new monpy us | previous ratio | new ratio |
+| ----------------------------- | ----------------: | -----------: | -------------: | --------: |
+| `array/views/stack_axis0_f32` |             9.191 |        3.731 |         2.610x |    1.051x |
+| `array/views/vstack_f32`      |             9.678 |        3.700 |         2.926x |    1.127x |
 
 That is a 2.46:1 reduction for `stack_axis0_f32` and a 2.62:1 reduction for
 `vstack_f32`. `hstack` and plain `concatenate` did not move, as expected; those
@@ -230,9 +230,9 @@ original array as the base owner.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `array/creation/atleast_2d_f32` | 6.087 | 3.526 | 2.664x | 1.519x |
+| row                             | previous monpy us | new monpy us | previous ratio | new ratio |
+| ------------------------------- | ----------------: | -----------: | -------------: | --------: |
+| `array/creation/atleast_2d_f32` |             6.087 |        3.526 |         2.664x |    1.519x |
 
 The direct microbench moved `mnp.atleast_2d(existing_vector)` from about 4.1 us
 to about 1.4 us. The remaining gap is the generic Python facade and one native
@@ -252,9 +252,9 @@ still fall through to the existing generic slice machinery.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `array/views/newaxis_middle_f32` | 5.743 | 3.138 | 2.734x | 1.535x |
+| row                              | previous monpy us | new monpy us | previous ratio | new ratio |
+| -------------------------------- | ----------------: | -----------: | -------------: | --------: |
+| `array/views/newaxis_middle_f32` |             5.743 |        3.138 |         2.734x |    1.535x |
 
 The direct microbench moved the exact `helper[:, None, :]` view from about 3.6
 us to about 1.1 us. The row is still not NumPy-fast, but it no longer pays the
@@ -270,9 +270,9 @@ storage.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `array/views/swapaxes_f32` | 5.534 | 3.072 | 2.550x | 1.379x |
+| row                        | previous monpy us | new monpy us | previous ratio | new ratio |
+| -------------------------- | ----------------: | -----------: | -------------: | --------: |
+| `array/views/swapaxes_f32` |             5.534 |        3.072 |         2.550x |    1.379x |
 
 The direct microbench moved `mnp.swapaxes(existing_rank3, 0, 2)` from about 3.3
 us to about 0.87 us. The residual benchmark time is mostly the Python facade and
@@ -290,13 +290,13 @@ copy and readonly policy as before.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `array/interop/asarray_zero_copy_f32` | 5.095 | 4.923 | 2.628x | 2.532x |
-| `array/interop/asarray_zero_copy_f64` | 5.155 | 4.826 | 2.654x | 2.486x |
-| `array/interop/asarray_zero_copy_bool` | 5.134 | 4.834 | 2.630x | 2.528x |
-| `array/interop/asarray_zero_copy_i64` | 5.138 | 4.819 | 2.654x | 2.494x |
-| `array/interop/from_dlpack_f32` | 4.900 | 4.596 | 2.262x | 2.173x |
+| row                                    | previous monpy us | new monpy us | previous ratio | new ratio |
+| -------------------------------------- | ----------------: | -----------: | -------------: | --------: |
+| `array/interop/asarray_zero_copy_f32`  |             5.095 |        4.923 |         2.628x |    2.532x |
+| `array/interop/asarray_zero_copy_f64`  |             5.155 |        4.826 |         2.654x |    2.486x |
+| `array/interop/asarray_zero_copy_bool` |             5.134 |        4.834 |         2.630x |    2.528x |
+| `array/interop/asarray_zero_copy_i64`  |             5.138 |        4.819 |         2.654x |    2.494x |
+| `array/interop/from_dlpack_f32`        |             4.900 |        4.596 |         2.262x |    2.173x |
 
 This is a small per-call win, but it lands on every NumPy ndarray import path.
 The remaining cost is mostly Python attribute access plus the native array-view
@@ -313,9 +313,9 @@ copies every non-dropped shape/stride slot into the result view.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `array/views/squeeze_axis0_f32` | 7.106 | 6.912 | 2.969x | 2.821x |
+| row                             | previous monpy us | new monpy us | previous ratio | new ratio |
+| ------------------------------- | ----------------: | -----------: | -------------: | --------: |
+| `array/views/squeeze_axis0_f32` |             7.106 |        6.912 |         2.969x |    2.821x |
 
 The row still includes `np.zeros(...)` plus NumPy-to-monpy wrapping, so the
 benchmark movement is smaller than the isolated operation movement. Direct
@@ -340,9 +340,9 @@ materialization.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `array/creation/logspace_50` | 22.809 | 4.494 | 4.156x | 0.836x |
+| row                          | previous monpy us | new monpy us | previous ratio | new ratio |
+| ---------------------------- | ----------------: | -----------: | -------------: | --------: |
+| `array/creation/logspace_50` |            22.809 |        4.494 |         4.156x |    0.836x |
 
 Direct microbenchmarks moved `mnp.logspace(0.0, 1.0, num=50)` from about 20.3
 us to about 2.3 us. The full benchmark row now beats NumPy for this case.
@@ -365,13 +365,13 @@ removing the Python SVD post-processing graph.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `array/decomp/pinv_2_f64` | 33.683 | 6.824 | 2.145x | 0.437x |
-| `array/decomp/pinv_4_f64` | 39.188 | 8.349 | 2.252x | 0.481x |
-| `array/decomp/pinv_8_f64` | 54.852 | 12.864 | 2.811x | 0.655x |
-| `array/decomp/pinv_32_f64` | 136.756 | 54.235 | 2.424x | 0.963x |
-| `array/decomp/pinv_8_f32` | 48.527 | 10.937 | 2.033x | 0.451x |
+| row                        | previous monpy us | new monpy us | previous ratio | new ratio |
+| -------------------------- | ----------------: | -----------: | -------------: | --------: |
+| `array/decomp/pinv_2_f64`  |            33.683 |        6.824 |         2.145x |    0.437x |
+| `array/decomp/pinv_4_f64`  |            39.188 |        8.349 |         2.252x |    0.481x |
+| `array/decomp/pinv_8_f64`  |            54.852 |       12.864 |         2.811x |    0.655x |
+| `array/decomp/pinv_32_f64` |           136.756 |       54.235 |         2.424x |    0.963x |
+| `array/decomp/pinv_8_f32`  |            48.527 |       10.937 |         2.033x |    0.451x |
 
 All benchmarked pseudo-inverse rows now beat NumPy on this machine. The largest
 remaining deficit at this checkpoint was no longer `pinv`; it was the
@@ -395,17 +395,17 @@ normalization from every NumPy ndarray import.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `array/interop/asarray_zero_copy_f32` | 5.042 | 3.792 | 2.593x | 1.941x |
-| `array/interop/asarray_zero_copy_f64` | 5.026 | 3.746 | 2.560x | 1.928x |
-| `array/interop/asarray_zero_copy_bool` | 4.978 | 3.741 | 2.524x | 1.949x |
-| `array/interop/asarray_zero_copy_i64` | 5.011 | 3.745 | 2.539x | 1.925x |
-| `array/interop/array_copy_f32` | 5.496 | 4.320 | 2.326x | 1.875x |
-| `array/interop/array_copy_f64` | 5.626 | 4.448 | 2.324x | 1.896x |
-| `array/interop/array_copy_bool` | 5.364 | 4.238 | 2.342x | 1.911x |
-| `array/interop/array_copy_i64` | 5.602 | 4.434 | 2.339x | 1.882x |
-| `array/interop/from_dlpack_f32` | 4.815 | 3.660 | 2.212x | 1.711x |
+| row                                    | previous monpy us | new monpy us | previous ratio | new ratio |
+| -------------------------------------- | ----------------: | -----------: | -------------: | --------: |
+| `array/interop/asarray_zero_copy_f32`  |             5.042 |        3.792 |         2.593x |    1.941x |
+| `array/interop/asarray_zero_copy_f64`  |             5.026 |        3.746 |         2.560x |    1.928x |
+| `array/interop/asarray_zero_copy_bool` |             4.978 |        3.741 |         2.524x |    1.949x |
+| `array/interop/asarray_zero_copy_i64`  |             5.011 |        3.745 |         2.539x |    1.925x |
+| `array/interop/array_copy_f32`         |             5.496 |        4.320 |         2.326x |    1.875x |
+| `array/interop/array_copy_f64`         |             5.626 |        4.448 |         2.324x |    1.896x |
+| `array/interop/array_copy_bool`        |             5.364 |        4.238 |         2.342x |    1.911x |
+| `array/interop/array_copy_i64`         |             5.602 |        4.434 |         2.339x |    1.882x |
+| `array/interop/from_dlpack_f32`        |             4.815 |        3.660 |         2.212x |    1.711x |
 
 The direct wrapper microbench for `mnp.asarray(np.arange(1024, dtype=float32),
 dtype=mnp.float32, copy=False)` moved from about 2.58 us to about 1.62 us, a
@@ -454,17 +454,17 @@ boundary.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `array/interop/asarray_zero_copy_f32` | 3.792 | 3.026 | 1.941x | 1.529x |
-| `array/interop/asarray_zero_copy_f64` | 3.746 | 3.068 | 1.928x | 1.541x |
-| `array/interop/asarray_zero_copy_bool` | 3.741 | 3.080 | 1.949x | 1.561x |
-| `array/interop/asarray_zero_copy_i64` | 3.745 | 3.209 | 1.925x | 1.558x |
-| `array/interop/array_copy_f32` | 4.320 | 3.663 | 1.875x | 1.553x |
-| `array/interop/array_copy_f64` | 4.448 | 3.748 | 1.896x | 1.526x |
-| `array/interop/array_copy_bool` | 4.238 | 3.579 | 1.911x | 1.551x |
-| `array/interop/array_copy_i64` | 4.434 | 3.657 | 1.882x | 1.517x |
-| `array/interop/from_dlpack_f32` | 3.660 | 2.927 | 1.711x | 1.365x |
+| row                                    | previous monpy us | new monpy us | previous ratio | new ratio |
+| -------------------------------------- | ----------------: | -----------: | -------------: | --------: |
+| `array/interop/asarray_zero_copy_f32`  |             3.792 |        3.026 |         1.941x |    1.529x |
+| `array/interop/asarray_zero_copy_f64`  |             3.746 |        3.068 |         1.928x |    1.541x |
+| `array/interop/asarray_zero_copy_bool` |             3.741 |        3.080 |         1.949x |    1.561x |
+| `array/interop/asarray_zero_copy_i64`  |             3.745 |        3.209 |         1.925x |    1.558x |
+| `array/interop/array_copy_f32`         |             4.320 |        3.663 |         1.875x |    1.553x |
+| `array/interop/array_copy_f64`         |             4.448 |        3.748 |         1.896x |    1.526x |
+| `array/interop/array_copy_bool`        |             4.238 |        3.579 |         1.911x |    1.551x |
+| `array/interop/array_copy_i64`         |             4.434 |        3.657 |         1.882x |    1.517x |
+| `array/interop/from_dlpack_f32`        |             3.660 |        2.927 |         1.711x |    1.365x |
 
 The direct native-buffer microbench for
 `_native.asarray_from_buffer(np.arange(1024, dtype=float32), float32.code, 0)`
@@ -507,18 +507,18 @@ errors still propagate directly.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `array/native_kernels/concatenate_axis0_8x128_f64` | 6.956 | 5.093 | 2.252x | 1.657x |
-| `array/views/concatenate_axis0_f32` | 4.231 | 3.528 | 1.684x | 1.448x |
-| `array/views/hstack_f32` | 4.827 | 4.120 | 1.596x | 1.402x |
+| row                                                | previous monpy us | new monpy us | previous ratio | new ratio |
+| -------------------------------------------------- | ----------------: | -----------: | -------------: | --------: |
+| `array/native_kernels/concatenate_axis0_8x128_f64` |             6.956 |        5.093 |         2.252x |    1.657x |
+| `array/views/concatenate_axis0_f32`                |             4.231 |        3.528 |         1.684x |    1.448x |
+| `array/views/hstack_f32`                           |             4.827 |        4.120 |         1.596x |    1.402x |
 
 Direct microbenchmarks for the benchmark inputs:
 
-| operation | previous us | new us |
-| --- | ---: | ---: |
-| `mnp.concatenate(inp_mp)` | 4.791 | 2.842 |
-| raw native concat | 1.684 | 1.676 |
+| operation                 | previous us | new us |
+| ------------------------- | ----------: | -----: |
+| `mnp.concatenate(inp_mp)` |       4.791 |  2.842 |
+| raw native concat         |       1.684 |  1.676 |
 
 Profile artifacts:
 
@@ -553,10 +553,10 @@ freshly allocated, c-contiguous, and already has the exact dtype.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `array/decomp/cholesky_32_f64` | 16.887 | 9.776 | 2.201x | 1.281x |
-| `array/decomp/cholesky_32_f32` | 16.500 | 9.211 | 1.886x | 1.042x |
+| row                            | previous monpy us | new monpy us | previous ratio | new ratio |
+| ------------------------------ | ----------------: | -----------: | -------------: | --------: |
+| `array/decomp/cholesky_32_f64` |            16.887 |        9.776 |         2.201x |    1.281x |
+| `array/decomp/cholesky_32_f32` |            16.500 |        9.211 |         1.886x |    1.042x |
 
 Profile artifacts:
 
@@ -599,10 +599,10 @@ semantics into one native call.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `array/views/flatten_f32` | 4.940 | 3.357 | 2.135x | 1.493x |
-| `array/views/ravel_f32` | 4.424 | 2.731 | 1.995x | 1.242x |
+| row                       | previous monpy us | new monpy us | previous ratio | new ratio |
+| ------------------------- | ----------------: | -----------: | -------------: | --------: |
+| `array/views/flatten_f32` |             4.940 |        3.357 |         2.135x |    1.493x |
+| `array/views/ravel_f32`   |             4.424 |        2.731 |         1.995x |    1.242x |
 
 Direct microbenchmarks on an existing `2x3x4` array measured
 `mnp.ravel(s_mp)` at about 0.615 us and `mnp.flatten(s_mp)` at about 1.115 us.
@@ -644,9 +644,9 @@ row-store reshaping work.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `strides/elementwise/transpose_add_f32` | 30.212 | 12.184 | 2.776x | 1.147x |
+| row                                     | previous monpy us | new monpy us | previous ratio | new ratio |
+| --------------------------------------- | ----------------: | -----------: | -------------: | --------: |
+| `strides/elementwise/transpose_add_f32` |            30.212 |       12.184 |         2.776x |    1.147x |
 
 Direct microbenchmarks for the same `256x256` benchmark input moved
 `a_mp.T + b_mp.T` from about 27.6 us to about 9.8 us. NumPy measured about
@@ -688,9 +688,9 @@ stride contract.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `strides/elementwise/rank3_transpose_add_f32` | 18.486 | 14.113 | 2.385x | 1.672x |
+| row                                           | previous monpy us | new monpy us | previous ratio | new ratio |
+| --------------------------------------------- | ----------------: | -----------: | -------------: | --------: |
+| `strides/elementwise/rank3_transpose_add_f32` |            18.486 |       14.113 |         2.385x |    1.672x |
 
 The combined `array,strides` frontier moved the same row to 13.344 us against
 NumPy's 7.961 us, a 1.662x ratio. A direct microbench for the benchmark shape
@@ -723,11 +723,11 @@ negative-stride profile points mostly at allocation.
 The fresh frontier still put `array/views/reversed_add_f32` first, but direct
 decomposition showed the fused reversed-add arithmetic was not the main cost:
 
-| operation | monpy us | numpy us |
-| --- | ---: | ---: |
-| `x[::-1]` view construction | 1.569 | 0.092 |
-| prebuilt reversed view add | 0.979 | 0.741 |
-| full `x[::-1] + y[::-1]` row | 4.294 | 0.876 |
+| operation                    | monpy us | numpy us |
+| ---------------------------- | -------: | -------: |
+| `x[::-1]` view construction  |    1.569 |    0.092 |
+| prebuilt reversed view add   |    0.979 |    0.741 |
+| full `x[::-1] + y[::-1]` row |    4.294 |    0.876 |
 
 NumPy's ndarray model treats slicing as a view over the same memory with a
 different strided indexing scheme, so the exact `[::-1]` case is just
@@ -744,11 +744,11 @@ shape tuple.
 
 Focused local result:
 
-| row | previous monpy us | new monpy us | previous ratio | new ratio |
-| --- | ---: | ---: | ---: | ---: |
-| `array/views/reversed_add_f32` | 6.655 | 4.616 | 2.188x | 1.512x |
-| `strides/elementwise/reverse_1d_add_f32` | 7.219 | 5.192 | 1.633x | 1.218x |
-| `array/views/strided_view_f32` | 3.717 | 3.431 | 1.799x | 1.609x |
+| row                                      | previous monpy us | new monpy us | previous ratio | new ratio |
+| ---------------------------------------- | ----------------: | -----------: | -------------: | --------: |
+| `array/views/reversed_add_f32`           |             6.655 |        4.616 |         2.188x |    1.512x |
+| `strides/elementwise/reverse_1d_add_f32` |             7.219 |        5.192 |         1.633x |    1.218x |
+| `array/views/strided_view_f32`           |             3.717 |        3.431 |         1.799x |    1.609x |
 
 Direct post-change microbenchmarks measured `x[::-1]` at about 0.696 us and
 the full `x[::-1] + y[::-1]` row at about 2.385 us. That is a 2.25:1 reduction

@@ -172,6 +172,24 @@ def reduce_strided_typed[dtype: DType](src: Array, op: Int) raises -> Float64:
             iter.step()
         return Float64(acc)
     raise Error("reduce_strided_typed: unsupported op")
+@always_inline
+def _reduce_strided_and_write[
+    dt: DType
+](src: Array, mut result: Array, op: Int) raises:
+    # Run the typed strided reducer and write the bimodal result:
+    # float dtypes → set_logical_from_f64 (acc is already Float64-cast);
+    # integer dtypes → set_logical_from_i64 unless op is MEAN, in which
+    # case the fractional answer goes through the f64 path.
+    var acc = reduce_strided_typed[dt](src, op)
+    comptime if dt.is_floating_point():
+        set_logical_from_f64(result, 0, acc)
+    else:
+        if op == ReduceOp.MEAN.value:
+            set_logical_from_f64(result, 0, acc)
+        else:
+            set_logical_from_i64(result, 0, Int64(acc))
+
+
 def maybe_reduce_strided_typed(src: Array, mut result: Array, op: Int) raises -> Bool:
     # Dispatch to typed strided reduction by source dtype. Returns True
     # iff the typed kernel handled it. Skips:
@@ -189,70 +207,28 @@ def maybe_reduce_strided_typed(src: Array, mut result: Array, op: Int) raises ->
     ):
         return False
     if src.dtype_code == ArrayDType.FLOAT64.value:
-        var acc = reduce_strided_typed[DType.float64](src, op)
-        set_logical_from_f64(result, 0, acc)
-        return True
-    if src.dtype_code == ArrayDType.FLOAT32.value:
-        var acc = reduce_strided_typed[DType.float32](src, op)
-        set_logical_from_f64(result, 0, acc)
-        return True
-    if src.dtype_code == ArrayDType.INT64.value:
-        var acc = reduce_strided_typed[DType.int64](src, op)
-        if op == ReduceOp.MEAN.value:
-            set_logical_from_f64(result, 0, acc)
-        else:
-            set_logical_from_i64(result, 0, Int64(acc))
-        return True
-    if src.dtype_code == ArrayDType.INT32.value:
-        var acc = reduce_strided_typed[DType.int32](src, op)
-        if op == ReduceOp.MEAN.value:
-            set_logical_from_f64(result, 0, acc)
-        else:
-            set_logical_from_i64(result, 0, Int64(acc))
-        return True
-    if src.dtype_code == ArrayDType.INT16.value:
-        var acc = reduce_strided_typed[DType.int16](src, op)
-        if op == ReduceOp.MEAN.value:
-            set_logical_from_f64(result, 0, acc)
-        else:
-            set_logical_from_i64(result, 0, Int64(acc))
-        return True
-    if src.dtype_code == ArrayDType.INT8.value:
-        var acc = reduce_strided_typed[DType.int8](src, op)
-        if op == ReduceOp.MEAN.value:
-            set_logical_from_f64(result, 0, acc)
-        else:
-            set_logical_from_i64(result, 0, Int64(acc))
-        return True
-    if src.dtype_code == ArrayDType.UINT64.value:
-        var acc = reduce_strided_typed[DType.uint64](src, op)
-        if op == ReduceOp.MEAN.value:
-            set_logical_from_f64(result, 0, acc)
-        else:
-            set_logical_from_i64(result, 0, Int64(acc))
-        return True
-    if src.dtype_code == ArrayDType.UINT32.value:
-        var acc = reduce_strided_typed[DType.uint32](src, op)
-        if op == ReduceOp.MEAN.value:
-            set_logical_from_f64(result, 0, acc)
-        else:
-            set_logical_from_i64(result, 0, Int64(acc))
-        return True
-    if src.dtype_code == ArrayDType.UINT16.value:
-        var acc = reduce_strided_typed[DType.uint16](src, op)
-        if op == ReduceOp.MEAN.value:
-            set_logical_from_f64(result, 0, acc)
-        else:
-            set_logical_from_i64(result, 0, Int64(acc))
-        return True
-    if src.dtype_code == ArrayDType.UINT8.value:
-        var acc = reduce_strided_typed[DType.uint8](src, op)
-        if op == ReduceOp.MEAN.value:
-            set_logical_from_f64(result, 0, acc)
-        else:
-            set_logical_from_i64(result, 0, Int64(acc))
-        return True
-    return False
+        _reduce_strided_and_write[DType.float64](src, result, op)
+    elif src.dtype_code == ArrayDType.FLOAT32.value:
+        _reduce_strided_and_write[DType.float32](src, result, op)
+    elif src.dtype_code == ArrayDType.INT64.value:
+        _reduce_strided_and_write[DType.int64](src, result, op)
+    elif src.dtype_code == ArrayDType.INT32.value:
+        _reduce_strided_and_write[DType.int32](src, result, op)
+    elif src.dtype_code == ArrayDType.INT16.value:
+        _reduce_strided_and_write[DType.int16](src, result, op)
+    elif src.dtype_code == ArrayDType.INT8.value:
+        _reduce_strided_and_write[DType.int8](src, result, op)
+    elif src.dtype_code == ArrayDType.UINT64.value:
+        _reduce_strided_and_write[DType.uint64](src, result, op)
+    elif src.dtype_code == ArrayDType.UINT32.value:
+        _reduce_strided_and_write[DType.uint32](src, result, op)
+    elif src.dtype_code == ArrayDType.UINT16.value:
+        _reduce_strided_and_write[DType.uint16](src, result, op)
+    elif src.dtype_code == ArrayDType.UINT8.value:
+        _reduce_strided_and_write[DType.uint8](src, result, op)
+    else:
+        return False
+    return True
 def maybe_reduce_contiguous(src: Array, mut result: Array, op: Int) raises -> Bool:
     if op == ReduceOp.SUM.value and is_c_contiguous(src):
         if src.dtype_code == ArrayDType.BOOL.value:
