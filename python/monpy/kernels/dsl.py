@@ -1,0 +1,55 @@
+"""Staged implementations for top-level monpy operations."""
+
+from __future__ import annotations
+
+from typing import Sequence
+
+from .tensor import Tensor
+
+
+def is_kernel_tensor(value: object) -> bool:
+  return getattr(value, "__monpy_kernel_tensor__", False)
+
+
+def ufunc(name: str, *args: object) -> Tensor:
+  if len(args) == 1:
+    return _one_tensor(args)._trace.unary(name, args[0])
+  if len(args) == 2:
+    return _one_tensor(args)._trace.binary(name, args[0], args[1])
+  raise TypeError(f"monpy kernel ufunc {name!r} only supports unary and binary calls")
+
+
+def matmul(lhs: object, rhs: object) -> Tensor:
+  return _one_tensor((lhs, rhs))._trace.matmul(lhs, rhs)
+
+
+def reshape(x: object, shape: int | Sequence[int]) -> Tensor:
+  tensor = _expect_tensor(x)
+  target = (shape,) if isinstance(shape, int) else tuple(int(dim) for dim in shape)
+  return tensor._trace.reshape(tensor, target)
+
+
+def transpose(x: object, axes: Sequence[int] | None = None) -> Tensor:
+  tensor = _expect_tensor(x)
+  if axes is None:
+    axes = tuple(range(len(tensor.shape) - 1, -1, -1))
+  return tensor._trace.transpose(tensor, tuple(int(axis) for axis in axes))
+
+
+def broadcast_to(x: object, shape: int | Sequence[int]) -> Tensor:
+  tensor = _expect_tensor(x)
+  target = (shape,) if isinstance(shape, int) else tuple(int(dim) for dim in shape)
+  return tensor._trace.broadcast_to(tensor, target)
+
+
+def _expect_tensor(value: object) -> Tensor:
+  if isinstance(value, Tensor):
+    return value
+  raise TypeError(f"expected traced monpy.Tensor, got {type(value).__name__}")
+
+
+def _one_tensor(values: tuple[object, ...]) -> Tensor:
+  for value in values:
+    if isinstance(value, Tensor):
+      return value
+  raise TypeError("expected at least one traced monpy.Tensor")
