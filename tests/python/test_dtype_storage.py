@@ -83,6 +83,39 @@ def test_fp4_frombuffer_uses_two_logical_values_per_byte() -> None:
   assert arr.tolist() == [1.5, 2.0, 4.0, -6.0]
 
 
+def test_fp4_concatenate_repacks_instead_of_byte_memcpy() -> None:
+  lhs = mp.asarray([0.5, 1.0, 1.5], dtype=mp.float4_e2m1fn)
+  rhs = mp.asarray([-0.5, -1.0], dtype=mp.float4_e2m1fn)
+
+  out = mp.concatenate([lhs, rhs])
+
+  assert out.dtype == mp.float4_e2m1fn
+  assert out.shape == (5,)
+  assert out.nbytes == 3
+  assert out.tolist() == [0.5, 1.0, 1.5, -0.5, -1.0]
+
+
+def test_fp4_stack_repacks_instead_of_byte_memcpy() -> None:
+  lhs = mp.asarray([0.5, 1.0, 1.5], dtype=mp.float4_e2m1fn)
+  rhs = mp.asarray([-0.5, -1.0, -1.5], dtype=mp.float4_e2m1fn)
+
+  out = mp.stack([lhs, rhs])
+
+  assert out.dtype == mp.float4_e2m1fn
+  assert out.shape == (2, 3)
+  assert out.nbytes == 3
+  assert out.tolist() == [[0.5, 1.0, 1.5], [-0.5, -1.0, -1.5]]
+
+
+def test_fp4_assignment_to_odd_offset_view_repacks() -> None:
+  dst = mp.full((5,), 0.0, dtype=mp.float4_e2m1fn)
+  src = mp.asarray([0.5, 1.0, 1.5, 2.0], dtype=mp.float4_e2m1fn)
+
+  dst[1:] = src
+
+  assert dst.tolist() == [0.0, 0.5, 1.0, 1.5, 2.0]
+
+
 @pytest.mark.parametrize("dtype", LOW_PRECISION_DTYPES)
 def test_low_precision_interop_rejects_unsupported_buffer_exports(dtype: mp.DType) -> None:
   arr = mp.asarray([1.0], dtype=dtype)

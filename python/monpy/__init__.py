@@ -289,8 +289,10 @@ class Ufunc:
       # binary arith.
       if _isarrv(x1) and _is_scalar(x2):
         l=_mat(x1)
-        t=_resolve_dtype(dtype) if dtype is not None else _isd_arr(l, x2)
-        if l.dtype!=t:l=l.astype(t)
+        if dtype is not None:
+          t=_resolve_dtype(dtype)
+          if l.dtype!=t:l=l.astype(t)
+        else:t=_isd_arr(l, x2)
         res=ndarray(_native.binary_scalar(l._native, x2, t.code, self._op, False))
         if out is not None:
           out[...]=res
@@ -298,8 +300,10 @@ class Ufunc:
         return res
       if _isarrv(x2) and _is_scalar(x1):
         r=_mat(x2)
-        t=_resolve_dtype(dtype) if dtype is not None else _isd_arr(r, x1)
-        if r.dtype!=t:r=r.astype(t)
+        if dtype is not None:
+          t=_resolve_dtype(dtype)
+          if r.dtype!=t:r=r.astype(t)
+        else:t=_isd_arr(r, x1)
         res=ndarray(_native.binary_scalar(r._native, x1, t.code, self._op, True))
         if out is not None:
           out[...]=res

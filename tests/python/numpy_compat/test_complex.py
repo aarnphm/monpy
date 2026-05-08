@@ -60,6 +60,8 @@ def test_complex_strided_arithmetic_preserves_imaginary_part() -> None:
 def test_complex_negate_preserves_imaginary_part() -> None:
   a = mp.asarray([1 + 2j, 3 + 4j], dtype=mp.complex128)
   numpy.testing.assert_array_equal(numpy.asarray(-a), [-1 - 2j, -3 - 4j])
+  numpy.testing.assert_array_equal(numpy.asarray(mp.multiply(a, -1)), [-1 - 2j, -3 - 4j])
+  numpy.testing.assert_array_equal(numpy.asarray(mp.multiply(-1, a)), [-1 - 2j, -3 - 4j])
 
 
 def test_complex_scalar_mul_with_real_int() -> None:

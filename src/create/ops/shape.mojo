@@ -43,7 +43,7 @@ from array import (
 from cute.functional import select as cute_select
 from cute.int_tuple import IntTuple
 from cute.layout import make_layout_row_major
-from domain import ArrayDType, ReduceOp
+from domain import ArrayDType, ReduceOp, dtype_is_packed_subbyte
 
 
 def reshape_ops(array_obj: PythonObject, shape_obj: PythonObject) raises -> PythonObject:
@@ -524,6 +524,7 @@ def concatenate_ops(
     for d in range(axis + 1, ndim):
         inner_size *= out_shape[d]
     var item_bytes = item_size(dtype_code)
+    var can_memcpy = all_c_contig and not dtype_is_packed_subbyte(dtype_code)
     var out_axis_size = out_shape[axis]
     var out_row_size = out_axis_size * inner_size
     var axis_offset = 0
@@ -531,7 +532,7 @@ def concatenate_ops(
         var a = arrays_obj[i].downcast_value_ptr[Array]()
         var a_axis = a[].shape[axis]
         var a_slab_size = a_axis * inner_size
-        if all_c_contig:
+        if can_memcpy:
             var src_byte_offset = a[].offset_elems * item_bytes
             for outer in range(outer_size):
                 var src_off_bytes = src_byte_offset + outer * a_slab_size * item_bytes
@@ -581,11 +582,12 @@ def stack_axis0_ops(
             all_c_contig = False
     var result = make_empty_array(dtype_code, out_shape^)
     var item_bytes = item_size(dtype_code)
+    var can_memcpy = all_c_contig and not dtype_is_packed_subbyte(dtype_code)
     var slab_elems = first[].size_value
     var slab_bytes = slab_elems * item_bytes
     for i in range(n_arrays):
         var a = arrays_obj[i].downcast_value_ptr[Array]()
-        if all_c_contig:
+        if can_memcpy:
             _memcpy(
                 dest=result.data + i * slab_bytes,
                 src=a[].data + a[].offset_elems * item_bytes,
