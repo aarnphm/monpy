@@ -626,3 +626,47 @@ The top rows after this pass are `reversed_add_f32`, `moveaxis_f32`,
 view target is therefore negative-stride elementwise dispatch or moveaxis
 permutation metadata, not further `ravel`/`flatten` work.
 
+### 2026-05-08 F-order transposed binary output
+
+The live `array,strides` frontier put `strides/elementwise/transpose_add_f32`
+back at the top. The inputs are both positive-stride transposed views:
+`a_mp.T + b_mp.T`, shape `256x256`, element strides `[1, 256]`. The old fused
+path treated the output as c-contiguous, loaded each 4x4 tile contiguously from
+the inputs, transposed the tile in registers, then stored c-contiguous rows.
+
+NumPy's ufunc contract defaults `order` to `K`, so the output should match the
+input element order as closely as possible. For two dense F-order inputs, NumPy
+returns an F-contiguous result. Monpy now does the same for this dense
+positive-stride rank-2 case: it adds the physically contiguous input buffers in
+linear SIMD order, writes the managed result buffer linearly, then marks the
+result strides as `[1, rows]`. That removes the in-register transpose and the
+row-store reshaping work.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `strides/elementwise/transpose_add_f32` | 30.212 | 12.184 | 2.776x | 1.147x |
+
+Direct microbenchmarks for the same `256x256` benchmark input moved
+`a_mp.T + b_mp.T` from about 27.6 us to about 9.8 us. NumPy measured about
+9.6 us in the same local loop; the saved benchmark row is higher because it
+runs through the full sweep harness and round aggregation.
+
+Profile artifacts:
+
+- `results/profile-20260508-strides-transpose-add-f32-pre/manifest.json`
+  measured the pre-change row at 30.318 us/call. `sample(1)` put 2,019 samples
+  in `maybe_binary_rank2_transposed_tile`.
+- `results/profile-20260508-strides-transpose-add-f32-forder/manifest.json`
+  measured the patched row at 13.265 us/call, with 51.9 MB max RSS, no major
+  faults, and a traced Python allocation peak of 1,856 bytes.
+- The patched sample still spends most native time in
+  `maybe_binary_rank2_transposed_tile`, but it is now the linear F-order branch
+  rather than the 4x4 shuffle/store branch.
+
+The new combined `array,strides` frontier is led by
+`strides/elementwise/rank3_transpose_add_f32`, `array/views/reversed_add_f32`,
+and `array/views/moveaxis_f32`. The next broad target should be the rank-3
+transpose path's output order: it likely has the same "doing extra layout work
+to force c-contiguous output" smell, only with one more axis in the metadata.
