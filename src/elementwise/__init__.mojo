@@ -2887,8 +2887,6 @@ def maybe_binary_rank3_axis0_tile[dtype: DType](lhs: Array, rhs: Array, mut resu
     var rows = lhs.shape[0]
     var batches = lhs.shape[1]
     var cols = lhs.shape[2]
-    if rows < 4 or cols < 4:
-        return False
     var lhs_batch_stride = lhs.strides[1]
     var rhs_batch_stride = rhs.strides[1]
     var lhs_col_stride = lhs.strides[2]
@@ -2898,6 +2896,37 @@ def maybe_binary_rank3_axis0_tile[dtype: DType](lhs: Array, rhs: Array, mut resu
     var lhs_data = lhs.data.bitcast[Scalar[dtype]]() + lhs.offset_elems
     var rhs_data = rhs.data.bitcast[Scalar[dtype]]() + rhs.offset_elems
     var result_data = result.data.bitcast[Scalar[dtype]]() + result.offset_elems
+    var physical_plane = rows * cols
+    if (
+        lhs_col_stride == rows
+        and rhs_col_stride == rows
+        and lhs_batch_stride == physical_plane
+        and rhs_batch_stride == physical_plane
+    ):
+        comptime width = simd_width_of[dtype]()
+        var total = rows * batches * cols
+        var linear = 0
+        while linear + width <= total:
+            var lvec = lhs_data.load[width=width](linear)
+            var rvec = rhs_data.load[width=width](linear)
+            var out = lvec + rvec if op == BinaryOp.ADD.value else apply_binary_typed_vec[dtype, width](lvec, rvec, op)
+            result_data.store(linear, out)
+            linear += width
+        while linear < total:
+            if op == BinaryOp.ADD.value:
+                result_data[linear] = lhs_data[linear] + rhs_data[linear]
+            else:
+                result_data[linear] = apply_binary_typed_vec[dtype, 1](
+                    SIMD[dtype, 1](lhs_data[linear]), SIMD[dtype, 1](rhs_data[linear]), op
+                )[0]
+            linear += 1
+        result.strides[0] = 1
+        result.strides[1] = physical_plane
+        result.strides[2] = rows
+        result.backend_code = BackendKind.FUSED.value
+        return True
+    if rows < 4 or cols < 4:
+        return False
     comptime tile = 4
     var main_rows = rows - (rows % tile)
     var main_cols = cols - (cols % tile)

@@ -670,3 +670,50 @@ The new combined `array,strides` frontier is led by
 and `array/views/moveaxis_f32`. The next broad target should be the rank-3
 transpose path's output order: it likely has the same "doing extra layout work
 to force c-contiguous output" smell, only with one more axis in the metadata.
+
+### 2026-05-08 F-order rank-3 transposed binary output
+
+`strides/elementwise/rank3_transpose_add_f32` uses dense C-order `32x32x32`
+buffers viewed as `.transpose((2, 0, 1))`. The resulting logical shape is
+`[rows, batches, cols]`, but the positive dense element strides are
+`[1, rows * cols, rows]`. NumPy ufuncs default `order` to `K`, so NumPy keeps
+the output in that input element order instead of forcing a c-contiguous result.
+
+The previous monpy rank-3 fused path still used the 4x4 tile shuffle path that
+stores a c-contiguous result. `maybe_binary_rank3_axis0_tile` now detects this
+specific dense positive-stride layout, adds the two physical buffers with a
+linear SIMD walk, and marks the result strides as `[1, rows * cols, rows]`.
+That removes the unnecessary layout conversion while preserving NumPy's result
+stride contract.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `strides/elementwise/rank3_transpose_add_f32` | 18.486 | 14.113 | 2.385x | 1.672x |
+
+The combined `array,strides` frontier moved the same row to 13.344 us against
+NumPy's 7.961 us, a 1.662x ratio. A direct microbench for the benchmark shape
+measured monpy at about 11.0 us and NumPy at about 5.6 us; the full sweep is
+higher because it includes harness and round aggregation overhead.
+
+Profile artifacts:
+
+- `results/profile-20260508-rank3-transpose-add-f32-forder/manifest.json`
+  measured the patched monpy row at 14.080 us/call, with 53.2 MB max RSS, no
+  major faults, 8 minor faults, 2.925 s user CPU, and 0.029 s system CPU in the
+  3 s child loop.
+- The allocation pass traced a 131,312 byte Python peak and reported 52.9 MB
+  max RSS. This pass changed native layout work, not Python allocation shape.
+- The `sample(1)` report still puts the native time in
+  `maybe_binary_rank3_axis0_tile`, now the linear F-order branch. It also shows
+  allocator frames under `tc_memalign`, so the next stride-kernel pass should
+  separate result allocation cost from pure arithmetic before adding another
+  shuffle kernel.
+
+The new combined frontier is led by `array/views/reversed_add_f32` at 2.157x,
+`array/views/moveaxis_f32` at 1.898x, and
+`array/creation/empty_like_shape_override_f32` at 1.875x. The next broad target
+should be negative-stride elementwise dispatch for `reversed_add_f32`, with
+`moveaxis` metadata construction as the next view-wrapper fallback if the
+negative-stride profile points mostly at allocation.

@@ -182,6 +182,19 @@ def test_transposed_binary_result_order_matches_numpy() -> None:
   assert out.strides == expected.strides
 
 
+def test_rank3_transposed_binary_result_order_matches_numpy() -> None:
+  base = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
+  oracle_base = numpy.arange(2 * 3 * 4, dtype=numpy.float32).reshape(2, 3, 4)
+  oracle_rhs = numpy.flip(oracle_base, axis=2).copy()
+  rhs = np.asarray(oracle_rhs)
+
+  out = base.transpose((2, 0, 1)) + rhs.transpose((2, 0, 1))
+  expected = oracle_base.transpose((2, 0, 1)) + oracle_rhs.transpose((2, 0, 1))
+
+  assert_same_values(out, expected)
+  assert out.strides == expected.strides
+
+
 def test_views_remain_safe_across_core_read_paths() -> None:
   base = np.arange(12, dtype=np.float64).reshape(3, 4)
   oracle = numpy.arange(12, dtype=numpy.float64).reshape(3, 4)
