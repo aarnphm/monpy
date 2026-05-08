@@ -205,15 +205,39 @@ def _composition_leaf_on_a(a: Layout, s_in: Int, d_in: Int) raises -> Layout:
 
 
 def complement(layout: Layout, cosize_target: Int) raises -> Layout:
-    """`complement(A, M)` produces a layout that, when concatenated
-    with `A`, fills out the codomain `[0, M)` bijectively.
+    """`complement(A, M)` produces a layout `B` such that the disjoint
+    union of `A`'s image with `B`'s image equals `{0, 1, …, M−1}` and
+    `B`'s strides chain through the gaps that `A` leaves behind.
 
-    Algorithm: sort A's flat modes by stride; emit complementary modes
-    for the gaps; finally emit a tail mode if `cosize_target` exceeds
+    Algebra: think of `A` as an injective map
+    `i → Σ stride[k]·crd_k(i)` covering some sub-lattice of `[0, M)`.
+    Walk `A`'s flat modes in ascending-stride order; for each gap
+    between the running coverage `current` and the next stride `d`,
+    emit a complementary mode `(d/current, current)` that fills the
+    gap. A final tail mode covers `[A's reach, M)` if `M` exceeds
     A's coverage.
 
-    Used by `logical_divide` to behave correctly on non-bijective
-    layouts.
+    Algorithm:
+    1. Filter to modes with size > 1 and stride > 0 — size-1 and
+       stride-0 modes contribute nothing to coverage.
+    2. Sort surviving modes by stride ascending: gaps must be filled
+       in stride order or the resulting layout isn't bijective on
+       `[0, M)`.
+    3. For each mode in stride order, if its stride exceeds the
+       running `current`, emit a fill mode `(stride/current, current)`;
+       then advance `current *= mode_size`.
+    4. If `cosize_target > current` at the end, emit a final tail
+       `(cosize_target/current, current)`.
+
+    Why divisibility matters: a non-divisible gap (e.g. `A` has
+    stride 3 but `current = 2`) means `A`'s image isn't aligned to
+    any integer sub-lattice — no integer-strided fill completes it.
+    That's the "non-divisible gap" raise.
+
+    Used by `logical_divide` to partition non-bijective layouts
+    correctly (where the tiler doesn't fill A's image).
+
+    Reference: CUTLASS `cute/01_layout.md` §4 + `02_layout_algebra.md` §2.
     """
     var a_shape = flatten_to_int_list(layout.shape)
     var a_stride = flatten_to_int_list(layout.stride)
@@ -276,18 +300,35 @@ def complement(layout: Layout, cosize_target: Int) raises -> Layout:
 
 
 def logical_divide(a: Layout, tiler: Layout) raises -> Layout:
-    """Partition `a`'s top-level modes by `tiler`. Per axis `i`:
-      - `intra = composition(a[i], tiler[i])` — intra-tile layout.
-      - `inter = composition(a[i], complement(tiler[i], size(a[i])))`
-        — inter-tile layout (composition of A with the gap-filler that
-        completes the tiler within A's domain).
-      - packed as a nested mode `(intra, inter)`.
+    """Partition each top-level mode of `a` by the corresponding mode
+    of `tiler`, producing a layout whose leading mode walks *within*
+    a tile and trailing mode walks *between* tiles.
 
-    For numpy parity v1 this is the only tile op needed: tiled
-    reductions and tiled matmul both want "give me a layout whose
-    leading mode walks within a tile, then through tiles."
+    Algebra: `logical_divide(A, T) = D` where, for each axis `i`,
+    `D[i] = (intra[i], inter[i])` and:
+    - `intra[i] = A[i] ∘ T[i]` — composition of `A[i]` with the tile
+      layout `T[i]`. This produces a sub-layout of `A[i]` whose
+      domain is `T[i]`'s domain, walking the elements `T[i]` selects.
+    - `inter[i] = A[i] ∘ complement(T[i], size(A[i]))` — composition
+      of `A[i]` with the *gap-filler* that completes `T[i]` inside
+      `A[i]`'s domain. This walks tile origins in row-major order
+      over `A[i]`.
 
-    Reference: CUTLASS `cute/algorithm/functional.hpp::logical_divide`.
+    Why this works: composition distributes over the by-mode product.
+    Splitting each axis independently into `(intra, inter)` preserves
+    the bijection — every element of `A[i]` is reached exactly once
+    by the cartesian product of `intra[i]` and `inter[i]` domains.
+
+    Why useful: tiled reductions and tiled matmul both want to write
+    `for tile in inter: for elem in intra: …` and trust the strides
+    to land in the right place. `logical_divide` produces exactly
+    that shape — no manual index math, no aliasing.
+
+    If `tiler` has fewer modes than `a`, leftover `a` axes pass
+    through unchanged (no tiling on those axes).
+
+    Reference: CUTLASS `cute/02_layout_algebra.md` §3 +
+    `cute/algorithm/functional.hpp::logical_divide`.
     """
     var a_rank = a.shape.rank()
     var t_rank = tiler.shape.rank()
