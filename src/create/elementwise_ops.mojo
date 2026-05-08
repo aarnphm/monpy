@@ -10,7 +10,18 @@ unary_preserve resolves output dtype via `result_dtype_for_unary_preserve`
 (input dtype with bool→int64 promotion).
 """
 
-from std.math import isinf, isnan
+from std.math import (
+    atan2 as _atan2,
+    cos as _cos,
+    cosh as _cosh,
+    exp as _exp,
+    isinf,
+    isnan,
+    log as _log,
+    sin as _sin,
+    sinh as _sinh,
+    sqrt as _sqrt,
+)
 from std.python import PythonObject
 
 from array import (
@@ -22,6 +33,7 @@ from array import (
     get_physical_as_f64,
     item_size,
     make_empty_array,
+    result_dtype_for_unary,
     result_dtype_for_unary_preserve,
     same_shape,
     set_physical_from_f64,
@@ -29,7 +41,14 @@ from array import (
 from cute.iter import LayoutIter, MultiLayoutIter
 from cute.layout import Layout
 from domain import ArrayDType, CompareOp, LogicalOp, PredicateOp, UnaryOp
-from elementwise import apply_unary_f64, maybe_unary_preserve_contiguous
+from elementwise import (
+    apply_unary_f64,
+    maybe_unary_contiguous,
+    maybe_unary_preserve_contiguous,
+    maybe_unary_rank2_strided,
+)
+
+from ._complex_helpers import _complex_imag, _complex_real, _complex_store
 
 
 def unary_preserve_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
@@ -169,6 +188,133 @@ def logical_ops(
         set_physical_from_f64(result, iter.element_index(2), 1.0 if output else 0.0)
         iter.step()
     return PythonObject(alloc=result^)
+
+
+def unary_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
+    """Generic unary apply: handles complex (Euler-form) + real (typed-vec
+    contig fast path → rank-2 strided fast path → LayoutIter fallback).
+    Output dtype = `result_dtype_for_unary(input)` (e.g. log of int → f64,
+    sqrt of int → f64, transcendental of bool → f64).
+    """
+    var src = array_obj.downcast_value_ptr[Array]()
+    var op = UnaryOp.from_int(Int(py=op_obj)).value
+    var shape = clone_int_list(src[].shape)
+    var result = make_empty_array(result_dtype_for_unary(src[].dtype_code), shape^)
+    # Complex transcendentals: sin/cos/exp/log/sqrt etc. via Euler identities.
+    # Output dtype = input dtype (preserved by result_dtype_for_unary).
+    if src[].dtype_code == ArrayDType.COMPLEX64.value or src[].dtype_code == ArrayDType.COMPLEX128.value:
+        for i in range(src[].size_value):
+            var re = _complex_real(src[], i)
+            var im = _complex_imag(src[], i)
+            var out_re: Float64
+            var out_im: Float64
+            (out_re, out_im) = apply_unary_complex_f64(re, im, op)
+            _complex_store(result, i, out_re, out_im)
+        return PythonObject(alloc=result^)
+    if maybe_unary_contiguous(src[], result, op):
+        return PythonObject(alloc=result^)
+    if maybe_unary_rank2_strided(src[], result, op):
+        return PythonObject(alloc=result^)
+    # Strided fallback: walk via LayoutIter so the divmod amortizes
+    # across the iteration instead of paying physical_offset per element.
+    var src_layout = as_layout(src[])
+    var dst_layout = as_layout(result)
+    var src_item = item_size(src[].dtype_code)
+    var dst_item = item_size(result.dtype_code)
+    var src_iter = LayoutIter(src_layout, src_item, src[].offset_elems * src_item)
+    var dst_iter = LayoutIter(dst_layout, dst_item, result.offset_elems * dst_item)
+    while src_iter.has_next():
+        var value = get_physical_as_f64(src[], src_iter.element_index())
+        var output = apply_unary_f64(value, op)
+        set_physical_from_f64(result, dst_iter.element_index(), output)
+        src_iter.step()
+        dst_iter.step()
+    return PythonObject(alloc=result^)
+
+
+def apply_unary_complex_f64(re: Float64, im: Float64, op: Int) raises -> Tuple[Float64, Float64]:
+    """Complex unary transcendentals via Euler identities. Operates on
+    (re, im) Float64 pairs and returns the new pair. The python-level
+    `unary_ops` walks complex arrays element-by-element through this.
+    """
+    if op == UnaryOp.EXP.value:
+        # exp(a+bi) = exp(a) * (cos(b) + i sin(b))
+        var ea = _exp(re)
+        return (ea * _cos(im), ea * _sin(im))
+    if op == UnaryOp.LOG.value:
+        # log(z) = log|z| + i arg(z)
+        var modulus = _sqrt(re * re + im * im)
+        return (_log(modulus), _atan2(im, re))
+    if op == UnaryOp.SIN.value:
+        # sin(a+bi) = sin(a)cosh(b) + i cos(a)sinh(b)
+        return (_sin(re) * _cosh(im), _cos(re) * _sinh(im))
+    if op == UnaryOp.COS.value:
+        # cos(a+bi) = cos(a)cosh(b) - i sin(a)sinh(b)
+        return (_cos(re) * _cosh(im), -_sin(re) * _sinh(im))
+    if op == UnaryOp.SINH.value:
+        # sinh(a+bi) = sinh(a)cos(b) + i cosh(a)sin(b)
+        return (_sinh(re) * _cos(im), _cosh(re) * _sin(im))
+    if op == UnaryOp.COSH.value:
+        # cosh(a+bi) = cosh(a)cos(b) + i sinh(a)sin(b)
+        return (_cosh(re) * _cos(im), _sinh(re) * _sin(im))
+    if op == UnaryOp.TANH.value:
+        # tanh(z) = sinh(z) / cosh(z) — use Euler-form identities and divide.
+        var s_re = _sinh(re) * _cos(im)
+        var s_im = _cosh(re) * _sin(im)
+        var c_re = _cosh(re) * _cos(im)
+        var c_im = _sinh(re) * _sin(im)
+        var denom = c_re * c_re + c_im * c_im
+        return ((s_re * c_re + s_im * c_im) / denom, (s_im * c_re - s_re * c_im) / denom)
+    if op == UnaryOp.TAN.value:
+        # tan(z) = sin(z) / cos(z)
+        var s_re = _sin(re) * _cosh(im)
+        var s_im = _cos(re) * _sinh(im)
+        var c_re = _cos(re) * _cosh(im)
+        var c_im = -_sin(re) * _sinh(im)
+        var denom = c_re * c_re + c_im * c_im
+        return ((s_re * c_re + s_im * c_im) / denom, (s_im * c_re - s_re * c_im) / denom)
+    if op == UnaryOp.SQRT.value:
+        # sqrt(z): principal branch. z = r * exp(i*theta), sqrt(z) = sqrt(r) * exp(i*theta/2).
+        var modulus = _sqrt(re * re + im * im)
+        var arg = _atan2(im, re)
+        var s = _sqrt(modulus)
+        return (s * _cos(arg / 2.0), s * _sin(arg / 2.0))
+    if op == UnaryOp.LOG2.value:
+        # log2(z) = log(z) / log(2)
+        var modulus = _sqrt(re * re + im * im)
+        var ln2 = 0.6931471805599453
+        return (_log(modulus) / ln2, _atan2(im, re) / ln2)
+    if op == UnaryOp.LOG10.value:
+        var modulus = _sqrt(re * re + im * im)
+        var ln10 = 2.302585092994046
+        return (_log(modulus) / ln10, _atan2(im, re) / ln10)
+    if op == UnaryOp.LOG1P.value:
+        # log(1 + z)
+        var nre = 1.0 + re
+        var modulus = _sqrt(nre * nre + im * im)
+        return (_log(modulus), _atan2(im, nre))
+    if op == UnaryOp.EXPM1.value:
+        # exp(z) - 1 — use exp formula then subtract 1 from real part.
+        var ea = _exp(re)
+        return (ea * _cos(im) - 1.0, ea * _sin(im))
+    if op == UnaryOp.RECIPROCAL.value:
+        # 1 / (a + bi) = (a - bi) / (a² + b²)
+        var denom = re * re + im * im
+        return (re / denom, -im / denom)
+    if op == UnaryOp.EXP2.value:
+        # 2^z = exp(z * log(2))
+        var ln2 = 0.6931471805599453
+        var nre = re * ln2
+        var nim = im * ln2
+        var ea = _exp(nre)
+        return (ea * _cos(nim), ea * _sin(nim))
+    if op == UnaryOp.CBRT.value:
+        # cbrt(z) — principal branch.
+        var modulus = _sqrt(re * re + im * im)
+        var arg = _atan2(im, re)
+        var s = modulus.__pow__(1.0 / 3.0)
+        return (s * _cos(arg / 3.0), s * _sin(arg / 3.0))
+    raise Error("unary op not implemented for complex inputs")
 
 
 def predicate_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
