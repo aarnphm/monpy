@@ -418,6 +418,22 @@ def slice_1d_ops(
     return PythonObject(alloc=result^)
 
 
+def reverse_1d_ops(array_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    if len(src[].shape) != 1:
+        raise Error("reverse_1d() requires a rank-1 array")
+    var length = src[].shape[0]
+    var shape = List[Int]()
+    shape.append(length)
+    var strides = List[Int]()
+    strides.append(-src[].strides[0])
+    var offset = src[].offset_elems
+    if length > 0:
+        offset += (length - 1) * src[].strides[0]
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, offset)
+    return PythonObject(alloc=result^)
+
+
 def trace_ops(
     array_obj: PythonObject,
     offset_obj: PythonObject,

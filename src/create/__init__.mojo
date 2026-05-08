@@ -153,6 +153,7 @@ from .shape_ops import (
     normalize_axis_ops,
     pad_constant_ops,
     ravel_ops,
+    reverse_1d_ops,
     reshape_ops,
     slice_1d_ops,
     slice_ops,
@@ -195,8 +196,3 @@ from .linalg_ops import (
 
 # Python-callable entrypoints.
 # Includes Storage -> Shape -> Backend FFI imports from submodules.
-
-
-
-
-

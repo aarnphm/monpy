@@ -765,7 +765,8 @@ one side is bool (not parametric) and the other rides DType."""
 
 
 def _dispatch_dst_real_cast[
-    src_dt: DType, op: PairwiseCastKernel,
+    src_dt: DType,
+    op: PairwiseCastKernel,
 ](dst_code: Int, src: Array, mut result: Array) raises -> Bool:
     """Inner dispatcher: with `src_dt` already fixed, fans out over the 11 real dst dtypes."""
     if dst_code == ArrayDType.FLOAT64.value:

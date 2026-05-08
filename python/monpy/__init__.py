@@ -437,15 +437,19 @@ class ndarray:
         and p2.step is None
         and builtins.int(self._native.ndim())==2
       ):return ndarray._wrap(_native.expand_dims(self._native, 1), base=self)
-    if isinstance(k, slice) and self.ndim==1:                                                                                  # fast 1-D slice path: skip generic _view_for_key
-      d=self.shape[0]
-      step=1 if k.step is None else builtins.int(k.step)
-      if step==0:raise ValueError("slice step cannot be zero")
-      if k.start is None and k.stop is None:
-        start=d-1 if step<0 else 0
-        stop=-1 if step<0 else d                                # whole-axis defaults; -1 stop tells native to walk past 0 with negative step
-      else:start, stop, step=k.indices(d)
-      return ndarray._wrap(self._native.slice_1d_method(start, stop, step), base=self)
+    if isinstance(k, slice):
+      ndim=builtins.int(self._native.ndim())
+      if ndim==1:
+        if k.start is None and k.stop is None and k.step==-1:
+          return ndarray._wrap(self._native.reverse_1d_method(), base=self)
+        d=builtins.int(self._native.shape_at(0))
+        step=1 if k.step is None else builtins.int(k.step)
+        if step==0:raise ValueError("slice step cannot be zero")
+        if k.start is None and k.stop is None:
+          start=d-1 if step<0 else 0
+          stop=-1 if step<0 else d                                # whole-axis defaults; -1 stop tells native to walk past 0 with negative step
+        else:start, stop, step=k.indices(d)
+        return ndarray._wrap(self._native.slice_1d_method(start, stop, step), base=self)
     # Boolean / fancy integer indexing.
     if _is_advanced_index(k):return _advanced_getitem(self, k)
     if isinstance(k, tuple) and builtins.any(_is_advanced_index(p) for p in k):

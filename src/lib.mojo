@@ -54,6 +54,7 @@ from create import (
     reduce_axis_ops,
     reduce_ops,
     ravel_ops,
+    reverse_1d_ops,
     reshape_ops,
     result_dtype_for_binary_py_ops,
     result_dtype_for_reduction_py_ops,
@@ -111,6 +112,7 @@ def PyInit__native() -> PythonObject:
             .def_method[array_mul_method_ops]("mul")
             .def_method[array_div_method_ops]("div")
             .def_method[array_matmul_method_ops]("matmul")
+            .def_method[reverse_1d_ops]("reverse_1d_method")
             .def_method[slice_1d_ops]("slice_1d_method")
             .def_method[transpose_full_reverse_ops]("transpose_full_reverse_method")
         )
@@ -128,6 +130,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[indices_ops]("indices")
         module.def_function[reshape_ops]("reshape")
         module.def_function[ravel_ops]("ravel")
+        module.def_function[reverse_1d_ops]("reverse_1d")
         module.def_function[flatten_ops]("flatten")
         module.def_function[squeeze_all_ops]("squeeze_all")
         module.def_function[squeeze_axis_ops]("squeeze_axis")

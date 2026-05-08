@@ -41,6 +41,23 @@ def test_slice_stop_is_respected() -> None:
   assert arr[8:2:-2].tolist() == [8, 6, 4]
 
 
+def test_rank1_full_reverse_slice_matches_numpy_and_shares_storage() -> None:
+  arr = np.arange(6, dtype=np.float32)
+  oracle = numpy.arange(6, dtype=numpy.float32)
+
+  view = arr[::-1]
+  expected = oracle[::-1]
+
+  assert_same_shape_dtype(view, expected)
+  assert_same_values(view, expected)
+  assert view.strides == expected.strides
+
+  view[1] = -3
+  expected[1] = -3
+
+  assert_same_values(arr, oracle)
+
+
 def test_slice_step_zero_raises() -> None:
   arr = np.arange(10, dtype=np.int64)
 

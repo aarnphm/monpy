@@ -717,3 +717,59 @@ The new combined frontier is led by `array/views/reversed_add_f32` at 2.157x,
 should be negative-stride elementwise dispatch for `reversed_add_f32`, with
 `moveaxis` metadata construction as the next view-wrapper fallback if the
 negative-stride profile points mostly at allocation.
+
+### 2026-05-08 exact rank-1 reverse slice view
+
+The fresh frontier still put `array/views/reversed_add_f32` first, but direct
+decomposition showed the fused reversed-add arithmetic was not the main cost:
+
+| operation | monpy us | numpy us |
+| --- | ---: | ---: |
+| `x[::-1]` view construction | 1.569 | 0.092 |
+| prebuilt reversed view add | 0.979 | 0.741 |
+| full `x[::-1] + y[::-1]` row | 4.294 | 0.876 |
+
+NumPy's ndarray model treats slicing as a view over the same memory with a
+different strided indexing scheme, so the exact `[::-1]` case is just
+`shape=[n]`, `stride=-old_stride`, and `offset=old_offset + (n - 1) * old_stride`.
+Monpy already had a native 1-D slice path, but the exact reverse case still paid
+Python shape access, Python `int` argument materialization, and native conversion
+of `(start, stop, step)`.
+
+`src/create/shape_ops.mojo` now exposes `reverse_1d_ops`, and
+`ndarray.__getitem__` dispatches exact rank-1 `[::-1]` to the new no-argument
+native method before the generic 1-D slice path. The generic path also reads the
+rank-1 length through `shape_at(0)` instead of materializing a one-element Python
+shape tuple.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `array/views/reversed_add_f32` | 6.655 | 4.616 | 2.188x | 1.512x |
+| `strides/elementwise/reverse_1d_add_f32` | 7.219 | 5.192 | 1.633x | 1.218x |
+| `array/views/strided_view_f32` | 3.717 | 3.431 | 1.799x | 1.609x |
+
+Direct post-change microbenchmarks measured `x[::-1]` at about 0.696 us and
+the full `x[::-1] + y[::-1]` row at about 2.385 us. That is a 2.25:1 reduction
+for exact reverse view construction and a 1.80:1 reduction for the full direct
+row.
+
+Profile artifacts:
+
+- `results/profile-20260508-reversed-add-f32-monpy-pre2/manifest.json`
+  measured the old monpy row at 6.685 us/call, 86.3 MB max RSS, no major
+  faults, and a 91,700 byte traced Python allocation peak.
+- `results/profile-20260508-reversed-add-f32-reverse1d-fastpath/manifest.json`
+  measured the patched row at 4.789 us/call, 87.2 MB max RSS, no major faults,
+  and a 1,856 byte traced Python allocation peak.
+- The post-change `sample(1)` report shows `reverse_1d_ops` instead of the old
+  `slice_1d_ops` wrapper stack for the exact `[::-1]` construction. The
+  remaining cost is now mostly Python wrapper/object allocation plus the
+  existing reversed-add native loop.
+
+The new broad frontier is `empty_like_shape_override_f32` at 1.905x,
+`moveaxis_f32` at 1.891x, and `squeeze_axis0_f32` at 1.849x. The next target
+should be the view-wrapper cluster only after a quick profile decides whether
+`moveaxis` or `empty_like(shape=...)` has the larger removable Python metadata
+tax.
