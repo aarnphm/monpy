@@ -39,12 +39,14 @@ eight or nine python interactions per array crossing. each one is 30–100 nanos
 - cpython interop is good enough that the code reads naturally and compiles.
 - every attribute read still pays the full cpython call cost on the way through.
 
-TODO:
+Current state:
 
-- one is the cpython buffer protocol. numpy arrays implement `Py_buffer`, which returns the data pointer, shape, strides, and itemsize through a single cpython call. one `PyObject_GetBuffer(obj, &view, flags)` returns everything currently fetched with eight separate attribute reads. cost on numpy's end is unchanged; on our end it becomes a single ffi call. mojo can speak the buffer protocol through the same `_get_dylib_function` machinery already in `accelerate.mojo` for blas, pointing at `libpython3.11.dylib` instead.
-- the other is numpy's c api: `PyArray_DATA(obj)`, `PyArray_NDIM(obj)`, `PyArray_DIMS(obj)`, `PyArray_STRIDES(obj)`. these macros expand to direct struct-field reads on `PyArrayObject` and cost single-digit nanoseconds each. faster than the buffer protocol, but the cost is linking against numpy's runtime dylib and tracking abi (numpy promises api stability across minor versions, abi only across patch versions). the buffer protocol is the portable answer; the numpy c api is the fast answer; do whichever the use case warrants.
+- the cpython buffer protocol path is now implemented in `src/buffer.mojo`. numpy arrays implement `Py_buffer`, which returns the data pointer, shape, strides, readonly bit, itemsize, and format string through one `PyObject_GetBuffer(obj, &view, flags)` call. `MONPY_BUFFER_FUNCTIONS` caches the `PyObject_GetBuffer` and `PyBuffer_Release` function pointers so the hot path does not call dyld `dlsym` per array crossing.
+- the remaining faster-but-less-portable option is numpy's c api: `PyArray_DATA(obj)`, `PyArray_NDIM(obj)`, `PyArray_DIMS(obj)`, `PyArray_STRIDES(obj)`. these macros expand to direct struct-field reads on `PyArrayObject` and cost single-digit nanoseconds each. faster than the buffer protocol, but the cost is linking against numpy's runtime dylib and tracking abi (numpy promises api stability across minor versions, abi only across patch versions). the buffer protocol is the portable answer; the numpy c api is the fast answer; do it only if the residual fixed cost still matters after wrapper allocation work.
 
-either path takes asarray from 35× to somewhere around 1.5–3×. the residual after that is the cost of allocating a mojo `Array` record on the new path, which is real but small.
+the buffer path took `asarray_zero_copy_f32` from the original 35×-class row to
+about 1.53× in the current array sweep. the residual is now mostly wrapper and
+array-record construction cost, not per-field cpython metadata reads.
 
 > the same shape of problem shows up in the other three cases.
 >

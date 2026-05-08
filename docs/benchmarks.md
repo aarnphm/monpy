@@ -548,3 +548,52 @@ References used for the direction:
   ndarray memory layout is defined by a data buffer, shape, dtype/itemsize, and
   byte strides; NumPy also notes that strided views are first-class and
   algorithms may handle arbitrary strides.
+
+### 2026-05-08 cached CPython buffer functions
+
+The previous buffer-protocol pass moved NumPy import metadata extraction into
+native code, but the macOS `sample(1)` report showed that the native bridge was
+still resolving `PyObject_GetBuffer` and `PyBuffer_Release` through
+`ExternalFunction.load(...)` on every call. In the short capture, dyld symbol
+lookup accounted for 428 of 2,269 samples under `asarray_from_buffer_ops`.
+
+`src/buffer.mojo` now stores both CPython buffer function pointers in one
+`_Global` value, `MONPY_BUFFER_FUNCTIONS`, initialized once from Mojo's existing
+CPython handle. The hot path still calls the official buffer protocol, but it
+does not ask dyld for the same two symbols every time an ndarray crosses the
+boundary.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `array/interop/asarray_zero_copy_f32` | 3.792 | 3.026 | 1.941x | 1.529x |
+| `array/interop/asarray_zero_copy_f64` | 3.746 | 3.068 | 1.928x | 1.541x |
+| `array/interop/asarray_zero_copy_bool` | 3.741 | 3.080 | 1.949x | 1.561x |
+| `array/interop/asarray_zero_copy_i64` | 3.745 | 3.209 | 1.925x | 1.558x |
+| `array/interop/array_copy_f32` | 4.320 | 3.663 | 1.875x | 1.553x |
+| `array/interop/array_copy_f64` | 4.448 | 3.748 | 1.896x | 1.526x |
+| `array/interop/array_copy_bool` | 4.238 | 3.579 | 1.911x | 1.551x |
+| `array/interop/array_copy_i64` | 4.434 | 3.657 | 1.882x | 1.517x |
+| `array/interop/from_dlpack_f32` | 3.660 | 2.927 | 1.711x | 1.365x |
+
+The direct native-buffer microbench for
+`_native.asarray_from_buffer(np.arange(1024, dtype=float32), float32.code, 0)`
+moved from about 1.35 us to about 0.56 us. The Python unchecked converter moved
+from about 1.37 us to about 0.63 us, and
+`mnp.asarray(..., dtype=mnp.float32, copy=False)` moved from about 1.62 us to
+about 0.84 us.
+
+Profile artifacts:
+
+- `results/profile-20260508-asarray-zero-copy-f32-buffer-fn-cache/manifest.json`
+  measured the patched monpy row at 3.276 us/call in the long child loop, down
+  from 4.030 us/call in
+  `results/profile-20260508-asarray-zero-copy-f32-buffer-bridge/manifest.json`.
+- The same profile reports 84.7 MB max RSS, 63.2 MB physical footprint in
+  `sample.txt`, and the same 1,718 byte traced Python allocation peak as the
+  previous buffer bridge pass.
+- Grepping the new `sample.txt` for `get_symbol` and `dlsym` returns no matches,
+  so the sampled dynamic-loader hotspot is gone. The remaining time is now in
+  the Python extension wrapper, native `Array` construction, and Python-side
+  `ndarray` wrapper allocation.

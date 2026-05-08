@@ -1,5 +1,5 @@
 from std.collections import List
-from std.ffi import c_char, c_int, _CPointer
+from std.ffi import _Global, c_char, c_int, _CPointer
 from std.memory.unsafe_pointer import unsafe_cast
 from std.python import PythonObject
 from std.python._cpython import ExternalFunction, Py_ssize_t, PyObjectPtr
@@ -58,16 +58,38 @@ comptime PyBUF_STRIDES: c_int = 0x10 | PyBUF_ND
 comptime PyBUF_RECORDS_RO: c_int = PyBUF_STRIDES | PyBUF_FORMAT
 
 
+comptime PyObject_GetBufferType = def(PyObjectPtr, _CPointer[Py_buffer, MutAnyOrigin], c_int) thin -> c_int
+comptime PyBuffer_ReleaseType = def(_CPointer[Py_buffer, MutAnyOrigin]) thin -> None
+
+
 # int PyObject_GetBuffer(PyObject *exporter, Py_buffer *view, int flags)
 comptime PyObject_GetBuffer = ExternalFunction[
     "PyObject_GetBuffer",
-    def(PyObjectPtr, _CPointer[Py_buffer, MutAnyOrigin], c_int) thin -> c_int,
+    PyObject_GetBufferType,
 ]
 
 # void PyBuffer_Release(Py_buffer *view)
 comptime PyBuffer_Release = ExternalFunction[
     "PyBuffer_Release",
-    def(_CPointer[Py_buffer, MutAnyOrigin]) thin -> None,
+    PyBuffer_ReleaseType,
+]
+
+
+@fieldwise_init
+struct PyBufferFunctions(Movable):
+    var get_buffer: PyObject_GetBufferType
+    var release: PyBuffer_ReleaseType
+
+    def __init__(out self):
+        ref cpy = Python().cpython()
+        self.get_buffer = PyObject_GetBuffer.load(cpy.lib.borrow())
+        self.release = PyBuffer_Release.load(cpy.lib.borrow())
+
+
+comptime MONPY_BUFFER_FUNCTIONS = _Global[
+    StorageType=PyBufferFunctions,
+    name="MONPY_BUFFER_FUNCTIONS",
+    init_fn=PyBufferFunctions.__init__,
 ]
 
 
@@ -76,10 +98,9 @@ def asarray_from_buffer_ops(
     requested_dtype_obj: PythonObject,
     copy_obj: PythonObject,
 ) raises -> PythonObject:
-    # Single-FFI numpy / buffer-protocol bridge. One `PyObject_GetBuffer`
-    # call replaces the eight-step `__array_interface__` walk in
-    # `asarray_from_numpy_ops`, dropping the per-array marshaling cost
-    # from ~700–1000 ns to ~150 ns.
+    # Single-FFI buffer-protocol bridge. One `PyObject_GetBuffer` call replaces
+    # the old multi-step `__array_interface__` walk, with cached function
+    # pointers so hot imports skip dyld symbol lookup.
     #
     # `requested_dtype_obj` carries the target dtype code or -1 to mean
     # "use whatever the source is". `copy_obj` is the tri-state copy flag:
@@ -88,9 +109,9 @@ def asarray_from_buffer_ops(
     var copy_flag = Int(py=copy_obj)
     var view = Py_buffer()
     var view_ptr = UnsafePointer(to=view).as_any_origin()
-    ref cpy = Python().cpython()
-    var get_buffer_fn = PyObject_GetBuffer.load(cpy.lib.borrow())
-    var release_fn = PyBuffer_Release.load(cpy.lib.borrow())
+    var buffer_functions = MONPY_BUFFER_FUNCTIONS.get_or_create_ptr()
+    var get_buffer_fn = buffer_functions[].get_buffer
+    var release_fn = buffer_functions[].release
     var rc = get_buffer_fn(obj._obj_ptr, view_ptr, PyBUF_RECORDS_RO)
     if Int(rc) != 0:
         raise Error("PyObject_GetBuffer failed")
@@ -181,9 +202,9 @@ def frombuffer_ops(
     var item_bytes = item_size(dtype_code)
     var view = Py_buffer()
     var view_ptr = UnsafePointer(to=view).as_any_origin()
-    ref cpy = Python().cpython()
-    var get_buffer_fn = PyObject_GetBuffer.load(cpy.lib.borrow())
-    var release_fn = PyBuffer_Release.load(cpy.lib.borrow())
+    var buffer_functions = MONPY_BUFFER_FUNCTIONS.get_or_create_ptr()
+    var get_buffer_fn = buffer_functions[].get_buffer
+    var release_fn = buffer_functions[].release
     var rc = get_buffer_fn(buffer_obj._obj_ptr, view_ptr, PyBUF_SIMPLE)
     if Int(rc) != 0:
         raise Error("frombuffer: object does not expose a contiguous buffer")
