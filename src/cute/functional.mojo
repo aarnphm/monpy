@@ -102,11 +102,29 @@ def composition(a: Layout, b: Layout) raises -> Layout:
     Shape of `C` equals shape of `B` (the input domain). Strides come
     from how `A` interprets `B`'s outputs.
 
-    Two layers:
-    1. Leaf-on-A case (B is a single mode): walk A's flat modes,
-       skip/split them by B's stride, then take B's size.
-    2. By-mode B case: compose each top-level mode of B with A and
-       concatenate.
+    Algebra: a `Layout` is the pair `(shape, stride)` interpreted as the
+    map `i → Σ_k crd_k(i) · stride[k]`. Composition `C = A ∘ B` is the
+    *function composition* of those maps under coordinate decomposition.
+    The construction below realizes it as a structural transformation
+    rather than a runtime function table.
+
+    Why two cases:
+    1. **Leaf-on-A**: when `B` is a single mode `(s, d)`, compose by
+       walking `A`'s flat modes, "consuming" stride `d` first (to skip
+       past or split the modes that B's stride hops over), then taking
+       size `s`. This produces a flattened sub-layout of `A` that sees
+       only the elements `B(0), B(1), …, B(s-1)`.
+    2. **By-mode B**: when `B` has multiple top-level modes, compose
+       each one against `A` independently and concatenate. This works
+       because composition distributes over the by-mode decomposition
+       of `B`.
+
+    Common failure modes (raises Error):
+    - "stride does not align" — `B` reaches into the middle of an `A`
+      mode in a way that isn't a divisor.
+    - "size does not align" — `B`'s domain exceeds what `A` can express.
+
+    Reference: CUTLASS `cute/01_layout.md` §3 + `02_layout_algebra.md` §1.
     """
     if b.shape.is_leaf():
         var s = b.shape.value()
