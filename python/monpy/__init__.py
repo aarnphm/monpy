@@ -879,16 +879,10 @@ def atleast_3d(*arys:object)->ndarray|tuple[ndarray, ...]:
   return res[0] if len(res)==1 else res
 
 def logspace(start:float, stop:float, num:int=50, endpoint:builtins.bool=True, base:float=10.0, *, dtype:object=None, device:object=None)->ndarray:
-  # Compute exponents in float64 then exponentiate via python scalar math.
   # The full numpy `axis` keyword is deferred — monpy v1 always emits 1D.
   _check_cpu(device)
   t=_resolve_dtype(dtype) if dtype is not None else float64
-  if num==0:return asarray([], dtype=t)
-  if num==1:return asarray([float(base)**float(start)], dtype=t)
-  if endpoint:exps=[start+(stop-start)*i/(num-1) for i in range(num)]
-  else:exps=[start+(stop-start)*i/num for i in range(num)]
-  vals=[float(base)**e for e in exps]
-  return asarray(vals, dtype=t)
+  return ndarray(_native.logspace(start, stop, num, endpoint, base, t.code))
 
 def geomspace(start:float, stop:float, num:int=50, endpoint:builtins.bool=True, *, dtype:object=None, device:object=None)->ndarray:
   if start<=0 or stop<=0:raise ValueError("geomspace requires positive start/stop")

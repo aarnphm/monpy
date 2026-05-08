@@ -2,6 +2,7 @@ from std.collections import List
 from std.math import cos, exp, isinf, isnan, log, nan, sin
 from std.python import PythonObject
 
+from accelerate import libm_pow_f64
 from domain import (
     ArrayDType,
     BackendKind,
@@ -240,6 +241,38 @@ def linspace_ops(
     var step = (stop - start) / Float64(num - 1)
     for i in range(num):
         set_logical_from_f64(result, i, start + step * Float64(i))
+    return PythonObject(alloc=result^)
+
+
+def logspace_ops(
+    start_obj: PythonObject,
+    stop_obj: PythonObject,
+    num_obj: PythonObject,
+    endpoint_obj: PythonObject,
+    base_obj: PythonObject,
+    dtype_obj: PythonObject,
+) raises -> PythonObject:
+    var dtype_code = Int(py=dtype_obj)
+    var start = Float64(py=start_obj)
+    var stop = Float64(py=stop_obj)
+    var num = Int(py=num_obj)
+    var endpoint = Bool(py=endpoint_obj)
+    var base = Float64(py=base_obj)
+    if num < 0:
+        raise Error("logspace() num must be non-negative")
+    var shape = List[Int]()
+    shape.append(num)
+    var result = make_empty_array(dtype_code, shape^)
+    if num == 0:
+        return PythonObject(alloc=result^)
+    if num == 1:
+        set_logical_from_f64(result, 0, libm_pow_f64(base, start))
+        return PythonObject(alloc=result^)
+    var denom = num - 1 if endpoint else num
+    var step = (stop - start) / Float64(denom)
+    for i in range(num):
+        var exponent = start + step * Float64(i)
+        set_logical_from_f64(result, i, libm_pow_f64(base, exponent))
     return PythonObject(alloc=result^)
 
 

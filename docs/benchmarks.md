@@ -433,3 +433,27 @@ benchmark movement is smaller than the isolated operation movement. Direct
 microbenchmarks moved `mnp.squeeze(existing_array, axis=0)` from about 1.10 us
 to about 0.83 us, and moved the native view operation from about 0.79 us to
 about 0.54 us.
+
+### 2026-05-08 native logspace fill
+
+`array/creation/logspace_50` was mostly Python object churn: the facade built a
+Python list of 50 exponents, computed 50 Python scalar powers, then copied that
+list back into native storage through `asarray`. NumPy documents scalar-base
+`logspace` as `linspace(start, stop)` followed by `power(base, y)`, so monpy now
+does the same shape of work inside one native creator: allocate the output, walk
+the linear exponent range, and store `pow(base, exponent)` directly.
+
+The first native version used Mojo's SIMD scalar `pow`, which was fast but
+missed the existing `1e-12` NumPy parity test by about `7.6e-10` relative on
+the 50-point `0..3` span. The committed path calls platform `libm` `pow`
+instead, preserving the strict parity test while still avoiding Python-list
+materialization.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `array/creation/logspace_50` | 22.809 | 4.494 | 4.156x | 0.836x |
+
+Direct microbenchmarks moved `mnp.logspace(0.0, 1.0, num=50)` from about 20.3
+us to about 2.3 us. The full benchmark row now beats NumPy for this case.

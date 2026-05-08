@@ -41,6 +41,7 @@ from create import (
     indices_ops,
     inv_ops,
     linspace_ops,
+    logspace_ops,
     logical_ops,
     lstsq_ops,
     materialize_c_contiguous_ops,
@@ -120,6 +121,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[frombuffer_ops]("frombuffer")
         module.def_function[arange_ops]("arange")
         module.def_function[linspace_ops]("linspace")
+        module.def_function[logspace_ops]("logspace")
         module.def_function[indices_ops]("indices")
         module.def_function[reshape_ops]("reshape")
         module.def_function[squeeze_all_ops]("squeeze_all")

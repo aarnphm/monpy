@@ -77,6 +77,13 @@ def test_logspace_matches_numpy_finite(num: int) -> None:
   numpy.testing.assert_allclose(res, expected, rtol=1e-12)
 
 
+def test_logspace_endpoint_base_and_dtype_match_numpy() -> None:
+  res = numpy.asarray(np.logspace(0.0, 3.0, 8, endpoint=False, base=2.0, dtype=np.float32))
+  expected = numpy.logspace(0.0, 3.0, 8, endpoint=False, base=2.0, dtype=numpy.float32)
+  numpy.testing.assert_allclose(res, expected, rtol=1e-6)
+  assert res.dtype == expected.dtype
+
+
 @pytest.mark.parametrize("num", [0, 1, 4, 16])
 def test_geomspace_matches_numpy(num: int) -> None:
   res = numpy.asarray(np.geomspace(1.0, 1000.0, num))

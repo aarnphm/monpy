@@ -11,12 +11,15 @@ from std.sys import CompilationTarget
 # function names are identical across both, so the call helpers below are
 # platform-agnostic — only the dylib resolution branches.
 comptime LIB_ACC_PATH = "/System/Library/Frameworks/Accelerate.framework/Accelerate"
+comptime LIB_SYSTEM_PATH = "/usr/lib/libSystem.B.dylib"
 
 # Linux dylib candidates, tried in order in `init_*_dylib`. OpenBLAS is the
 # de-facto standard on Linux distros (Ubuntu, Debian, Fedora, Arch all ship
 # it as the default BLAS provider when scipy/numpy are installed). The
 # unversioned `.so` links are dev packages; the versioned `.so.0` / `.so.3`
 # symlinks ship with the runtime package and are what numpy/scipy load too.
+comptime LIB_MATH_PATH_6 = "libm.so.6"
+comptime LIB_MATH_PATH = "libm.so"
 comptime LIB_OPENBLAS_PATH_0 = "libopenblas.so.0"
 comptime LIB_OPENBLAS_PATH = "libopenblas.so"
 comptime LIB_BLAS_PATH_3 = "libblas.so.3"
@@ -134,6 +137,8 @@ comptime vv_f64_type = def(
     UnsafePointer[Float64, ImmutAnyOrigin],
     UnsafePointer[Int32, ImmutAnyOrigin],
 ) thin -> None
+
+comptime libm_pow_f64_type = def(Float64, Float64) thin -> Float64
 
 comptime vdsp_binary_f32_type = def(
     UnsafePointer[Float32, ImmutAnyOrigin],
@@ -415,6 +420,12 @@ comptime MONPY_LAPACK_DYLIB = _Global[
     on_error_msg=lapack_error_msg,
 ]
 
+comptime MONPY_MATH_DYLIB = _Global[
+    "MONPY_MATH_DYLIB",
+    init_math_dylib,
+    on_error_msg=math_error_msg,
+]
+
 
 def blas_error_msg() -> Error:
     comptime if CompilationTarget.is_macos():
@@ -435,6 +446,14 @@ def lapack_error_msg() -> Error:
             " liblapack-dev` or use OpenBLAS (which bundles LAPACK)."
         )
     return Error("LAPACK backend not configured for this platform")
+
+
+def math_error_msg() -> Error:
+    comptime if CompilationTarget.is_macos():
+        return Error("cannot find libSystem at ", LIB_SYSTEM_PATH)
+    elif CompilationTarget.is_linux():
+        return Error("cannot find libm on Linux")
+    return Error("math dylib not configured for this platform")
 
 
 def init_blas_dylib() -> OwnedDLHandle:
@@ -495,6 +514,24 @@ def init_lapack_dylib() -> OwnedDLHandle:
     return OwnedDLHandle(unsafe_uninitialized=True)
 
 
+def init_math_dylib() -> OwnedDLHandle:
+    comptime if CompilationTarget.is_macos():
+        try:
+            return OwnedDLHandle(LIB_SYSTEM_PATH)
+        except:
+            return OwnedDLHandle(unsafe_uninitialized=True)
+    elif CompilationTarget.is_linux():
+        try:
+            return OwnedDLHandle(LIB_MATH_PATH_6)
+        except:
+            pass
+        try:
+            return OwnedDLHandle(LIB_MATH_PATH)
+        except:
+            pass
+    return OwnedDLHandle(unsafe_uninitialized=True)
+
+
 @always_inline
 def is_blas_available() -> Bool:
     # True when we have a path to call into BLAS / LAPACK from this build.
@@ -539,6 +576,12 @@ def get_lapack_function[func_name: StaticString, result_type: TrivialRegisterPas
 @always_inline
 def get_accelerate_function[func_name: StaticString, result_type: TrivialRegisterPassable]() raises -> result_type:
     return get_blas_function[func_name, result_type]()
+
+
+@always_inline
+def libm_pow_f64(base: Float64, exponent: Float64) raises -> Float64:
+    var function = _ffi_get_dylib_function[MONPY_MATH_DYLIB(), "pow", libm_pow_f64_type]()
+    return function(base, exponent)
 
 
 @always_inline
