@@ -152,6 +152,7 @@ while profile runs collect heavier evidence.
 monpy-profile \
   --types strides \
   --case rank3_transpose_add_f32 \
+  --candidate monpy \
   --duration 8 \
   --output-dir results/profile-rank3
 ```
@@ -199,3 +200,16 @@ monpy-profile \
 
 This gives a hardware-counter pass that can distinguish a Python wrapper
 regression from a cache-miss, instruction-count, or branch-miss regression.
+
+Run the same case with `--candidate numpy` when the question is whether monpy is
+losing to NumPy wrapper overhead, iterator behavior, or a lower-level library
+call:
+
+```bash
+monpy-profile \
+  --types strides \
+  --case rank3_transpose_add_f32 \
+  --candidate numpy \
+  --duration 8 \
+  --output-dir results/profile-rank3-numpy
+```

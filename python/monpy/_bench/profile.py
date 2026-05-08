@@ -125,6 +125,8 @@ def child_command(
     "--child",
     "--case",
     args.case,
+    "--candidate",
+    args.candidate,
     "--types",
     ",".join(args.types),
     "--vector-size",
@@ -318,8 +320,11 @@ def child_main(args: argparse.Namespace) -> None:
     verify_same(monpy_result, numpy_result, rtol=case.rtol, atol=case.atol)
   else:
     verify_shape_dtype(monpy_result, numpy_result, check_dtype=case.check_dtype)
+  bench_fn = case.monpy_fn if args.candidate == "monpy" else case.numpy_fn
   for _ in range(args.warmup):
-    force_monpy(call_bench_fn(case.monpy_fn))
+    result = call_bench_fn(bench_fn)
+    if args.candidate == "monpy":
+      force_monpy(result)
   if args.trace_allocations and not tracemalloc.is_tracing():
     tracemalloc.start(args.tracemalloc_frames)
   if args.trace_allocations:
@@ -329,7 +334,9 @@ def child_main(args: argparse.Namespace) -> None:
   deadline = started + args.duration
   iterations = 0
   while time.perf_counter() < deadline:
-    force_monpy(call_bench_fn(case.monpy_fn))
+    result = call_bench_fn(bench_fn)
+    if args.candidate == "monpy":
+      force_monpy(result)
     iterations += 1
   finished = time.perf_counter()
   after = resource.getrusage(resource.RUSAGE_SELF)
@@ -339,10 +346,11 @@ def child_main(args: argparse.Namespace) -> None:
     current_bytes, peak_bytes = tracemalloc.get_traced_memory()
   payload = {
     "case": case_id(case),
+    "candidate": args.candidate,
     "duration_s": finished - started,
     "iterations": iterations,
-    "monpy_us_per_call": ((finished - started) / iterations) * 1_000_000 if iterations else None,
-    "backend": backend_records(monpy_result),
+    "us_per_call": ((finished - started) / iterations) * 1_000_000 if iterations else None,
+    "backend": backend_records(monpy_result) if args.candidate == "monpy" else [],
     "resource": usage_record(before, after),
     "tracemalloc": {
       "current_bytes": current_bytes,
@@ -357,6 +365,7 @@ def child_main(args: argparse.Namespace) -> None:
 def main(argv: Sequence[str] | None = None) -> None:
   parser = argparse.ArgumentParser(description="profile one monpy benchmark case with OS profilers")
   parser.add_argument("--case", required=True, help="case name or full group/name")
+  parser.add_argument("--candidate", choices=("monpy", "numpy"), default="monpy")
   parser.add_argument("--types", type=parse_types, default=parse_types("strides"))
   parser.add_argument("--vector-size", type=positive_int, default=1024)
   parser.add_argument("--vector-sizes", type=parse_sizes, default=parse_sizes("16384,262144,1048576"))
@@ -414,6 +423,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     "command": sys.argv[:] if argv is None else [sys.argv[0], *argv],
     "cwd": str(Path.cwd()),
     "case": baseline["case"],
+    "candidate": args.candidate,
     "duration_s": args.duration,
     "measurement": baseline,
     "allocation_measurement": allocation,
