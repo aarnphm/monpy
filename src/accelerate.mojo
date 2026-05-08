@@ -111,6 +111,40 @@ comptime cblas_zgemm_type = def(
     Int32,
 ) thin -> None
 
+comptime cblas_cgemm_ilp64_type = def(
+    _CBLASOrder,
+    _CBLASTranspose,
+    _CBLASTranspose,
+    Int64,
+    Int64,
+    Int64,
+    UnsafePointer[Float32, ImmutAnyOrigin],
+    UnsafePointer[Float32, ImmutAnyOrigin],
+    Int64,
+    UnsafePointer[Float32, ImmutAnyOrigin],
+    Int64,
+    UnsafePointer[Float32, ImmutAnyOrigin],
+    UnsafePointer[Float32, MutAnyOrigin],
+    Int64,
+) thin -> None
+
+comptime cblas_zgemm_ilp64_type = def(
+    _CBLASOrder,
+    _CBLASTranspose,
+    _CBLASTranspose,
+    Int64,
+    Int64,
+    Int64,
+    UnsafePointer[Float64, ImmutAnyOrigin],
+    UnsafePointer[Float64, ImmutAnyOrigin],
+    Int64,
+    UnsafePointer[Float64, ImmutAnyOrigin],
+    Int64,
+    UnsafePointer[Float64, ImmutAnyOrigin],
+    UnsafePointer[Float64, MutAnyOrigin],
+    Int64,
+) thin -> None
+
 comptime cblas_sgemv_type = def(
     _CBLASOrder,
     _CBLASTranspose,
@@ -1098,6 +1132,16 @@ def get_cblas_zgemm_function() raises -> cblas_zgemm_type:
 
 
 @always_inline
+def get_cblas_cgemm_ilp64_function() raises -> cblas_cgemm_ilp64_type:
+    return get_blas_function["cblas_cgemm$NEWLAPACK$ILP64", cblas_cgemm_ilp64_type]()
+
+
+@always_inline
+def get_cblas_zgemm_ilp64_function() raises -> cblas_zgemm_ilp64_type:
+    return get_blas_function["cblas_zgemm$NEWLAPACK$ILP64", cblas_zgemm_ilp64_type]()
+
+
+@always_inline
 def cblas_cgemm_row_major(
     m: Int,
     n: Int,
@@ -1109,10 +1153,29 @@ def cblas_cgemm_row_major(
     # Complex single-precision GEMM. Row-major layout, no transposes.
     # Pointers are interleaved (real, imag) float32 pairs; lda/ldb/ldc are
     # in *complex* element units, not float units.
-    var cgemm = get_cblas_cgemm_function()
     var alpha = InlineArray[Float32, 2](fill=0.0)
     alpha[0] = 1.0
     var beta = InlineArray[Float32, 2](fill=0.0)
+    comptime if CompilationTarget.is_macos():
+        var cgemm = get_cblas_cgemm_ilp64_function()
+        cgemm(
+            _CBLASOrder.ROW_MAJOR,
+            _CBLASTranspose.NO_TRANSPOSE,
+            _CBLASTranspose.NO_TRANSPOSE,
+            Int64(m),
+            Int64(n),
+            Int64(k),
+            rebind[UnsafePointer[Float32, ImmutAnyOrigin]](alpha.unsafe_ptr()),
+            rebind[UnsafePointer[Float32, ImmutAnyOrigin]](a_ptr),
+            Int64(k),
+            rebind[UnsafePointer[Float32, ImmutAnyOrigin]](b_ptr),
+            Int64(n),
+            rebind[UnsafePointer[Float32, ImmutAnyOrigin]](beta.unsafe_ptr()),
+            rebind[UnsafePointer[Float32, MutAnyOrigin]](c_ptr),
+            Int64(n),
+        )
+        return
+    var cgemm = get_cblas_cgemm_function()
     cgemm(
         _CBLASOrder.ROW_MAJOR,
         _CBLASTranspose.NO_TRANSPOSE,
@@ -1140,10 +1203,29 @@ def cblas_zgemm_row_major(
     a_ptr: UnsafePointer[Float64, MutExternalOrigin],
     b_ptr: UnsafePointer[Float64, MutExternalOrigin],
 ) raises:
-    var zgemm = get_cblas_zgemm_function()
     var alpha = InlineArray[Float64, 2](fill=0.0)
     alpha[0] = 1.0
     var beta = InlineArray[Float64, 2](fill=0.0)
+    comptime if CompilationTarget.is_macos():
+        var zgemm = get_cblas_zgemm_ilp64_function()
+        zgemm(
+            _CBLASOrder.ROW_MAJOR,
+            _CBLASTranspose.NO_TRANSPOSE,
+            _CBLASTranspose.NO_TRANSPOSE,
+            Int64(m),
+            Int64(n),
+            Int64(k),
+            rebind[UnsafePointer[Float64, ImmutAnyOrigin]](alpha.unsafe_ptr()),
+            rebind[UnsafePointer[Float64, ImmutAnyOrigin]](a_ptr),
+            Int64(k),
+            rebind[UnsafePointer[Float64, ImmutAnyOrigin]](b_ptr),
+            Int64(n),
+            rebind[UnsafePointer[Float64, ImmutAnyOrigin]](beta.unsafe_ptr()),
+            rebind[UnsafePointer[Float64, MutAnyOrigin]](c_ptr),
+            Int64(n),
+        )
+        return
+    var zgemm = get_cblas_zgemm_function()
     zgemm(
         _CBLASOrder.ROW_MAJOR,
         _CBLASTranspose.NO_TRANSPOSE,

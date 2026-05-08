@@ -957,3 +957,61 @@ Next target remains `complex/matmul_64_complex64`: it already reports
 `used_accelerate=True`, so the investigation should focus on BLAS function
 lookup/call overhead, row-major complex GEMM calling convention, and whether a
 small-N Mojo complex microkernel can beat the framework call for 64x64.
+
+### 2026-05-08 macOS ILP64 complex GEMM
+
+The refreshed heartbeat slice confirmed attention was no longer the hot
+regression on this machine:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 81.206 | 109.272 | 0.743x |
+| `attention/softmax/causal_scores_t32_f32` | 8.144 | 10.272 | 0.814x |
+| `attention/attention/causal_attention_t32_d32_f32` | 20.717 | 22.987 | 0.914x |
+
+The same run left `complex/matmul_64_complex64` as the largest direct blocker:
+16.257 us for monpy vs 7.221 us for NumPy, a 2.318x ratio. `used_accelerate()`
+was already true, so the failure was not a missed BLAS dispatch.
+
+The useful profiler fact was the symbol, not just the wall clock:
+
+- pre-fix monpy sample:
+  `maybe_matmul_contiguous -> cblas_sgemm` inside `libBLAS.dylib`
+- NumPy sample:
+  `CFLOAT_matmul_matrixmatrix -> cblas_cgemm$NEWLAPACK$ILP64`
+- post-fix monpy sample:
+  `maybe_matmul_contiguous -> cblas_cgemm$NEWLAPACK$ILP64`
+
+The SDK headers explain the split. The old `cblas.h` complex GEMM takes `int`
+sizes and is deprecated with guidance to compile against the updated CBLAS
+interface; `cblas_new.h` routes `cblas_cgemm` through `__LAPACK_ALIAS`, and
+`lapack_types.h` makes `__LAPACK_int` a `long` under ILP64. The local
+`libBLAS.tbd` exposes both `_cblas_cgemm$NEWLAPACK` and
+`_cblas_cgemm$NEWLAPACK$ILP64`, matching the symbol NumPy samples.
+
+`src/accelerate.mojo` now uses macOS-only ILP64 function signatures for
+`cblas_cgemm$NEWLAPACK$ILP64` and `cblas_zgemm$NEWLAPACK$ILP64`, while leaving
+Linux on the existing LP64/OpenBLAS-compatible symbols. A raw ctypes probe on
+the exact 64x64 complex64 workload measured the old symbol at about 17.020
+us/call and the ILP64 symbol at about 8.490 us/call, which matched the monpy
+delta after rebuilding.
+
+Focused verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_einsum.py::test_complex64_matmul_via_cgemm tests/python/numpy_compat/test_einsum.py::test_complex128_matmul_via_zgemm tests/python/numpy_compat/test_numeric.py::test_matmul_matches_numpy_for_1d_and_2d -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --repeats 7 --rounds 5 --matrix-sizes 64 --format json --sort ratio --output-dir results/local-sweep-20260508-complex-ilp64-cgemm --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/matmul/matmul_64_complex64 --types complex --matrix-sizes 64 --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260508-complex-matmul64-ilp64-monpy --sample --no-perf-stat
+```
+
+Post-fix benchmark results:
+
+| row | before | after | delta |
+| --- | ---: | ---: | ---: |
+| `complex/matmul_64_complex64` | 16.257 us, 2.318x | 7.277 us, 1.042x | 2.23x faster |
+
+The post-fix profile loop measured 7.535 us/call, 49.7 MB max RSS, no major
+faults, and a 1,590 byte traced allocation peak. Next target moves to the
+complex conversion/view cluster: `astype_complex64_to_complex128` remains
+2.008x NumPy, followed by `reversed_add_complex64` at 1.871x.
