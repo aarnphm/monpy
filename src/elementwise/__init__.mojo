@@ -108,6 +108,19 @@ from cute.layout import Layout
 
 
 def apply_binary_f64(lhs: Float64, rhs: Float64, op: Int) raises -> Float64:
+    # Scalar f64 op-dispatcher — universal fallback for any binary op whose
+    # operands have been promoted/decompressed into f64. Used by complex
+    # kernels (after Smith division), boxed scalar paths, and reduction
+    # gather sites that don't have a typed-SIMD specialisation.
+    #
+    # Edge-case map (numpy parity):
+    # - MAXIMUM/MINIMUM propagate NaN: NaN ∗ x ⇒ NaN. Distinguishes from
+    #   FMAX/FMIN which treat NaN as missing (NaN ∗ x ⇒ x).
+    # - FLOOR_DIV is `floor(a/b)` here; integer dtypes use Python `//` upstream.
+    # - MOD follows numpy's `a - floor(a/b)·b` (matches Python `%`); LAPACK's
+    #   fmod truncates toward zero, which we don't want.
+    # - POWER routes through SIMD[f64, 1].__pow__ → libm `pow`.
+    # - DIV by zero on float: IEEE returns ±inf or NaN, no raise.
     if op == BinaryOp.ADD.value:
         return lhs + rhs
     if op == BinaryOp.SUB.value:
@@ -541,8 +554,20 @@ def binary_scalar_contig_typed[
 def apply_unary_typed_vec[
     dtype: DType, width: Int
 ](value: SIMD[dtype, width], op: Int) raises -> SIMD[dtype, width] where dtype.is_floating_point():
-    # Comptime-typed parametric variant of apply_unary_*_vec. Constrained
-    # to floating-point dtypes since std.math sin/cos/exp/log require it.
+    # Comptime-typed parametric variant of apply_unary_*_vec. Constrained to
+    # floating-point dtypes — std.math sin/cos/exp/log/etc require IEEE FP at
+    # the stdlib layer; integer dtypes raise upstream before reaching here.
+    #
+    # Each op below lowers to an LLVM intrinsic on most targets (e.g.
+    # `@llvm.sin.v4f32`) and libm-per-lane elsewhere — error bound ~1 ulp on
+    # glibc, ~2 ulp on macOS libm. Special values follow IEEE: log(0) = -inf,
+    # log(<0) = NaN, sqrt(<0) = NaN, atan2(0, 0) = 0.
+    #
+    # f16 caveat: Mojo KGEN cannot legalise atan2f16/hypotf16/copysignf16
+    # (no f16 libm intrinsics on most targets). The dispatcher upstream gates
+    # those three ops via `comptime if dtype != DType.float16` and routes f16
+    # through f32 promote-demote. This kernel itself never sees an f16 +
+    # gated-op pair. Cross-ref `docs/research/simd-vectorisation.md §5`.
     if op == UnaryOp.SIN.value:
         return sin(value)
     if op == UnaryOp.COS.value:
@@ -634,9 +659,26 @@ def strided_binary_walk_typed[
     outer_result_carry: List[Int],
     op: Int,
 ) raises:
-    # Comptime-typed body for `maybe_binary_same_shape_strided`. Combines the
-    # outer coord-stack walker (axis-iteration with no divmod) with the four
-    # inner-loop kinds picked by `pick_inner_axis_for_strided_binary`.
+    # Comptime-typed body for `maybe_binary_same_shape_strided`. Combines an
+    # outer coord-stack walker (axis-iteration with no divmod — uses
+    # pre-computed carry tables to advance offsets per-axis) with one of four
+    # inner-loop kinds picked upstream by `pick_inner_axis_for_strided_binary`:
+    #
+    #   inner_kind == 1: unit-stride contiguous inner. SIMD-vectorise the inner
+    #     loop (load[width] / store[width]) until tail; tail is scalar. Highest
+    #     bandwidth — useful bytes per cycle close to peak L1.
+    #   inner_kind == 2: unit-stride inner with shared outer carry. Same SIMD
+    #     vectorise as kind 1; outer carries are non-trivial enough to warrant
+    #     a separate path that recomputes offsets per-row.
+    #   inner_kind == 3: strided inner (non-unit). Per-element gather/scatter
+    #     through `lp[i*stride]` — effective bandwidth is one element per
+    #     cycle, no SIMD.
+    #   inner_kind == 4: reversed inner (negative stride). Same as kind 3 but
+    #     the index walks backward; no SIMD because vector loads can't reverse.
+    #
+    # The four-way split exists because SIMD bandwidth is dominated by load/store
+    # alignment; picking the wrong inner walk leaves 4-8× perf on the floor.
+    # Cross-ref `docs/research/memory-alignment.md §3`.
     # Caller must verify dtype_code matches `dtype`.
     var lhs_data = lhs.data.bitcast[Scalar[dtype]]()
     var rhs_data = rhs.data.bitcast[Scalar[dtype]]()
@@ -2816,6 +2858,99 @@ def maybe_binary_rank2_transposed_tile[
     return True
 
 
+def maybe_binary_rank3_axis0_tile[
+    dtype: DType
+](lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
+    # Batched variant of the rank-2 transposed tile. Covers layouts like
+    # C-contig rank-3 `.transpose((2, 0, 1))`: each middle-axis slice is a
+    # rank-2 transpose with input stride-1 on axis 0 and c-contig output.
+    if len(lhs.shape) != 3:
+        return False
+    if not same_shape(lhs.shape, rhs.shape) or not same_shape(lhs.shape, result.shape):
+        return False
+    if lhs.strides[0] != 1 or rhs.strides[0] != 1:
+        return False
+    if not is_c_contiguous(result):
+        return False
+    var rows = lhs.shape[0]
+    var batches = lhs.shape[1]
+    var cols = lhs.shape[2]
+    if rows < 4 or cols < 4:
+        return False
+    var lhs_batch_stride = lhs.strides[1]
+    var rhs_batch_stride = rhs.strides[1]
+    var lhs_col_stride = lhs.strides[2]
+    var rhs_col_stride = rhs.strides[2]
+    var result_row_stride = result.strides[0]
+    var result_batch_stride = result.strides[1]
+    var lhs_data = lhs.data.bitcast[Scalar[dtype]]() + lhs.offset_elems
+    var rhs_data = rhs.data.bitcast[Scalar[dtype]]() + rhs.offset_elems
+    var result_data = result.data.bitcast[Scalar[dtype]]() + result.offset_elems
+    comptime tile = 4
+    var main_rows = rows - (rows % tile)
+    var main_cols = cols - (cols % tile)
+    for batch in range(batches):
+        var lhs_batch = lhs_data + batch * lhs_batch_stride
+        var rhs_batch = rhs_data + batch * rhs_batch_stride
+        var result_batch = result_data + batch * result_batch_stride
+        var i = 0
+        while i < main_rows:
+            var j = 0
+            while j < main_cols:
+                var l0 = (lhs_batch + i + j * lhs_col_stride).load[width=tile](0)
+                var l1 = (lhs_batch + i + (j + 1) * lhs_col_stride).load[width=tile](0)
+                var l2 = (lhs_batch + i + (j + 2) * lhs_col_stride).load[width=tile](0)
+                var l3 = (lhs_batch + i + (j + 3) * lhs_col_stride).load[width=tile](0)
+                var r0 = (rhs_batch + i + j * rhs_col_stride).load[width=tile](0)
+                var r1 = (rhs_batch + i + (j + 1) * rhs_col_stride).load[width=tile](0)
+                var r2 = (rhs_batch + i + (j + 2) * rhs_col_stride).load[width=tile](0)
+                var r3 = (rhs_batch + i + (j + 3) * rhs_col_stride).load[width=tile](0)
+                var s0 = l0 + r0 if op == BinaryOp.ADD.value else apply_binary_typed_vec[dtype, tile](l0, r0, op)
+                var s1 = l1 + r1 if op == BinaryOp.ADD.value else apply_binary_typed_vec[dtype, tile](l1, r1, op)
+                var s2 = l2 + r2 if op == BinaryOp.ADD.value else apply_binary_typed_vec[dtype, tile](l2, r2, op)
+                var s3 = l3 + r3 if op == BinaryOp.ADD.value else apply_binary_typed_vec[dtype, tile](l3, r3, op)
+                var u0 = s0.shuffle[0, 4, 1, 5](s1)
+                var u1 = s0.shuffle[2, 6, 3, 7](s1)
+                var u2 = s2.shuffle[0, 4, 1, 5](s3)
+                var u3 = s2.shuffle[2, 6, 3, 7](s3)
+                var t0 = u0.shuffle[0, 1, 4, 5](u2)
+                var t1 = u0.shuffle[2, 3, 6, 7](u2)
+                var t2 = u1.shuffle[0, 1, 4, 5](u3)
+                var t3 = u1.shuffle[2, 3, 6, 7](u3)
+                (result_batch + i * result_row_stride + j).store(0, t0)
+                (result_batch + (i + 1) * result_row_stride + j).store(0, t1)
+                (result_batch + (i + 2) * result_row_stride + j).store(0, t2)
+                (result_batch + (i + 3) * result_row_stride + j).store(0, t3)
+                j += tile
+            while j < cols:
+                comptime for k in range(tile):
+                    var lv = lhs_batch[i + k + j * lhs_col_stride]
+                    var rv = rhs_batch[i + k + j * rhs_col_stride]
+                    if op == BinaryOp.ADD.value:
+                        result_batch[(i + k) * result_row_stride + j] = lv + rv
+                    else:
+                        result_batch[(i + k) * result_row_stride + j] = apply_binary_typed_vec[dtype, 1](
+                            SIMD[dtype, 1](lv), SIMD[dtype, 1](rv), op
+                        )[0]
+                j += 1
+            i += tile
+        while i < rows:
+            var j = 0
+            while j < cols:
+                var lv = lhs_batch[i + j * lhs_col_stride]
+                var rv = rhs_batch[i + j * rhs_col_stride]
+                if op == BinaryOp.ADD.value:
+                    result_batch[i * result_row_stride + j] = lv + rv
+                else:
+                    result_batch[i * result_row_stride + j] = apply_binary_typed_vec[dtype, 1](
+                        SIMD[dtype, 1](lv), SIMD[dtype, 1](rv), op
+                    )[0]
+                j += 1
+            i += 1
+    result.backend_code = BackendKind.FUSED.value
+    return True
+
+
 def maybe_binary_rank2_transposed_tile_bcast_1d[
     dtype: DType
 ](lhs: Array, rhs: Array, mut result: Array, op: Int, rhs_on_left: Bool) raises -> Bool:
@@ -4141,6 +4276,26 @@ def swap_rhs_rows(mut rhs: List[Float64], columns: Int, lhs: Int, rhs_row: Int):
 
 
 def lu_decompose_partial_pivot(mut lu: List[Float64], mut pivots: List[Int], n: Int) raises -> Int:
+    # Doolittle-style in-place LU with partial (row) pivoting. Returns the
+    # permutation parity (+1 / -1) for det() computation, or 0 on singular.
+    #
+    # Algorithm: for each column k, find row i ≥ k with max |A[i, k]| and
+    # swap rows (k, i) — recording the pivot in pivots[k]. Then eliminate
+    # below the pivot:
+    #   A[i, k]      = A[i, k] / A[k, k]      (multiplier into L)
+    #   A[i, j > k] -= A[i, k] · A[k, j]      (update U)
+    # for each i > k. After the column-k pass, A[k, k:] holds U's k-th row
+    # and A[k+1:, k] holds L's k-th column below the diagonal. L is unit
+    # lower-triangular; the unit diagonal is implicit and not stored.
+    #
+    # Why pivoting: without it LU fails on `[[0, 1], [1, 0]]` (the leading
+    # 1×1 minor is 0, so A[i, k] / A[k, k] divides by zero) and the growth
+    # factor is unbounded. Partial pivoting bounds the growth factor by
+    # 2^(n-1) (Wilkinson) and is empirically much better.
+    #
+    # Sign tracking: every row swap flips `sign`. Returned to lu_det to
+    # compute det(A) = sign(P) · ∏ A[k, k].
+    # Cross-ref `docs/research/blas-lapack-dispatch.md §3`.
     var sign = 1
     for k in range(n):
         var pivot = k
@@ -4256,6 +4411,11 @@ def lu_inverse_into(a: Array, mut result: Array) raises:
 
 
 def lu_det(a: Array) raises -> Float64:
+    # det(A) = sign(P) · ∏ A[k, k] from in-place LU with partial pivoting.
+    # The product of the diagonal of U equals det(U); det(L) = 1 (unit
+    # diagonal by construction); det(P) = ±1 from the pivot parity.
+    # Singular case (sign == 0) → det == 0 directly, no diagonal traversal.
+    # Cross-ref `docs/research/blas-lapack-dispatch.md §3.2`.
     if len(a.shape) != 2 or a.shape[0] != a.shape[1]:
         raise Error("linalg.det() requires a square rank-2 matrix")
     var n = a.shape[0]
@@ -4589,6 +4749,11 @@ def lapack_eig_f32_real_into(
     Caller must check before exposing to numpy-parity APIs (we don't have
     complex dtype yet; mixed real+complex eigenvalue spectra raise upstream).
     The real-only path writes wr_out, vr_out (column eigenvectors)."""
+    # Single-precision twin of lapack_eig_f64_real_into: identical compressed
+    # WR/WI encoding (sgeev follows the same conjugate-pair convention as
+    # dgeev), identical all_real short-circuit, identical eigenvector layout.
+    # See the f64 sibling for the full encoding rules and unpacking convention.
+    # Cross-ref `docs/research/blas-lapack-dispatch.md §4.2`.
     var n = a.shape[0]
     var buf = alloc[Float32](n * n)
     var wr = alloc[Float32](n if n > 0 else 1)
