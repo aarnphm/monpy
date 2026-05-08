@@ -28,8 +28,12 @@ jobs:
         include:
           - os: macos-15
             mojo_flags: ""
+            comment_key: arm
+            comment_title: monpy benchmark sweep (ARM)
           - os: ubuntu-latest
             mojo_flags: "--target-cpu=x86-64"
+            comment_key: ubuntu
+            comment_title: monpy benchmark sweep (Ubuntu)
     env:
       BENCH_LOOPS: "200"
       BENCH_REPEATS: "5"
@@ -137,17 +141,23 @@ jobs:
           test -s "$benchmark_dir/manifest.json"
 
       - name: post commit comment
-        if: runner.os == 'macOS'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
           benchmark_dir="results/$(date -u +%F)"
-          .venv/bin/python .github/scripts/posts.py \
+          post_args=(
             "$benchmark_dir/results.json" \
-            --comment-output benchmark-comment.md \
+            --comment-key "${{ matrix.comment_key }}" \
+            --comment-title "${{ matrix.comment_title }}" \
+            --comment-output "benchmark-comment-${{ matrix.comment_key }}.md" \
             --post
+          )
+          if [[ "${{ matrix.comment_key }}" == "arm" ]]; then
+            post_args+=(--replace-legacy)
+          fi
+          .venv/bin/python .github/scripts/posts.py "${post_args[@]}"
 
       - name: upload benchmark artifacts
         if: always()
@@ -156,5 +166,5 @@ jobs:
           name: monpy-bench-${{ matrix.os }}-${{ github.sha }}
           path: |
             results/**
-            benchmark-comment.md
+            benchmark-comment-*.md
           if-no-files-found: ignore

@@ -90,14 +90,20 @@ python .github/scripts/posts.py \
   --comment-output benchmark-comment.md
 ```
 
-CI passes `--post` on macOS to upsert the commit comment:
+CI passes `--post` from each benchmark matrix job. Use a distinct `--comment-key` per platform so ARM
+and Ubuntu update separate commit comments:
 
 ```bash
 python .github/scripts/posts.py \
   results/$(date +%F)/results.json \
-  --comment-output benchmark-comment.md \
+  --comment-key arm \
+  --comment-title "monpy benchmark sweep (ARM)" \
+  --comment-output benchmark-comment-arm.md \
   --post
 ```
+
+The ARM job also passes `--replace-legacy` so the old single benchmark comment is migrated to the
+ARM-specific marker. Ubuntu omits that flag and creates or updates only the Ubuntu comment.
 
 The comment includes a `winner` column. `monpy` means the median ratio was below `0.995x`; `numpy` means it was above `1.005x`; values inside that band are reported as `tie`.
 

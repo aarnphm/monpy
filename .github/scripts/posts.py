@@ -5,6 +5,7 @@ import json
 import math
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +21,7 @@ LEGACY_MARKERS = (
   "<!-- monpy-array-core-benchmark -->",
 )
 API_VERSION = "2026-03-10"
+COMMENT_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 
 def finite_float(value: object) -> float:
@@ -65,6 +67,18 @@ def string_value(value: object) -> str:
   if isinstance(value, int | float):
     return str(value)
   raise TypeError(f"expected scalar string-ish value, got {type(value).__name__}")
+
+
+def comment_marker(comment_key: str | None) -> str:
+  if comment_key is None:
+    return MARKER
+  normalized = comment_key.strip().lower()
+  if not COMMENT_KEY_PATTERN.fullmatch(normalized):
+    raise ValueError(
+      "comment key must use lowercase letters, digits, '.', '_', or '-' "
+      "and start with a letter or digit"
+    )
+  return f"<!-- monpy-bench:{normalized} -->"
 
 
 def result_rows(results: Sequence[Mapping[str, object]]) -> list[tuple[str, ...]]:
@@ -196,10 +210,15 @@ def render_metadata_table(rows: Sequence[tuple[str, str]]) -> str:
   return "\n".join(body)
 
 
-def render_comment(payload: Mapping[str, object]) -> str:
+def render_comment(
+  payload: Mapping[str, object],
+  *,
+  marker: str = MARKER,
+  title: str = "monpy benchmark sweep",
+) -> str:
   return "\n\n".join([
-    MARKER,
-    "### monpy benchmark sweep",
+    marker,
+    f"### {title}",
     render_metadata_table(metadata_rows()),
     (
       "lower `monpy/numpy` is better for monpy; values below `1.000x` mean "
@@ -235,37 +254,40 @@ def request_json(
       raw = response.read()
   except urllib.error.HTTPError as exc:
     detail = exc.read().decode(errors="replace")
-    raise RuntimeError(f"github api {method} {path} failed with {exc.code}: {detail}") from exc
+    message = f"github api {method} {path} failed with {exc.code}: {detail}"
+    raise RuntimeError(message) from exc
   if not raw:
     return None
   return json.loads(raw)
 
 
-def existing_comment_id(*, repo: str, sha: str, token: str) -> int | None:
-  comments = request_json("GET", f"/repos/{repo}/commits/{sha}/comments?per_page=100", token=token)
+def existing_comment_id(
+  *, repo: str, sha: str, token: str, markers: Sequence[str]
+) -> int | None:
+  comments = request_json(
+    "GET",
+    f"/repos/{repo}/commits/{sha}/comments?per_page=100",
+    token=token,
+  )
   if not isinstance(comments, list):
     raise TypeError("github comments response was not a list")
-  for comment in comments:
-    if not isinstance(comment, Mapping):
-      continue
-    comment = cast(Mapping[str, object], comment)
-    body = comment.get("body")
-    comment_id = comment.get("id")
-    markers = (MARKER, *LEGACY_MARKERS)
-    if (
-      isinstance(body, str)
-      and any(marker in body for marker in markers)
-      and isinstance(comment_id, int)
-    ):
-      return comment_id
+  for marker in markers:
+    for comment in comments:
+      if not isinstance(comment, Mapping):
+        continue
+      comment = cast(Mapping[str, object], comment)
+      body = comment.get("body")
+      comment_id = comment.get("id")
+      if isinstance(body, str) and marker in body and isinstance(comment_id, int):
+        return comment_id
   return None
 
 
-def upsert_commit_comment(body: str) -> str:
+def upsert_commit_comment(body: str, *, markers: Sequence[str]) -> str:
   repo = os.environ["GITHUB_REPOSITORY"]
   sha = os.environ["GITHUB_SHA"]
   token = os.environ["GITHUB_TOKEN"]
-  comment_id = existing_comment_id(repo=repo, sha=sha, token=token)
+  comment_id = existing_comment_id(repo=repo, sha=sha, token=token, markers=markers)
   if comment_id is None:
     response = request_json(
       "POST",
@@ -299,7 +321,10 @@ def load_payload(path: Path) -> Mapping[str, object]:
   return payload
 
 
-def load_payload_from_manifest(path: Path, manifest: Mapping[str, object]) -> Mapping[str, object]:
+def load_payload_from_manifest(
+  path: Path,
+  manifest: Mapping[str, object],
+) -> Mapping[str, object]:
   outputs = manifest.get("outputs")
   if not isinstance(outputs, Mapping):
     raise TypeError("benchmark manifest outputs must be an object")
@@ -334,17 +359,38 @@ def main() -> None:
   parser = argparse.ArgumentParser(
     description="render and optionally post monpy benchmark sweep results"
   )
-  parser.add_argument("results_json", type=Path, help="benchmark results json or manifest.json")
+  parser.add_argument(
+    "results_json",
+    type=Path,
+    help="benchmark results json or manifest.json",
+  )
   parser.add_argument("--comment-output", type=Path)
+  parser.add_argument(
+    "--comment-key",
+    help="stable key for a platform-specific commit comment, for example arm or ubuntu",
+  )
+  parser.add_argument("--comment-title", default="monpy benchmark sweep")
+  parser.add_argument(
+    "--replace-legacy",
+    action="store_true",
+    help="allow this comment to replace the old single-comment benchmark markers",
+  )
   parser.add_argument("--post", action="store_true")
   args = parser.parse_args()
 
   payload = load_payload(args.results_json)
-  body = render_comment(payload)
+  marker = comment_marker(args.comment_key)
+  if args.comment_key is None:
+    markers = (MARKER, *LEGACY_MARKERS)
+  elif args.replace_legacy:
+    markers = (marker, MARKER, *LEGACY_MARKERS)
+  else:
+    markers = (marker,)
+  body = render_comment(payload, marker=marker, title=args.comment_title)
   if args.comment_output is not None:
     args.comment_output.write_text(body + "\n", encoding="utf-8")
   if args.post:
-    url = upsert_commit_comment(body)
+    url = upsert_commit_comment(body, markers=markers)
     if url:
       print(url)
 
