@@ -107,6 +107,15 @@ from cute.iter import LayoutIter, MultiLayoutIter
 from cute.layout import Layout
 
 from .apply_scalar import apply_binary_f64, apply_unary_f64
+from .predicates import (
+    Rank2BlasLayout,
+    is_contiguous_float_array,
+    is_contiguous_typed_simd_array,
+    is_float_dtype,
+    is_typed_simd_dtype,
+    max_int,
+    rank2_blas_layout,
+)
 
 
 def apply_binary_typed_vec[
@@ -1191,73 +1200,6 @@ def maybe_unary_preserve_contiguous(src: Array, mut result: Array, op: Int) rais
         return True
     return False
 
-
-def is_float_dtype(dtype_code: Int) -> Bool:
-    return dtype_code == ArrayDType.FLOAT32.value or dtype_code == ArrayDType.FLOAT64.value
-
-
-def is_typed_simd_dtype(dtype_code: Int) -> Bool:
-    """Returns True for dtypes that have a typed-vec SIMD dispatch path
-    in `maybe_binary_same_shape_contiguous` and friends. All ints + f16
-    join the f32/f64 fast paths."""
-    return (
-        dtype_code == ArrayDType.FLOAT32.value
-        or dtype_code == ArrayDType.FLOAT64.value
-        or dtype_code == ArrayDType.FLOAT16.value
-        or dtype_code == ArrayDType.INT64.value
-        or dtype_code == ArrayDType.INT32.value
-        or dtype_code == ArrayDType.INT16.value
-        or dtype_code == ArrayDType.INT8.value
-        or dtype_code == ArrayDType.UINT64.value
-        or dtype_code == ArrayDType.UINT32.value
-        or dtype_code == ArrayDType.UINT16.value
-        or dtype_code == ArrayDType.UINT8.value
-    )
-
-
-def is_contiguous_float_array(array: Array) raises -> Bool:
-    return is_float_dtype(array.dtype_code) and is_c_contiguous(array)
-
-
-def is_contiguous_typed_simd_array(array: Array) raises -> Bool:
-    return is_typed_simd_dtype(array.dtype_code) and is_c_contiguous(array)
-
-
-@fieldwise_init
-struct Rank2BlasLayout(ImplicitlyCopyable, Movable, Writable):
-    var can_use: Bool
-    var transpose: Bool
-    var leading_dim: Int
-
-
-def max_int(lhs: Int, rhs: Int) -> Int:
-    if lhs > rhs:
-        return lhs
-    return rhs
-
-
-def rank2_blas_layout(array: Array) raises -> Rank2BlasLayout:
-    if len(array.shape) != 2:
-        return Rank2BlasLayout(False, False, 0)
-    var rows = array.shape[0]
-    var cols = array.shape[1]
-    if rows == 0 or cols == 0:
-        return Rank2BlasLayout(False, False, 0)
-    if has_negative_strides(array) or has_zero_strides(array):
-        return Rank2BlasLayout(False, False, 0)
-    if cols == 1 or array.strides[1] == 1:
-        var lda = array.strides[0]
-        if rows == 1:
-            lda = max_int(1, cols)
-        if lda >= max_int(1, cols):
-            return Rank2BlasLayout(True, False, lda)
-    if rows == 1 or array.strides[0] == 1:
-        var lda = array.strides[1]
-        if cols == 1:
-            lda = max_int(1, rows)
-        if lda >= max_int(1, rows):
-            return Rank2BlasLayout(True, True, lda)
-    return Rank2BlasLayout(False, False, 0)
 
 
 def maybe_unary_contiguous(src: Array, mut result: Array, op: Int) raises -> Bool:
