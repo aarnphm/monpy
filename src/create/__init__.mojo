@@ -126,7 +126,18 @@ from .shape_ops import (
     tril_ops,
     triu_ops,
 )
-from .linalg import (
+from .dtype_ops import (
+    astype_ops,
+    dtype_alignment_py_ops,
+    dtype_can_cast_py_ops,
+    dtype_item_size_py_ops,
+    dtype_kind_code_py_ops,
+    dtype_promote_types_py_ops,
+    result_dtype_for_binary_py_ops,
+    result_dtype_for_reduction_py_ops,
+    result_dtype_for_unary_py_ops,
+)
+from .linalg_ops import (
     cholesky_ops,
     det_ops,
     eig_ops,
@@ -143,6 +154,7 @@ from .linalg import (
 
 # Python-callable entrypoints.
 # Includes Storage -> Shape -> Backend FFI imports from submodules.
+
 
 def reshape_ops(array_obj: PythonObject, shape_obj: PythonObject) raises -> PythonObject:
     # Layout-algebra view: c-contig source → fresh row-major layout over
@@ -888,19 +900,6 @@ def binary_scalar_ops(
     return PythonObject(alloc=result^)
 
 
-from .dtype_bridge import (
-    astype_ops,
-    dtype_alignment_py_ops,
-    dtype_can_cast_py_ops,
-    dtype_item_size_py_ops,
-    dtype_kind_code_py_ops,
-    dtype_promote_types_py_ops,
-    result_dtype_for_binary_py_ops,
-    result_dtype_for_reduction_py_ops,
-    result_dtype_for_unary_py_ops,
-)
-
-
 def sin_add_mul_ops(
     lhs_obj: PythonObject,
     rhs_obj: PythonObject,
@@ -1005,9 +1004,6 @@ def where_ops(cond_obj: PythonObject, lhs_obj: PythonObject, rhs_obj: PythonObje
             set_physical_from_f64(result, iter.element_index(3), get_physical_as_f64(rhs[], iter.element_index(2)))
         iter.step()
     return PythonObject(alloc=result^)
-
-
-
 
 
 def eye_ops(
