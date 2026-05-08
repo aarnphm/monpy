@@ -424,6 +424,19 @@ class ndarray:
     for i in range(len(self)):yield self[i]
   def __repr__(self)->str:return f"monpy.asarray({self.tolist()!r}, dtype={self.dtype!r})"
   def __getitem__(self, k:typing.Any)->object:
+    if type(k) is tuple and len(k)==3 and k[1] is None:                                                                        # exact rank-2 `a[:, None, :]` view
+      p0, p2=k[0], k[2]
+      if (
+        isinstance(p0, slice)
+        and p0.start is None
+        and p0.stop is None
+        and p0.step is None
+        and isinstance(p2, slice)
+        and p2.start is None
+        and p2.stop is None
+        and p2.step is None
+        and builtins.int(self._native.ndim())==2
+      ):return ndarray._wrap(_native.expand_dims(self._native, 1), base=self)
     if isinstance(k, slice) and self.ndim==1:                                                                                  # fast 1-D slice path: skip generic _view_for_key
       d=self.shape[0]
       step=1 if k.step is None else builtins.int(k.step)

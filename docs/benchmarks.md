@@ -348,3 +348,25 @@ Focused local result:
 The direct microbench moved `mnp.atleast_2d(existing_vector)` from about 4.1 us
 to about 1.4 us. The remaining gap is the generic Python facade and one native
 call, not data movement.
+
+### 2026-05-08 exact middle-newaxis view
+
+`array/views/newaxis_middle_f32` uses the concrete key `arr[:, None, :]`. The
+generic indexing path expands the key, fetches full shape metadata, validates
+the full slices, then calls native `expand_dims`. For this exact rank-2 full
+slice pattern, none of the shape metadata is needed: the result is just
+`expand_dims(axis=1)`.
+
+`ndarray.__getitem__` now recognizes the exact `(:, None, :)` rank-2 pattern
+before entering the generic slice path. Mixed keys such as `arr[:, None, ::-1]`
+still fall through to the existing generic slice machinery.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `array/views/newaxis_middle_f32` | 5.743 | 3.138 | 2.734x | 1.535x |
+
+The direct microbench moved the exact `helper[:, None, :]` view from about 3.6
+us to about 1.1 us. The row is still not NumPy-fast, but it no longer pays the
+full generic slice tax for a fixed full-slice newaxis.
