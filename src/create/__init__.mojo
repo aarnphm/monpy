@@ -308,6 +308,26 @@ def squeeze_all_ops(array_obj: PythonObject) raises -> PythonObject:
     return PythonObject(alloc=result^)
 
 
+def squeeze_axis_ops(array_obj: PythonObject, axis_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var ndim = len(src[].shape)
+    var axis = Int(py=axis_obj)
+    if axis < 0:
+        axis += ndim
+    if axis < 0 or axis >= ndim:
+        raise Error("squeeze: axis out of range")
+    if src[].shape[axis] != 1:
+        raise Error("squeeze: cannot select an axis with size != 1")
+    var shape = List[Int]()
+    var strides = List[Int]()
+    for src_axis in range(ndim):
+        if src_axis != axis:
+            shape.append(src[].shape[src_axis])
+            strides.append(src[].strides[src_axis])
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    return PythonObject(alloc=result^)
+
+
 def squeeze_axes_ops(array_obj: PythonObject, axes_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
     var ndim = len(src[].shape)

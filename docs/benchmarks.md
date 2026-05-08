@@ -412,3 +412,24 @@ Focused local result:
 This is a small per-call win, but it lands on every NumPy ndarray import path.
 The remaining cost is mostly Python attribute access plus the native array-view
 constructor.
+
+### 2026-05-08 single-axis squeeze view
+
+`array/views/squeeze_axis0_f32` calls `mnp.squeeze(..., axis=0)`, but the native
+implementation previously treated scalar axes like the general multi-axis case:
+Python built a one-element tuple, Mojo parsed the sequence, allocated a boolean
+drop list, then built the view. Scalar-axis squeeze now has a direct
+`squeeze_axis` native entrypoint. It normalizes and validates one axis, then
+copies every non-dropped shape/stride slot into the result view.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `array/views/squeeze_axis0_f32` | 7.106 | 6.912 | 2.969x | 2.821x |
+
+The row still includes `np.zeros(...)` plus NumPy-to-monpy wrapping, so the
+benchmark movement is smaller than the isolated operation movement. Direct
+microbenchmarks moved `mnp.squeeze(existing_array, axis=0)` from about 1.10 us
+to about 0.83 us, and moved the native view operation from about 0.79 us to
+about 0.54 us.

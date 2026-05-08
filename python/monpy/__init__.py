@@ -953,9 +953,9 @@ def squeeze(x:object, axis:int|Sequence[int]|None=None)->ndarray:
   arr=asarray(x)
   try:
     if axis is None:native=_native.squeeze_all(arr._native)
+    elif isinstance(axis, builtins.int):native=_native.squeeze_axis(arr._native, axis)
     else:
-      axes=(axis,) if isinstance(axis, builtins.int) else tuple(axis)
-      native=_native.squeeze_axes(arr._native, axes)
+      native=_native.squeeze_axes(arr._native, tuple(axis))
   except Exception as exc:raise ValueError(str(exc)) from exc
   return ndarray._wrap(native, base=arr)
 
