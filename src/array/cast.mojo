@@ -22,6 +22,7 @@ Hosts:
 
 from std.collections import List
 from std.memory import memcpy
+from std.sys import simd_width_of
 
 from domain import ArrayDType, dtype_byte_offset, dtype_is_packed_subbyte, dtype_storage_byte_len
 
@@ -197,6 +198,22 @@ def _real_to_bool_dst[src_dt: DType](src: Array, mut result: Array) raises:
     var src_zero = Scalar[src_dt](0)
     for i in range(src.size_value):
         dst_ptr[i] = UInt8(1) if src_ptr[i] != src_zero else UInt8(0)
+
+
+def _complex_contig_lane_cast[
+    src_dt: DType, dst_dt: DType
+](src: Array, mut result: Array) raises where src_dt.is_floating_point() and dst_dt.is_floating_point():
+    var src_ptr = src.data.bitcast[Scalar[src_dt]]() + src.offset_elems * 2
+    var dst_ptr = result.data.bitcast[Scalar[dst_dt]]() + result.offset_elems * 2
+    var lane_count = src.size_value * 2
+    comptime width = simd_width_of[src_dt]()
+    var i = 0
+    while i + width <= lane_count:
+        dst_ptr.store(i, src_ptr.load[width=width](i).cast[dst_dt]())
+        i += width
+    while i < lane_count:
+        dst_ptr[i] = src_ptr[i].cast[dst_dt]()
+        i += 1
 
 
 def _copy_rank2_strided_typed[dtype: DType](src: Array, mut result: Array) raises:
@@ -483,8 +500,10 @@ def _maybe_cast_contiguous_core_dtypes(src: Array, mut result: Array) raises -> 
        on the *real* side. Covers 22 pairs (11 src→bool + bool→11 dst).
     2. Real ↔ real (via `dispatch_real_pair_cast`): 121 pairs through
        `Scalar[src_dt] → Scalar[dst_dt].cast[dst_dt]()`.
-    3. Anything involving complex returns False; caller's per-element loop in
-       `cast_copy_array` handles complex (interleaved (re,im) doesn't ride DType).
+    3. Complex64 ↔ complex128 width changes: vector-cast the 2N interleaved
+       real lanes directly.
+    4. Other complex pairs return False; caller's per-element loop handles
+       complex → real drops and real → complex zero-imag writes.
     """
     if not is_c_contiguous(src) or not is_c_contiguous(result):
         return False
@@ -497,6 +516,12 @@ def _maybe_cast_contiguous_core_dtypes(src: Array, mut result: Array) raises -> 
     var src_is_complex = src_c == ArrayDType.COMPLEX64.value or src_c == ArrayDType.COMPLEX128.value
     var dst_is_complex = dst_c == ArrayDType.COMPLEX64.value or dst_c == ArrayDType.COMPLEX128.value
     if src_is_complex or dst_is_complex:
+        if src_c == ArrayDType.COMPLEX64.value and dst_c == ArrayDType.COMPLEX128.value:
+            _complex_contig_lane_cast[DType.float32, DType.float64](src, result)
+            return True
+        if src_c == ArrayDType.COMPLEX128.value and dst_c == ArrayDType.COMPLEX64.value:
+            _complex_contig_lane_cast[DType.float64, DType.float32](src, result)
+            return True
         return False
     return dispatch_real_pair_cast[_contig_pair_cast](src_c, dst_c, src, result)
 

@@ -149,6 +149,17 @@ def test_complex_astype_drops_imag_to_real_target() -> None:
   numpy.testing.assert_array_equal(numpy.asarray(real), [1.0, 3.0])
 
 
+def test_complex_astype_between_widths_matches_numpy() -> None:
+  source = numpy.asarray([1 + 2j, -3 + 5j, 7 - 11j], dtype=numpy.complex64)
+  arr = mp.asarray(source, dtype=mp.complex64)
+  wide = arr.astype(mp.complex128)
+  assert wide.dtype == mp.complex128
+  numpy.testing.assert_array_equal(numpy.asarray(wide), source.astype(numpy.complex128))
+  narrow = wide.astype(mp.complex64)
+  assert narrow.dtype == mp.complex64
+  numpy.testing.assert_array_equal(numpy.asarray(narrow), source)
+
+
 def test_real_input_to_complex_array() -> None:
   a = mp.asarray([1.0, 2.0, 3.0], dtype=mp.complex128)
   numpy.testing.assert_array_equal(numpy.asarray(a), [1 + 0j, 2 + 0j, 3 + 0j])

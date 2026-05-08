@@ -1015,3 +1015,49 @@ The post-fix profile loop measured 7.535 us/call, 49.7 MB max RSS, no major
 faults, and a 1,590 byte traced allocation peak. Next target moves to the
 complex conversion/view cluster: `astype_complex64_to_complex128` remains
 2.008x NumPy, followed by `reversed_add_complex64` at 1.871x.
+
+### 2026-05-08 complex width-cast lane fast path
+
+The next live complex rerun after the ILP64 GEMM fix ranked the remaining
+frontier as:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/casts/astype_complex64_to_complex128` | 5.289 | 2.579 | 2.051x |
+| `complex/views/reversed_add_complex64` | 5.885 | 3.057 | 1.929x |
+| `complex/interop/asarray_complex64` | 3.052 | 1.958 | 1.556x |
+| `complex/interop/array_copy_complex128` | 3.807 | 2.443 | 1.547x |
+
+The old cast path treated all complex casts as the general fallback:
+per-logical-element, fetch real/imag via accessors, widen to `Float64`, then
+write through complex setters. That is correct but silly for complex64 ↔
+complex128 when both arrays are C-contiguous, because the storage is just
+interleaved real lanes.
+
+`src/array/cast.mojo` now has `_complex_contig_lane_cast[src_dt, dst_dt]`, which
+walks the `2N` real lanes with SIMD loads, vector casts, and SIMD stores. It is
+intentionally narrow: only complex64 ↔ complex128 width changes enter this path.
+Complex → real still drops imaginary values through the existing fallback, and
+real → complex still writes zero imaginary lanes through the existing setter
+logic.
+
+Focused verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_complex.py::test_complex_astype_between_widths_matches_numpy tests/python/numpy_compat/test_complex.py::test_complex_astype_drops_imag_to_real_target tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_round_trip -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --repeats 7 --rounds 5 --matrix-sizes 64 --format json --sort ratio --output-dir results/local-sweep-20260508-complex-cast-width-fastpath --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/casts/astype_complex64_to_complex128 --types complex --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260508-complex-astype-width-fastpath --sample --no-perf-stat
+```
+
+Post-fix benchmark results:
+
+| row | before | after | delta |
+| --- | ---: | ---: | ---: |
+| `complex/casts/astype_complex64_to_complex128` | 5.289 us, 2.051x | 3.298 us, 1.260x | 1.60x faster |
+
+The post-fix profile loop measured 3.442 us/call, 49.7 MB max RSS, no major
+faults, and a 1,590 byte traced allocation peak. The sample now puts the hot
+native frame in `_complex_contig_lane_cast[f32,f64]`, which is the expected
+storage-level path. The new top complex deficit is `reversed_add_complex64` at
+1.891x, then complex ingress/copy rows around 1.5x.
