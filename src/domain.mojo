@@ -1,161 +1,248 @@
 @fieldwise_init
-struct ArrayDType(ImplicitlyCopyable, Movable):
+struct ArrayDType(Equatable, ImplicitlyCopyable, Movable):
     var value: Int
+
+    comptime BOOL = Self(0)
+    comptime INT64 = Self(1)
+    comptime FLOAT32 = Self(2)
+    comptime FLOAT64 = Self(3)
+    comptime INT32 = Self(4)
+    comptime INT16 = Self(5)
+    comptime INT8 = Self(6)
+    comptime UINT64 = Self(7)
+    comptime UINT32 = Self(8)
+    comptime UINT16 = Self(9)
+    comptime UINT8 = Self(10)
+    comptime FLOAT16 = Self(11)
+    comptime COMPLEX64 = Self(12)
+    comptime COMPLEX128 = Self(13)
+
+    @staticmethod
+    def from_int(value: Int) raises -> Self:
+        if value >= Self.BOOL.value and value <= Self.COMPLEX128.value:
+            return Self(value)
+        raise Error("unsupported dtype code")
 
 
 @fieldwise_init
-struct BinaryOp(ImplicitlyCopyable, Movable):
+struct DTypeKind(Equatable, ImplicitlyCopyable, Movable):
     var value: Int
+
+    comptime BOOL = Self(0)
+    comptime SIGNED_INT = Self(1)
+    comptime REAL_FLOAT = Self(2)
+    comptime UNSIGNED_INT = Self(3)
+    comptime COMPLEX_FLOAT = Self(4)
+
+    @staticmethod
+    def from_int(value: Int) raises -> Self:
+        if value >= Self.BOOL.value and value <= Self.COMPLEX_FLOAT.value:
+            return Self(value)
+        raise Error("unsupported dtype kind code")
 
 
 @fieldwise_init
-struct UnaryOp(ImplicitlyCopyable, Movable):
+struct CastingRule(Equatable, ImplicitlyCopyable, Movable):
     var value: Int
+
+    comptime NO = Self(0)
+    comptime EQUIV = Self(1)
+    comptime SAFE = Self(2)
+    comptime SAME_KIND = Self(3)
+    comptime UNSAFE = Self(4)
+
+    @staticmethod
+    def from_int(value: Int) raises -> Self:
+        if value >= Self.NO.value and value <= Self.UNSAFE.value:
+            return Self(value)
+        raise Error("unsupported casting code")
 
 
 @fieldwise_init
-struct ReduceOp(ImplicitlyCopyable, Movable):
+struct BinaryOp(Equatable, ImplicitlyCopyable, Movable):
     var value: Int
+
+    comptime ADD = Self(0)
+    comptime SUB = Self(1)
+    comptime MUL = Self(2)
+    comptime DIV = Self(3)
+    comptime FLOOR_DIV = Self(4)
+    comptime MOD = Self(5)
+    comptime POWER = Self(6)
+    comptime MAXIMUM = Self(7)
+    comptime MINIMUM = Self(8)
+    comptime FMIN = Self(9)
+    comptime FMAX = Self(10)
+    comptime ARCTAN2 = Self(11)
+    comptime HYPOT = Self(12)
+    comptime COPYSIGN = Self(13)
+
+    @staticmethod
+    def from_int(value: Int) raises -> Self:
+        if value >= Self.ADD.value and value <= Self.COPYSIGN.value:
+            return Self(value)
+        raise Error("unsupported binary op")
 
 
 @fieldwise_init
-struct BackendKind(ImplicitlyCopyable, Movable):
+struct UnaryOp(Equatable, ImplicitlyCopyable, Movable):
     var value: Int
 
+    comptime SIN = Self(0)
+    comptime COS = Self(1)
+    comptime EXP = Self(2)
+    comptime LOG = Self(3)
+    comptime TAN = Self(4)
+    comptime ARCSIN = Self(5)
+    comptime ARCCOS = Self(6)
+    comptime ARCTAN = Self(7)
+    comptime SINH = Self(8)
+    comptime COSH = Self(9)
+    comptime TANH = Self(10)
+    comptime LOG1P = Self(11)
+    comptime LOG2 = Self(12)
+    comptime LOG10 = Self(13)
+    comptime EXP2 = Self(14)
+    comptime EXPM1 = Self(15)
+    comptime SQRT = Self(16)
+    comptime CBRT = Self(17)
+    comptime DEG2RAD = Self(18)
+    comptime RAD2DEG = Self(19)
+    comptime RECIPROCAL = Self(20)
+    comptime NEGATE = Self(30)
+    comptime POSITIVE = Self(31)
+    comptime ABS = Self(32)
+    comptime SQUARE = Self(33)
+    comptime SIGN = Self(34)
+    comptime FLOOR = Self(35)
+    comptime CEIL = Self(36)
+    comptime TRUNC = Self(37)
+    comptime RINT = Self(38)
+    comptime LOGICAL_NOT = Self(39)
+    comptime CONJUGATE = Self(40)
 
-# Python bindings still pass compact integer codes. The strongly named wrappers
-# above are the internal migration target; these constants keep the existing
-# private wire contract stable while the operation modules move over.
-comptime DTYPE_BOOL = 0
-comptime DTYPE_INT64 = 1
-comptime DTYPE_FLOAT32 = 2
-comptime DTYPE_FLOAT64 = 3
-# Phase-5a signed ints.
-comptime DTYPE_INT32 = 4
-comptime DTYPE_INT16 = 5
-comptime DTYPE_INT8 = 6
-# Phase-5b unsigned ints. Allocation + arithmetic via the f64
-# round-trip path; promotion rules follow numpy 2.x.
-comptime DTYPE_UINT64 = 7
-comptime DTYPE_UINT32 = 8
-comptime DTYPE_UINT16 = 9
-comptime DTYPE_UINT8 = 10
-# Phase-5c float16. Stored as 2-byte half; arithmetic delegates through
-# the f64 round-trip path until a SIMD float16 kernel lands.
-comptime DTYPE_FLOAT16 = 11
-# Phase-5d complex. Interleaved (real, imag) storage per numpy convention.
-# complex64 = 2 × float32 = 8 bytes. complex128 = 2 × float64 = 16 bytes.
-comptime DTYPE_COMPLEX64 = 12
-comptime DTYPE_COMPLEX128 = 13
+    @staticmethod
+    def from_int(value: Int) raises -> Self:
+        if (value >= Self.SIN.value and value <= Self.RECIPROCAL.value) or (
+            value >= Self.NEGATE.value and value <= Self.CONJUGATE.value
+        ):
+            return Self(value)
+        raise Error("unsupported unary op")
 
-comptime DTYPE_KIND_BOOL = 0
-comptime DTYPE_KIND_SIGNED_INT = 1
-comptime DTYPE_KIND_REAL_FLOAT = 2
-comptime DTYPE_KIND_UNSIGNED_INT = 3
-comptime DTYPE_KIND_COMPLEX_FLOAT = 4
 
-comptime CASTING_NO = 0
-comptime CASTING_EQUIV = 1
-comptime CASTING_SAFE = 2
-comptime CASTING_SAME_KIND = 3
-comptime CASTING_UNSAFE = 4
+@fieldwise_init
+struct CompareOp(Equatable, ImplicitlyCopyable, Movable):
+    var value: Int
 
-comptime OP_ADD = 0
-comptime OP_SUB = 1
-comptime OP_MUL = 2
-comptime OP_DIV = 3
-# binary ops (all numeric; promotion handled in dtype_result_for_binary).
-comptime OP_FLOOR_DIV = 4
-comptime OP_MOD = 5
-comptime OP_POWER = 6
-comptime OP_MAXIMUM = 7
-comptime OP_MINIMUM = 8
-comptime OP_FMIN = 9
-comptime OP_FMAX = 10
-comptime OP_ARCTAN2 = 11
-comptime OP_HYPOT = 12
-comptime OP_COPYSIGN = 13
+    comptime EQ = Self(0)
+    comptime NE = Self(1)
+    comptime LT = Self(2)
+    comptime LE = Self(3)
+    comptime GT = Self(4)
+    comptime GE = Self(5)
 
-comptime UNARY_SIN = 0
-comptime UNARY_COS = 1
-comptime UNARY_EXP = 2
-comptime UNARY_LOG = 3
-# unary transcendentals (all float-only; promote int → float64).
-comptime UNARY_TAN = 4
-comptime UNARY_ARCSIN = 5
-comptime UNARY_ARCCOS = 6
-comptime UNARY_ARCTAN = 7
-comptime UNARY_SINH = 8
-comptime UNARY_COSH = 9
-comptime UNARY_TANH = 10
-comptime UNARY_LOG1P = 11
-comptime UNARY_LOG2 = 12
-comptime UNARY_LOG10 = 13
-comptime UNARY_EXP2 = 14
-comptime UNARY_EXPM1 = 15
-comptime UNARY_SQRT = 16
-comptime UNARY_CBRT = 17
-comptime UNARY_DEG2RAD = 18
-comptime UNARY_RAD2DEG = 19
-comptime UNARY_RECIPROCAL = 20
-# unary arith (preserves dtype kind: int → int, float → float).
-comptime UNARY_NEGATE = 30
-comptime UNARY_POSITIVE = 31
-comptime UNARY_ABS = 32
-comptime UNARY_SQUARE = 33
-comptime UNARY_SIGN = 34
-comptime UNARY_FLOOR = 35
-comptime UNARY_CEIL = 36
-comptime UNARY_TRUNC = 37
-comptime UNARY_RINT = 38
-comptime UNARY_LOGICAL_NOT = 39
-# complex-only unary ops. CONJ flips imag sign; REAL/IMAG/ANGLE
-# return a real-valued result (handled at python level).
-comptime UNARY_CONJUGATE = 40
+    @staticmethod
+    def from_int(value: Int) raises -> Self:
+        if value >= Self.EQ.value and value <= Self.GE.value:
+            return Self(value)
+        raise Error("unsupported comparison op")
 
-comptime CMP_EQ = 0
-comptime CMP_NE = 1
-comptime CMP_LT = 2
-comptime CMP_LE = 3
-comptime CMP_GT = 4
-comptime CMP_GE = 5
 
-comptime LOGIC_AND = 0
-comptime LOGIC_OR = 1
-comptime LOGIC_XOR = 2
+@fieldwise_init
+struct LogicalOp(Equatable, ImplicitlyCopyable, Movable):
+    var value: Int
 
-comptime PRED_ISNAN = 0
-comptime PRED_ISINF = 1
-comptime PRED_ISFINITE = 2
-comptime PRED_SIGNBIT = 3
+    comptime AND = Self(0)
+    comptime OR = Self(1)
+    comptime XOR = Self(2)
 
-comptime REDUCE_SUM = 0
-comptime REDUCE_MEAN = 1
-comptime REDUCE_MIN = 2
-comptime REDUCE_MAX = 3
-comptime REDUCE_ARGMAX = 4
-comptime REDUCE_PROD = 5
-comptime REDUCE_ALL = 6
-comptime REDUCE_ANY = 7
-comptime REDUCE_ARGMIN = 8
+    @staticmethod
+    def from_int(value: Int) raises -> Self:
+        if value >= Self.AND.value and value <= Self.XOR.value:
+            return Self(value)
+        raise Error("unsupported logical op")
 
-comptime BACKEND_GENERIC = 0
-comptime BACKEND_ACCELERATE = 1
-comptime BACKEND_FUSED = 2
+
+@fieldwise_init
+struct PredicateOp(Equatable, ImplicitlyCopyable, Movable):
+    var value: Int
+
+    comptime ISNAN = Self(0)
+    comptime ISINF = Self(1)
+    comptime ISFINITE = Self(2)
+    comptime SIGNBIT = Self(3)
+
+    @staticmethod
+    def from_int(value: Int) raises -> Self:
+        if value >= Self.ISNAN.value and value <= Self.SIGNBIT.value:
+            return Self(value)
+        raise Error("unsupported predicate op")
+
+
+@fieldwise_init
+struct ReduceOp(Equatable, ImplicitlyCopyable, Movable):
+    var value: Int
+
+    comptime SUM = Self(0)
+    comptime MEAN = Self(1)
+    comptime MIN = Self(2)
+    comptime MAX = Self(3)
+    comptime ARGMAX = Self(4)
+    comptime PROD = Self(5)
+    comptime ALL = Self(6)
+    comptime ANY = Self(7)
+    comptime ARGMIN = Self(8)
+
+    @staticmethod
+    def from_int(value: Int) raises -> Self:
+        if value >= Self.SUM.value and value <= Self.ARGMIN.value:
+            return Self(value)
+        raise Error("unsupported reduction op")
+
+
+@fieldwise_init
+struct BackendKind(Equatable, ImplicitlyCopyable, Movable):
+    var value: Int
+
+    comptime GENERIC = Self(0)
+    comptime ACCELERATE = Self(1)
+    comptime FUSED = Self(2)
+
+    @staticmethod
+    def from_int(value: Int) raises -> Self:
+        if value >= Self.GENERIC.value and value <= Self.FUSED.value:
+            return Self(value)
+        raise Error("unsupported backend code")
 
 
 def dtype_item_size(dtype_code: Int) raises -> Int:
-    if dtype_code == DTYPE_BOOL or dtype_code == DTYPE_INT8 or dtype_code == DTYPE_UINT8:
+    if (
+        dtype_code == ArrayDType.BOOL.value
+        or dtype_code == ArrayDType.INT8.value
+        or dtype_code == ArrayDType.UINT8.value
+    ):
         return 1
-    if dtype_code == DTYPE_INT16 or dtype_code == DTYPE_UINT16 or dtype_code == DTYPE_FLOAT16:
+    if (
+        dtype_code == ArrayDType.INT16.value
+        or dtype_code == ArrayDType.UINT16.value
+        or dtype_code == ArrayDType.FLOAT16.value
+    ):
         return 2
-    if dtype_code == DTYPE_INT32 or dtype_code == DTYPE_FLOAT32 or dtype_code == DTYPE_UINT32:
+    if (
+        dtype_code == ArrayDType.INT32.value
+        or dtype_code == ArrayDType.FLOAT32.value
+        or dtype_code == ArrayDType.UINT32.value
+    ):
         return 4
-    if dtype_code == DTYPE_INT64 or dtype_code == DTYPE_FLOAT64 or dtype_code == DTYPE_UINT64:
+    if (
+        dtype_code == ArrayDType.INT64.value
+        or dtype_code == ArrayDType.FLOAT64.value
+        or dtype_code == ArrayDType.UINT64.value
+    ):
         return 8
-    if dtype_code == DTYPE_COMPLEX64:
+    if dtype_code == ArrayDType.COMPLEX64.value:
         return 8  # 2 × float32
-    if dtype_code == DTYPE_COMPLEX128:
+    if dtype_code == ArrayDType.COMPLEX128.value:
         return 16  # 2 × float64
     raise Error("unsupported dtype code")
 
@@ -165,32 +252,42 @@ def dtype_alignment(dtype_code: Int) raises -> Int:
 
 
 def _is_signed_int_code(code: Int) -> Bool:
-    return code == DTYPE_INT64 or code == DTYPE_INT32 or code == DTYPE_INT16 or code == DTYPE_INT8
+    return (
+        code == ArrayDType.INT64.value
+        or code == ArrayDType.INT32.value
+        or code == ArrayDType.INT16.value
+        or code == ArrayDType.INT8.value
+    )
 
 
 def _is_unsigned_int_code(code: Int) -> Bool:
-    return code == DTYPE_UINT64 or code == DTYPE_UINT32 or code == DTYPE_UINT16 or code == DTYPE_UINT8
+    return (
+        code == ArrayDType.UINT64.value
+        or code == ArrayDType.UINT32.value
+        or code == ArrayDType.UINT16.value
+        or code == ArrayDType.UINT8.value
+    )
 
 
 def _is_float_code(code: Int) -> Bool:
-    return code == DTYPE_FLOAT64 or code == DTYPE_FLOAT32 or code == DTYPE_FLOAT16
+    return code == ArrayDType.FLOAT64.value or code == ArrayDType.FLOAT32.value or code == ArrayDType.FLOAT16.value
 
 
 def _is_complex_code(code: Int) -> Bool:
-    return code == DTYPE_COMPLEX64 or code == DTYPE_COMPLEX128
+    return code == ArrayDType.COMPLEX64.value or code == ArrayDType.COMPLEX128.value
 
 
 def dtype_kind_code(dtype_code: Int) raises -> Int:
-    if dtype_code == DTYPE_BOOL:
-        return DTYPE_KIND_BOOL
+    if dtype_code == ArrayDType.BOOL.value:
+        return DTypeKind.BOOL.value
     if _is_signed_int_code(dtype_code):
-        return DTYPE_KIND_SIGNED_INT
+        return DTypeKind.SIGNED_INT.value
     if _is_unsigned_int_code(dtype_code):
-        return DTYPE_KIND_UNSIGNED_INT
+        return DTypeKind.UNSIGNED_INT.value
     if _is_float_code(dtype_code):
-        return DTYPE_KIND_REAL_FLOAT
+        return DTypeKind.REAL_FLOAT.value
     if _is_complex_code(dtype_code):
-        return DTYPE_KIND_COMPLEX_FLOAT
+        return DTypeKind.COMPLEX_FLOAT.value
     raise Error("unsupported dtype code")
 
 
@@ -198,55 +295,55 @@ def dtype_code_from_format_char(c: Int, itemsize: Int) raises -> Int:
     # Python buffers expose PEP-3118 format chars. Keep this compact decode
     # next to dtype metadata so every import bridge resolves the same dtype ids.
     if c == 0x3F and itemsize == 1:  # '?'
-        return DTYPE_BOOL
+        return ArrayDType.BOOL.value
     if c == 0x62 and itemsize == 1:  # 'b'
-        return DTYPE_INT8
+        return ArrayDType.INT8.value
     if c == 0x42 and itemsize == 1:  # 'B'
-        return DTYPE_UINT8
+        return ArrayDType.UINT8.value
     if c == 0x68 and itemsize == 2:  # 'h'
-        return DTYPE_INT16
+        return ArrayDType.INT16.value
     if c == 0x48 and itemsize == 2:  # 'H'
-        return DTYPE_UINT16
+        return ArrayDType.UINT16.value
     if c == 0x69 and itemsize == 4:  # 'i'
-        return DTYPE_INT32
+        return ArrayDType.INT32.value
     if c == 0x49 and itemsize == 4:  # 'I'
-        return DTYPE_UINT32
+        return ArrayDType.UINT32.value
     if (c == 0x6C or c == 0x71) and itemsize == 8:  # 'l' or 'q'
-        return DTYPE_INT64
+        return ArrayDType.INT64.value
     if (c == 0x4C or c == 0x51) and itemsize == 8:  # 'L' or 'Q'
-        return DTYPE_UINT64
+        return ArrayDType.UINT64.value
     # 'l'/'L' on 32-bit Linux is 4 bytes — interpret as int32/uint32.
     if c == 0x6C and itemsize == 4:
-        return DTYPE_INT32
+        return ArrayDType.INT32.value
     if c == 0x4C and itemsize == 4:
-        return DTYPE_UINT32
+        return ArrayDType.UINT32.value
     if c == 0x65 and itemsize == 2:  # 'e' (float16, PEP-3118 + numpy convention)
-        return DTYPE_FLOAT16
+        return ArrayDType.FLOAT16.value
     if c == 0x66 and itemsize == 4:  # 'f'
-        return DTYPE_FLOAT32
+        return ArrayDType.FLOAT32.value
     if c == 0x64 and itemsize == 8:  # 'd'
-        return DTYPE_FLOAT64
+        return ArrayDType.FLOAT64.value
     if c == 0x46 and itemsize == 8:  # 'F' (complex64 = 2 × float32 = 8 bytes)
-        return DTYPE_COMPLEX64
+        return ArrayDType.COMPLEX64.value
     if c == 0x44 and itemsize == 16:  # 'D' (complex128 = 2 × float64 = 16 bytes)
-        return DTYPE_COMPLEX128
+        return ArrayDType.COMPLEX128.value
     if c == 0x5A and itemsize == 8:  # 'Z' = numpy struct typestr; resolves complex64
-        return DTYPE_COMPLEX64
+        return ArrayDType.COMPLEX64.value
     if c == 0x5A and itemsize == 16:  # 'Z' for complex128
-        return DTYPE_COMPLEX128
+        return ArrayDType.COMPLEX128.value
     raise Error("buffer format unsupported by monpy")
 
 
 def dtype_result_for_unary(dtype_code: Int) -> Int:
-    if dtype_code == DTYPE_FLOAT16:
-        return DTYPE_FLOAT16
-    if dtype_code == DTYPE_FLOAT32:
-        return DTYPE_FLOAT32
-    if dtype_code == DTYPE_COMPLEX64:
-        return DTYPE_COMPLEX64
-    if dtype_code == DTYPE_COMPLEX128:
-        return DTYPE_COMPLEX128
-    return DTYPE_FLOAT64
+    if dtype_code == ArrayDType.FLOAT16.value:
+        return ArrayDType.FLOAT16.value
+    if dtype_code == ArrayDType.FLOAT32.value:
+        return ArrayDType.FLOAT32.value
+    if dtype_code == ArrayDType.COMPLEX64.value:
+        return ArrayDType.COMPLEX64.value
+    if dtype_code == ArrayDType.COMPLEX128.value:
+        return ArrayDType.COMPLEX128.value
+    return ArrayDType.FLOAT64.value
 
 
 def dtype_result_for_unary_preserve(dtype_code: Int) -> Int:
@@ -255,8 +352,8 @@ def dtype_result_for_unary_preserve(dtype_code: Int) -> Int:
     - bool inputs get promoted to int64 because numpy treats `~bool_arr` style ops as integer transforms;
     - same pattern for negate.
     """
-    if dtype_code == DTYPE_BOOL:
-        return DTYPE_INT64
+    if dtype_code == ArrayDType.BOOL.value:
+        return ArrayDType.INT64.value
     return dtype_code
 
 
@@ -266,22 +363,22 @@ def _is_int_code(code: Int) -> Bool:
 
 def _signed_int_size_to_code(size: Int) raises -> Int:
     if size == 1:
-        return DTYPE_INT8
+        return ArrayDType.INT8.value
     if size == 2:
-        return DTYPE_INT16
+        return ArrayDType.INT16.value
     if size == 4:
-        return DTYPE_INT32
-    return DTYPE_INT64
+        return ArrayDType.INT32.value
+    return ArrayDType.INT64.value
 
 
 def _unsigned_int_size_to_code(size: Int) raises -> Int:
     if size == 1:
-        return DTYPE_UINT8
+        return ArrayDType.UINT8.value
     if size == 2:
-        return DTYPE_UINT16
+        return ArrayDType.UINT16.value
     if size == 4:
-        return DTYPE_UINT32
-    return DTYPE_UINT64
+        return ArrayDType.UINT32.value
+    return ArrayDType.UINT64.value
 
 
 def _wider_signed_int(a: Int, b: Int) raises -> Int:
@@ -308,10 +405,10 @@ def _signed_unsigned_promote(signed_code: Int, unsigned_code: Int) raises -> Int
     if us < ss:
         return signed_code  # signed already wider; result stays signed
     if us == 8 and ss == 8:
-        return DTYPE_FLOAT64
+        return ArrayDType.FLOAT64.value
     var promoted_size = us * 2
     if promoted_size >= 8:
-        return DTYPE_INT64
+        return ArrayDType.INT64.value
     return _signed_int_size_to_code(promoted_size)
 
 
@@ -324,61 +421,70 @@ def dtype_result_for_binary(lhs_dtype: Int, rhs_dtype: Int, op: Int) -> Int:
     # one complex side promotes to the wider of the two complex types
     # (or complex64 for complex64+anything-non-complex128).
     if _is_complex_code(lhs_dtype) or _is_complex_code(rhs_dtype):
-        if lhs_dtype == DTYPE_COMPLEX128 or rhs_dtype == DTYPE_COMPLEX128:
-            return DTYPE_COMPLEX128
+        if lhs_dtype == ArrayDType.COMPLEX128.value or rhs_dtype == ArrayDType.COMPLEX128.value:
+            return ArrayDType.COMPLEX128.value
         # The other side may be a real that can't fit in complex64's f32 mantissa.
         var other = rhs_dtype if _is_complex_code(lhs_dtype) else lhs_dtype
-        if other == DTYPE_FLOAT64 or other == DTYPE_INT64 or other == DTYPE_UINT64:
-            return DTYPE_COMPLEX128
-        if other == DTYPE_INT32 or other == DTYPE_UINT32:
-            return DTYPE_COMPLEX128
-        return DTYPE_COMPLEX64
+        if other == ArrayDType.FLOAT64.value or other == ArrayDType.INT64.value or other == ArrayDType.UINT64.value:
+            return ArrayDType.COMPLEX128.value
+        if other == ArrayDType.INT32.value or other == ArrayDType.UINT32.value:
+            return ArrayDType.COMPLEX128.value
+        return ArrayDType.COMPLEX64.value
     # Always-float binary transcendentals.
-    if op == OP_ARCTAN2 or op == OP_HYPOT or op == OP_COPYSIGN:
-        if lhs_dtype == DTYPE_FLOAT32 and rhs_dtype == DTYPE_FLOAT32:
-            return DTYPE_FLOAT32
-        if lhs_dtype == DTYPE_FLOAT16 and rhs_dtype == DTYPE_FLOAT16:
-            return DTYPE_FLOAT16
-        return DTYPE_FLOAT64
+    if op == BinaryOp.ARCTAN2.value or op == BinaryOp.HYPOT.value or op == BinaryOp.COPYSIGN.value:
+        if lhs_dtype == ArrayDType.FLOAT32.value and rhs_dtype == ArrayDType.FLOAT32.value:
+            return ArrayDType.FLOAT32.value
+        if lhs_dtype == ArrayDType.FLOAT16.value and rhs_dtype == ArrayDType.FLOAT16.value:
+            return ArrayDType.FLOAT16.value
+        return ArrayDType.FLOAT64.value
     # Division: always float, with size-aware promotion.
-    if op == OP_DIV:
-        if lhs_dtype == DTYPE_FLOAT64 or rhs_dtype == DTYPE_FLOAT64:
-            return DTYPE_FLOAT64
-        if lhs_dtype == DTYPE_FLOAT32 or rhs_dtype == DTYPE_FLOAT32:
-            var other = rhs_dtype if lhs_dtype == DTYPE_FLOAT32 else lhs_dtype
-            if other == DTYPE_FLOAT32 or other == DTYPE_BOOL or other == DTYPE_FLOAT16:
-                return DTYPE_FLOAT32
-            if other == DTYPE_INT8 or other == DTYPE_INT16 or other == DTYPE_UINT8 or other == DTYPE_UINT16:
-                return DTYPE_FLOAT32
-        if lhs_dtype == DTYPE_FLOAT16 or rhs_dtype == DTYPE_FLOAT16:
-            var other = rhs_dtype if lhs_dtype == DTYPE_FLOAT16 else lhs_dtype
-            if other == DTYPE_FLOAT16 or other == DTYPE_BOOL:
-                return DTYPE_FLOAT16
-            if other == DTYPE_INT8 or other == DTYPE_UINT8:
-                return DTYPE_FLOAT16
-            return DTYPE_FLOAT32
-        return DTYPE_FLOAT64
+    if op == BinaryOp.DIV.value:
+        if lhs_dtype == ArrayDType.FLOAT64.value or rhs_dtype == ArrayDType.FLOAT64.value:
+            return ArrayDType.FLOAT64.value
+        if lhs_dtype == ArrayDType.FLOAT32.value or rhs_dtype == ArrayDType.FLOAT32.value:
+            var other = rhs_dtype if lhs_dtype == ArrayDType.FLOAT32.value else lhs_dtype
+            if (
+                other == ArrayDType.FLOAT32.value
+                or other == ArrayDType.BOOL.value
+                or other == ArrayDType.FLOAT16.value
+            ):
+                return ArrayDType.FLOAT32.value
+            if (
+                other == ArrayDType.INT8.value
+                or other == ArrayDType.INT16.value
+                or other == ArrayDType.UINT8.value
+                or other == ArrayDType.UINT16.value
+            ):
+                return ArrayDType.FLOAT32.value
+        if lhs_dtype == ArrayDType.FLOAT16.value or rhs_dtype == ArrayDType.FLOAT16.value:
+            var other = rhs_dtype if lhs_dtype == ArrayDType.FLOAT16.value else lhs_dtype
+            if other == ArrayDType.FLOAT16.value or other == ArrayDType.BOOL.value:
+                return ArrayDType.FLOAT16.value
+            if other == ArrayDType.INT8.value or other == ArrayDType.UINT8.value:
+                return ArrayDType.FLOAT16.value
+            return ArrayDType.FLOAT32.value
+        return ArrayDType.FLOAT64.value
     # Non-division arithmetic.
-    if lhs_dtype == DTYPE_FLOAT64 or rhs_dtype == DTYPE_FLOAT64:
-        return DTYPE_FLOAT64
-    if lhs_dtype == DTYPE_FLOAT32 or rhs_dtype == DTYPE_FLOAT32:
-        var other = rhs_dtype if lhs_dtype == DTYPE_FLOAT32 else lhs_dtype
+    if lhs_dtype == ArrayDType.FLOAT64.value or rhs_dtype == ArrayDType.FLOAT64.value:
+        return ArrayDType.FLOAT64.value
+    if lhs_dtype == ArrayDType.FLOAT32.value or rhs_dtype == ArrayDType.FLOAT32.value:
+        var other = rhs_dtype if lhs_dtype == ArrayDType.FLOAT32.value else lhs_dtype
         # int32+/int64/uint32+/uint64 + float32 → float64.
-        if other == DTYPE_INT64 or other == DTYPE_INT32:
-            return DTYPE_FLOAT64
-        if other == DTYPE_UINT64 or other == DTYPE_UINT32:
-            return DTYPE_FLOAT64
-        return DTYPE_FLOAT32
-    if lhs_dtype == DTYPE_FLOAT16 or rhs_dtype == DTYPE_FLOAT16:
-        var other = rhs_dtype if lhs_dtype == DTYPE_FLOAT16 else lhs_dtype
-        if other == DTYPE_FLOAT16 or other == DTYPE_BOOL:
-            return DTYPE_FLOAT16
-        if other == DTYPE_INT8 or other == DTYPE_UINT8:
-            return DTYPE_FLOAT16
-        if other == DTYPE_INT16 or other == DTYPE_UINT16:
-            return DTYPE_FLOAT32
+        if other == ArrayDType.INT64.value or other == ArrayDType.INT32.value:
+            return ArrayDType.FLOAT64.value
+        if other == ArrayDType.UINT64.value or other == ArrayDType.UINT32.value:
+            return ArrayDType.FLOAT64.value
+        return ArrayDType.FLOAT32.value
+    if lhs_dtype == ArrayDType.FLOAT16.value or rhs_dtype == ArrayDType.FLOAT16.value:
+        var other = rhs_dtype if lhs_dtype == ArrayDType.FLOAT16.value else lhs_dtype
+        if other == ArrayDType.FLOAT16.value or other == ArrayDType.BOOL.value:
+            return ArrayDType.FLOAT16.value
+        if other == ArrayDType.INT8.value or other == ArrayDType.UINT8.value:
+            return ArrayDType.FLOAT16.value
+        if other == ArrayDType.INT16.value or other == ArrayDType.UINT16.value:
+            return ArrayDType.FLOAT32.value
         # bigger ints with f16 → f64 (not enough mantissa).
-        return DTYPE_FLOAT64
+        return ArrayDType.FLOAT64.value
     # All-integer / bool path.
     if _is_int_code(lhs_dtype) or _is_int_code(rhs_dtype):
         var l_signed = _is_signed_int_code(lhs_dtype)
@@ -400,40 +506,40 @@ def dtype_result_for_binary(lhs_dtype: Int, rhs_dtype: Int, op: Int) -> Int:
                 return _signed_unsigned_promote(lhs_dtype, rhs_dtype)
             return _signed_unsigned_promote(rhs_dtype, lhs_dtype)
         except:
-            return DTYPE_INT64
-    return DTYPE_BOOL
+            return ArrayDType.INT64.value
+    return ArrayDType.BOOL.value
 
 
 def dtype_result_for_reduction(dtype_code: Int, op: Int) -> Int:
-    if op == REDUCE_MEAN:
-        if dtype_code == DTYPE_FLOAT16 or dtype_code == DTYPE_FLOAT32:
-            return DTYPE_FLOAT32
-        return DTYPE_FLOAT64
-    if op == REDUCE_SUM and dtype_code == DTYPE_BOOL:
-        return DTYPE_INT64
-    if op == REDUCE_SUM or op == REDUCE_PROD:
+    if op == ReduceOp.MEAN.value:
+        if dtype_code == ArrayDType.FLOAT16.value or dtype_code == ArrayDType.FLOAT32.value:
+            return ArrayDType.FLOAT32.value
+        return ArrayDType.FLOAT64.value
+    if op == ReduceOp.SUM.value and dtype_code == ArrayDType.BOOL.value:
+        return ArrayDType.INT64.value
+    if op == ReduceOp.SUM.value or op == ReduceOp.PROD.value:
         # numpy: small-int reductions accumulate in int64/uint64 to avoid overflow.
         if _is_signed_int_code(dtype_code):
-            return DTYPE_INT64
+            return ArrayDType.INT64.value
         if _is_unsigned_int_code(dtype_code):
-            return DTYPE_UINT64
+            return ArrayDType.UINT64.value
     return dtype_code
 
 
 def dtype_result_for_linalg(dtype_code: Int) -> Int:
-    if dtype_code == DTYPE_FLOAT32:
-        return DTYPE_FLOAT32
-    return DTYPE_FLOAT64
+    if dtype_code == ArrayDType.FLOAT32.value:
+        return ArrayDType.FLOAT32.value
+    return ArrayDType.FLOAT64.value
 
 
 def dtype_result_for_linalg_binary(lhs_dtype: Int, rhs_dtype: Int) -> Int:
-    if lhs_dtype == DTYPE_FLOAT32 and rhs_dtype == DTYPE_FLOAT32:
-        return DTYPE_FLOAT32
-    return DTYPE_FLOAT64
+    if lhs_dtype == ArrayDType.FLOAT32.value and rhs_dtype == ArrayDType.FLOAT32.value:
+        return ArrayDType.FLOAT32.value
+    return ArrayDType.FLOAT64.value
 
 
 def dtype_promote_types(lhs_dtype: Int, rhs_dtype: Int) -> Int:
-    return dtype_result_for_binary(lhs_dtype, rhs_dtype, OP_ADD)
+    return dtype_result_for_binary(lhs_dtype, rhs_dtype, BinaryOp.ADD.value)
 
 
 def dtype_can_cast(from_dtype: Int, to_dtype: Int, casting: Int) raises -> Bool:
@@ -441,96 +547,96 @@ def dtype_can_cast(from_dtype: Int, to_dtype: Int, casting: Int) raises -> Bool:
     var to_kind = dtype_kind_code(to_dtype)
     if from_dtype == to_dtype:
         return True
-    if casting == CASTING_NO or casting == CASTING_EQUIV:
+    if casting == CastingRule.NO.value or casting == CastingRule.EQUIV.value:
         return False
-    if casting == CASTING_UNSAFE:
+    if casting == CastingRule.UNSAFE.value:
         return True
     # Complex has its own casting rules: real → complex always safe;
     # complex → real never safe (lossy); complex → complex widens.
-    if from_kind == DTYPE_KIND_COMPLEX_FLOAT:
-        if to_kind == DTYPE_KIND_COMPLEX_FLOAT:
-            if casting == CASTING_SAFE:
+    if from_kind == DTypeKind.COMPLEX_FLOAT.value:
+        if to_kind == DTypeKind.COMPLEX_FLOAT.value:
+            if casting == CastingRule.SAFE.value:
                 # complex64 → complex128 safe; reverse not.
-                return from_dtype == DTYPE_COMPLEX64 and to_dtype == DTYPE_COMPLEX128
-            return casting == CASTING_SAME_KIND
+                return from_dtype == ArrayDType.COMPLEX64.value and to_dtype == ArrayDType.COMPLEX128.value
+            return casting == CastingRule.SAME_KIND.value
         return False
-    if to_kind == DTYPE_KIND_COMPLEX_FLOAT:
-        if casting == CASTING_SAFE:
+    if to_kind == DTypeKind.COMPLEX_FLOAT.value:
+        if casting == CastingRule.SAFE.value:
             # Real → complex safe if real fits the complex's float component.
-            if to_dtype == DTYPE_COMPLEX128:
+            if to_dtype == ArrayDType.COMPLEX128.value:
                 return True  # any real fits in complex128's f64 component
-            # to_dtype == DTYPE_COMPLEX64
-            if from_kind == DTYPE_KIND_BOOL:
+            # to_dtype == ArrayDType.COMPLEX64.value
+            if from_kind == DTypeKind.BOOL.value:
                 return True
-            if from_dtype == DTYPE_FLOAT32 or from_dtype == DTYPE_FLOAT16:
+            if from_dtype == ArrayDType.FLOAT32.value or from_dtype == ArrayDType.FLOAT16.value:
                 return True
-            if from_dtype == DTYPE_INT8 or from_dtype == DTYPE_INT16:
+            if from_dtype == ArrayDType.INT8.value or from_dtype == ArrayDType.INT16.value:
                 return True
-            if from_dtype == DTYPE_UINT8 or from_dtype == DTYPE_UINT16:
+            if from_dtype == ArrayDType.UINT8.value or from_dtype == ArrayDType.UINT16.value:
                 return True
             return False
-        return casting == CASTING_SAME_KIND
-    if casting == CASTING_SAFE:
+        return casting == CastingRule.SAME_KIND.value
+    if casting == CastingRule.SAFE.value:
         # Bool fits in any numeric type.
-        if from_kind == DTYPE_KIND_BOOL:
+        if from_kind == DTypeKind.BOOL.value:
             return True
-        if from_kind == DTYPE_KIND_SIGNED_INT:
-            if to_kind == DTYPE_KIND_SIGNED_INT:
+        if from_kind == DTypeKind.SIGNED_INT.value:
+            if to_kind == DTypeKind.SIGNED_INT.value:
                 var fs = dtype_item_size(from_dtype)
                 var ts = dtype_item_size(to_dtype)
                 return ts >= fs
-            if to_kind == DTYPE_KIND_REAL_FLOAT:
+            if to_kind == DTypeKind.REAL_FLOAT.value:
                 var fs = dtype_item_size(from_dtype)
-                if to_dtype == DTYPE_FLOAT64:
+                if to_dtype == ArrayDType.FLOAT64.value:
                     return True
-                if to_dtype == DTYPE_FLOAT32:
+                if to_dtype == ArrayDType.FLOAT32.value:
                     return fs <= 2
-                if to_dtype == DTYPE_FLOAT16:
+                if to_dtype == ArrayDType.FLOAT16.value:
                     return False  # int → f16 not safe (mantissa = 10 bits)
             # signed → unsigned never safe (negative values lose).
             return False
-        if from_kind == DTYPE_KIND_UNSIGNED_INT:
-            if to_kind == DTYPE_KIND_UNSIGNED_INT:
+        if from_kind == DTypeKind.UNSIGNED_INT.value:
+            if to_kind == DTypeKind.UNSIGNED_INT.value:
                 var fs = dtype_item_size(from_dtype)
                 var ts = dtype_item_size(to_dtype)
                 return ts >= fs
-            if to_kind == DTYPE_KIND_SIGNED_INT:
+            if to_kind == DTypeKind.SIGNED_INT.value:
                 # uint_n fits safely in int_{2n}: uint8→int16, uint16→int32, uint32→int64.
                 # uint64 → no signed int holds full range.
                 var fs = dtype_item_size(from_dtype)
                 var ts = dtype_item_size(to_dtype)
                 return ts > fs
-            if to_kind == DTYPE_KIND_REAL_FLOAT:
-                if to_dtype == DTYPE_FLOAT64:
+            if to_kind == DTypeKind.REAL_FLOAT.value:
+                if to_dtype == ArrayDType.FLOAT64.value:
                     return True
-                if to_dtype == DTYPE_FLOAT32:
+                if to_dtype == ArrayDType.FLOAT32.value:
                     return dtype_item_size(from_dtype) <= 2
-                if to_dtype == DTYPE_FLOAT16:
+                if to_dtype == ArrayDType.FLOAT16.value:
                     return False
             return False
-        if from_kind == DTYPE_KIND_REAL_FLOAT:
-            if to_kind == DTYPE_KIND_REAL_FLOAT:
+        if from_kind == DTypeKind.REAL_FLOAT.value:
+            if to_kind == DTypeKind.REAL_FLOAT.value:
                 var fs = dtype_item_size(from_dtype)
                 var ts = dtype_item_size(to_dtype)
                 return ts >= fs
             return False
         return False
-    if casting == CASTING_SAME_KIND:
-        if from_kind == DTYPE_KIND_BOOL:
+    if casting == CastingRule.SAME_KIND.value:
+        if from_kind == DTypeKind.BOOL.value:
             return True
-        if from_kind == DTYPE_KIND_SIGNED_INT:
+        if from_kind == DTypeKind.SIGNED_INT.value:
             return (
-                to_kind == DTYPE_KIND_SIGNED_INT
-                or to_kind == DTYPE_KIND_UNSIGNED_INT
-                or to_kind == DTYPE_KIND_REAL_FLOAT
+                to_kind == DTypeKind.SIGNED_INT.value
+                or to_kind == DTypeKind.UNSIGNED_INT.value
+                or to_kind == DTypeKind.REAL_FLOAT.value
             )
-        if from_kind == DTYPE_KIND_UNSIGNED_INT:
+        if from_kind == DTypeKind.UNSIGNED_INT.value:
             return (
-                to_kind == DTYPE_KIND_UNSIGNED_INT
-                or to_kind == DTYPE_KIND_SIGNED_INT
-                or to_kind == DTYPE_KIND_REAL_FLOAT
+                to_kind == DTypeKind.UNSIGNED_INT.value
+                or to_kind == DTypeKind.SIGNED_INT.value
+                or to_kind == DTypeKind.REAL_FLOAT.value
             )
-        if from_kind == DTYPE_KIND_REAL_FLOAT:
-            return to_kind == DTYPE_KIND_REAL_FLOAT
+        if from_kind == DTypeKind.REAL_FLOAT.value:
+            return to_kind == DTypeKind.REAL_FLOAT.value
         return False
     raise Error("unknown casting policy")

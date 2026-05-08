@@ -4,23 +4,8 @@ from std.os import abort
 from std.python import Python, PythonObject
 
 from domain import (
-    BACKEND_ACCELERATE,
-    BACKEND_FUSED,
-    BACKEND_GENERIC,
-    DTYPE_BOOL,
-    DTYPE_COMPLEX128,
-    DTYPE_COMPLEX64,
-    DTYPE_FLOAT16,
-    DTYPE_FLOAT32,
-    DTYPE_FLOAT64,
-    DTYPE_INT16,
-    DTYPE_INT32,
-    DTYPE_INT64,
-    DTYPE_INT8,
-    DTYPE_UINT16,
-    DTYPE_UINT32,
-    DTYPE_UINT64,
-    DTYPE_UINT8,
+    ArrayDType,
+    BackendKind,
     dtype_item_size,
     dtype_result_for_binary,
     dtype_result_for_linalg,
@@ -130,12 +115,12 @@ struct Array(Movable, Writable):
     @staticmethod
     def used_accelerate_py(py_self: PythonObject) raises -> PythonObject:
         var self_ptr = Self._get_self_ptr(py_self)
-        return PythonObject(self_ptr[].backend_code == BACKEND_ACCELERATE)
+        return PythonObject(self_ptr[].backend_code == BackendKind.ACCELERATE.value)
 
     @staticmethod
     def used_fused_py(py_self: PythonObject) raises -> PythonObject:
         var self_ptr = Self._get_self_ptr(py_self)
-        return PythonObject(self_ptr[].backend_code == BACKEND_FUSED)
+        return PythonObject(self_ptr[].backend_code == BackendKind.FUSED.value)
 
     @staticmethod
     def backend_code_py(py_self: PythonObject) raises -> PythonObject:
@@ -146,35 +131,35 @@ struct Array(Movable, Writable):
     def get_scalar_py(py_self: PythonObject, index_obj: PythonObject) raises -> PythonObject:
         var self_ptr = Self._get_self_ptr(py_self)
         var index = Int(py=index_obj)
-        if self_ptr[].dtype_code == DTYPE_BOOL:
+        if self_ptr[].dtype_code == ArrayDType.BOOL.value:
             return PythonObject(get_physical_bool(self_ptr[], physical_offset(self_ptr[], index)))
-        if self_ptr[].dtype_code == DTYPE_INT64:
+        if self_ptr[].dtype_code == ArrayDType.INT64.value:
             return PythonObject(get_physical_i64(self_ptr[], physical_offset(self_ptr[], index)))
-        if self_ptr[].dtype_code == DTYPE_INT32:
+        if self_ptr[].dtype_code == ArrayDType.INT32.value:
             return PythonObject(Int(get_physical_i32(self_ptr[], physical_offset(self_ptr[], index))))
-        if self_ptr[].dtype_code == DTYPE_INT16:
+        if self_ptr[].dtype_code == ArrayDType.INT16.value:
             return PythonObject(Int(get_physical_i16(self_ptr[], physical_offset(self_ptr[], index))))
-        if self_ptr[].dtype_code == DTYPE_INT8:
+        if self_ptr[].dtype_code == ArrayDType.INT8.value:
             return PythonObject(Int(get_physical_i8(self_ptr[], physical_offset(self_ptr[], index))))
-        if self_ptr[].dtype_code == DTYPE_UINT64:
+        if self_ptr[].dtype_code == ArrayDType.UINT64.value:
             return PythonObject(Int(get_physical_u64(self_ptr[], physical_offset(self_ptr[], index))))
-        if self_ptr[].dtype_code == DTYPE_UINT32:
+        if self_ptr[].dtype_code == ArrayDType.UINT32.value:
             return PythonObject(Int(get_physical_u32(self_ptr[], physical_offset(self_ptr[], index))))
-        if self_ptr[].dtype_code == DTYPE_UINT16:
+        if self_ptr[].dtype_code == ArrayDType.UINT16.value:
             return PythonObject(Int(get_physical_u16(self_ptr[], physical_offset(self_ptr[], index))))
-        if self_ptr[].dtype_code == DTYPE_UINT8:
+        if self_ptr[].dtype_code == ArrayDType.UINT8.value:
             return PythonObject(Int(get_physical_u8(self_ptr[], physical_offset(self_ptr[], index))))
-        if self_ptr[].dtype_code == DTYPE_FLOAT32:
+        if self_ptr[].dtype_code == ArrayDType.FLOAT32.value:
             return PythonObject(get_physical_f32(self_ptr[], physical_offset(self_ptr[], index)))
-        if self_ptr[].dtype_code == DTYPE_FLOAT16:
+        if self_ptr[].dtype_code == ArrayDType.FLOAT16.value:
             return PythonObject(Float64(get_physical_f16(self_ptr[], physical_offset(self_ptr[], index))))
-        if self_ptr[].dtype_code == DTYPE_COMPLEX64:
+        if self_ptr[].dtype_code == ArrayDType.COMPLEX64.value:
             var phys = physical_offset(self_ptr[], index)
             var real = Float64(get_physical_c64_real(self_ptr[], phys))
             var imag = Float64(get_physical_c64_imag(self_ptr[], phys))
             var builtins = Python.import_module("builtins")
             return builtins.complex(PythonObject(real), PythonObject(imag))
-        if self_ptr[].dtype_code == DTYPE_COMPLEX128:
+        if self_ptr[].dtype_code == ArrayDType.COMPLEX128.value:
             var phys = physical_offset(self_ptr[], index)
             var real = get_physical_c128_real(self_ptr[], phys)
             var imag = get_physical_c128_imag(self_ptr[], phys)
@@ -235,7 +220,7 @@ def make_empty_array(dtype_code: Int, var shape: List[Int]) raises -> Array:
         storage,
         storage[].data,
         storage[].byte_len,
-        BACKEND_GENERIC,
+        BackendKind.GENERIC.value,
     )
 
 
@@ -260,7 +245,7 @@ def make_external_array(
         storage,
         data,
         storage[].byte_len,
-        BACKEND_GENERIC,
+        BackendKind.GENERIC.value,
     )
 
 
@@ -546,35 +531,35 @@ def set_physical_c128(mut array: Array, physical: Int, real: Float64, imag: Floa
 
 
 def get_physical_as_f64(array: Array, physical: Int) raises -> Float64:
-    if array.dtype_code == DTYPE_BOOL:
+    if array.dtype_code == ArrayDType.BOOL.value:
         if get_physical_bool(array, physical):
             return 1.0
         return 0.0
-    if array.dtype_code == DTYPE_INT64:
+    if array.dtype_code == ArrayDType.INT64.value:
         return Float64(get_physical_i64(array, physical))
-    if array.dtype_code == DTYPE_INT32:
+    if array.dtype_code == ArrayDType.INT32.value:
         return Float64(Int(get_physical_i32(array, physical)))
-    if array.dtype_code == DTYPE_INT16:
+    if array.dtype_code == ArrayDType.INT16.value:
         return Float64(Int(get_physical_i16(array, physical)))
-    if array.dtype_code == DTYPE_INT8:
+    if array.dtype_code == ArrayDType.INT8.value:
         return Float64(Int(get_physical_i8(array, physical)))
-    if array.dtype_code == DTYPE_UINT64:
+    if array.dtype_code == ArrayDType.UINT64.value:
         return Float64(Int(get_physical_u64(array, physical)))
-    if array.dtype_code == DTYPE_UINT32:
+    if array.dtype_code == ArrayDType.UINT32.value:
         return Float64(Int(get_physical_u32(array, physical)))
-    if array.dtype_code == DTYPE_UINT16:
+    if array.dtype_code == ArrayDType.UINT16.value:
         return Float64(Int(get_physical_u16(array, physical)))
-    if array.dtype_code == DTYPE_UINT8:
+    if array.dtype_code == ArrayDType.UINT8.value:
         return Float64(Int(get_physical_u8(array, physical)))
-    if array.dtype_code == DTYPE_FLOAT32:
+    if array.dtype_code == ArrayDType.FLOAT32.value:
         return Float64(get_physical_f32(array, physical))
-    if array.dtype_code == DTYPE_FLOAT16:
+    if array.dtype_code == ArrayDType.FLOAT16.value:
         return Float64(get_physical_f16(array, physical))
-    if array.dtype_code == DTYPE_COMPLEX64:
+    if array.dtype_code == ArrayDType.COMPLEX64.value:
         # Returns the real part; imaginary discarded. Matches numpy
         # behavior for real-valued aggregations on a complex array.
         return Float64(get_physical_c64_real(array, physical))
-    if array.dtype_code == DTYPE_COMPLEX128:
+    if array.dtype_code == ArrayDType.COMPLEX128.value:
         return get_physical_c128_real(array, physical)
     return get_physical_f64(array, physical)
 
@@ -584,38 +569,38 @@ def get_logical_as_f64(array: Array, logical: Int) raises -> Float64:
 
 
 def set_physical_from_f64(mut array: Array, physical: Int, value: Float64) raises:
-    if array.dtype_code == DTYPE_BOOL:
+    if array.dtype_code == ArrayDType.BOOL.value:
         if value != 0.0:
             array.data[physical] = UInt8(1)
         else:
             array.data[physical] = UInt8(0)
-    elif array.dtype_code == DTYPE_INT64:
+    elif array.dtype_code == ArrayDType.INT64.value:
         array.data.bitcast[Int64]()[physical] = Int64(value)
-    elif array.dtype_code == DTYPE_INT32:
+    elif array.dtype_code == ArrayDType.INT32.value:
         array.data.bitcast[Int32]()[physical] = Int32(Int(value))
-    elif array.dtype_code == DTYPE_INT16:
+    elif array.dtype_code == ArrayDType.INT16.value:
         array.data.bitcast[Int16]()[physical] = Int16(Int(value))
-    elif array.dtype_code == DTYPE_INT8:
+    elif array.dtype_code == ArrayDType.INT8.value:
         array.data.bitcast[Int8]()[physical] = Int8(Int(value))
-    elif array.dtype_code == DTYPE_UINT64:
+    elif array.dtype_code == ArrayDType.UINT64.value:
         array.data.bitcast[UInt64]()[physical] = UInt64(Int(value))
-    elif array.dtype_code == DTYPE_UINT32:
+    elif array.dtype_code == ArrayDType.UINT32.value:
         array.data.bitcast[UInt32]()[physical] = UInt32(Int(value))
-    elif array.dtype_code == DTYPE_UINT16:
+    elif array.dtype_code == ArrayDType.UINT16.value:
         array.data.bitcast[UInt16]()[physical] = UInt16(Int(value))
-    elif array.dtype_code == DTYPE_UINT8:
+    elif array.dtype_code == ArrayDType.UINT8.value:
         array.data.bitcast[UInt8]()[physical] = UInt8(Int(value))
-    elif array.dtype_code == DTYPE_FLOAT32:
+    elif array.dtype_code == ArrayDType.FLOAT32.value:
         array.data.bitcast[Float32]()[physical] = Float32(value)
-    elif array.dtype_code == DTYPE_FLOAT16:
+    elif array.dtype_code == ArrayDType.FLOAT16.value:
         array.data.bitcast[Float16]()[physical] = Float16(value)
-    elif array.dtype_code == DTYPE_COMPLEX64:
+    elif array.dtype_code == ArrayDType.COMPLEX64.value:
         # Set the real part; zero the imag part. Matches numpy's
         # f64-to-complex assignment.
         var ptr = array.data.bitcast[Float32]()
         ptr[physical * 2] = Float32(value)
         ptr[physical * 2 + 1] = 0.0
-    elif array.dtype_code == DTYPE_COMPLEX128:
+    elif array.dtype_code == ArrayDType.COMPLEX128.value:
         var ptr = array.data.bitcast[Float64]()
         ptr[physical * 2] = value
         ptr[physical * 2 + 1] = 0.0
@@ -628,21 +613,21 @@ def set_logical_from_f64(mut array: Array, logical: Int, value: Float64) raises:
 
 
 def set_logical_from_i64(mut array: Array, logical: Int, value: Int64) raises:
-    if array.dtype_code == DTYPE_INT64:
+    if array.dtype_code == ArrayDType.INT64.value:
         array.data.bitcast[Int64]()[physical_offset(array, logical)] = value
-    elif array.dtype_code == DTYPE_INT32:
+    elif array.dtype_code == ArrayDType.INT32.value:
         array.data.bitcast[Int32]()[physical_offset(array, logical)] = Int32(Int(value))
-    elif array.dtype_code == DTYPE_INT16:
+    elif array.dtype_code == ArrayDType.INT16.value:
         array.data.bitcast[Int16]()[physical_offset(array, logical)] = Int16(Int(value))
-    elif array.dtype_code == DTYPE_INT8:
+    elif array.dtype_code == ArrayDType.INT8.value:
         array.data.bitcast[Int8]()[physical_offset(array, logical)] = Int8(Int(value))
-    elif array.dtype_code == DTYPE_UINT64:
+    elif array.dtype_code == ArrayDType.UINT64.value:
         array.data.bitcast[UInt64]()[physical_offset(array, logical)] = UInt64(Int(value))
-    elif array.dtype_code == DTYPE_UINT32:
+    elif array.dtype_code == ArrayDType.UINT32.value:
         array.data.bitcast[UInt32]()[physical_offset(array, logical)] = UInt32(Int(value))
-    elif array.dtype_code == DTYPE_UINT16:
+    elif array.dtype_code == ArrayDType.UINT16.value:
         array.data.bitcast[UInt16]()[physical_offset(array, logical)] = UInt16(Int(value))
-    elif array.dtype_code == DTYPE_UINT8:
+    elif array.dtype_code == ArrayDType.UINT8.value:
         array.data.bitcast[UInt8]()[physical_offset(array, logical)] = UInt8(Int(value))
     else:
         set_logical_from_f64(array, logical, Float64(value))
@@ -650,38 +635,38 @@ def set_logical_from_i64(mut array: Array, logical: Int, value: Int64) raises:
 
 def set_logical_from_py(mut array: Array, logical: Int, value_obj: PythonObject) raises:
     var physical = physical_offset(array, logical)
-    if array.dtype_code == DTYPE_BOOL:
+    if array.dtype_code == ArrayDType.BOOL.value:
         if Bool(py=value_obj):
             array.data[physical] = UInt8(1)
         else:
             array.data[physical] = UInt8(0)
-    elif array.dtype_code == DTYPE_INT64:
+    elif array.dtype_code == ArrayDType.INT64.value:
         array.data.bitcast[Int64]()[physical] = Int64(Int(py=value_obj))
-    elif array.dtype_code == DTYPE_INT32:
+    elif array.dtype_code == ArrayDType.INT32.value:
         array.data.bitcast[Int32]()[physical] = Int32(Int(py=value_obj))
-    elif array.dtype_code == DTYPE_INT16:
+    elif array.dtype_code == ArrayDType.INT16.value:
         array.data.bitcast[Int16]()[physical] = Int16(Int(py=value_obj))
-    elif array.dtype_code == DTYPE_INT8:
+    elif array.dtype_code == ArrayDType.INT8.value:
         array.data.bitcast[Int8]()[physical] = Int8(Int(py=value_obj))
-    elif array.dtype_code == DTYPE_UINT64:
+    elif array.dtype_code == ArrayDType.UINT64.value:
         array.data.bitcast[UInt64]()[physical] = UInt64(Int(py=value_obj))
-    elif array.dtype_code == DTYPE_UINT32:
+    elif array.dtype_code == ArrayDType.UINT32.value:
         array.data.bitcast[UInt32]()[physical] = UInt32(Int(py=value_obj))
-    elif array.dtype_code == DTYPE_UINT16:
+    elif array.dtype_code == ArrayDType.UINT16.value:
         array.data.bitcast[UInt16]()[physical] = UInt16(Int(py=value_obj))
-    elif array.dtype_code == DTYPE_UINT8:
+    elif array.dtype_code == ArrayDType.UINT8.value:
         array.data.bitcast[UInt8]()[physical] = UInt8(Int(py=value_obj))
-    elif array.dtype_code == DTYPE_FLOAT32:
+    elif array.dtype_code == ArrayDType.FLOAT32.value:
         array.data.bitcast[Float32]()[physical] = Float32(Float64(py=value_obj))
-    elif array.dtype_code == DTYPE_FLOAT16:
+    elif array.dtype_code == ArrayDType.FLOAT16.value:
         array.data.bitcast[Float16]()[physical] = Float16(Float64(py=value_obj))
-    elif array.dtype_code == DTYPE_COMPLEX64 or array.dtype_code == DTYPE_COMPLEX128:
+    elif array.dtype_code == ArrayDType.COMPLEX64.value or array.dtype_code == ArrayDType.COMPLEX128.value:
         # Accept python complex or real numbers. Real → imaginary=0.
         var real_obj = value_obj.real
         var imag_obj = value_obj.imag
         var real_val = Float64(py=real_obj)
         var imag_val = Float64(py=imag_obj)
-        if array.dtype_code == DTYPE_COMPLEX64:
+        if array.dtype_code == ArrayDType.COMPLEX64.value:
             var ptr = array.data.bitcast[Float32]()
             ptr[physical * 2] = Float32(real_val)
             ptr[physical * 2 + 1] = Float32(imag_val)
@@ -694,19 +679,19 @@ def set_logical_from_py(mut array: Array, logical: Int, value_obj: PythonObject)
 
 
 def scalar_py_as_f64(value_obj: PythonObject, dtype_code: Int) raises -> Float64:
-    if dtype_code == DTYPE_BOOL:
+    if dtype_code == ArrayDType.BOOL.value:
         if Bool(py=value_obj):
             return 1.0
         return 0.0
     if (
-        dtype_code == DTYPE_INT64
-        or dtype_code == DTYPE_INT32
-        or dtype_code == DTYPE_INT16
-        or dtype_code == DTYPE_INT8
-        or dtype_code == DTYPE_UINT64
-        or dtype_code == DTYPE_UINT32
-        or dtype_code == DTYPE_UINT16
-        or dtype_code == DTYPE_UINT8
+        dtype_code == ArrayDType.INT64.value
+        or dtype_code == ArrayDType.INT32.value
+        or dtype_code == ArrayDType.INT16.value
+        or dtype_code == ArrayDType.INT8.value
+        or dtype_code == ArrayDType.UINT64.value
+        or dtype_code == ArrayDType.UINT32.value
+        or dtype_code == ArrayDType.UINT16.value
+        or dtype_code == ArrayDType.UINT8.value
     ):
         return Float64(Int(py=value_obj))
     return Float64(py=value_obj)
@@ -714,7 +699,7 @@ def scalar_py_as_f64(value_obj: PythonObject, dtype_code: Int) raises -> Float64
 
 def fill_all_from_py(mut array: Array, value_obj: PythonObject) raises:
     if is_c_contiguous(array):
-        if array.dtype_code == DTYPE_BOOL:
+        if array.dtype_code == ArrayDType.BOOL.value:
             var value = UInt8(0)
             if Bool(py=value_obj):
                 value = UInt8(1)
@@ -722,73 +707,73 @@ def fill_all_from_py(mut array: Array, value_obj: PythonObject) raises:
             for i in range(array.size_value):
                 ptr[i] = value
             return
-        if array.dtype_code == DTYPE_INT64:
+        if array.dtype_code == ArrayDType.INT64.value:
             var value = Int64(Int(py=value_obj))
             var ptr = array.data.bitcast[Int64]() + array.offset_elems
             for i in range(array.size_value):
                 ptr[i] = value
             return
-        if array.dtype_code == DTYPE_INT32:
+        if array.dtype_code == ArrayDType.INT32.value:
             var value = Int32(Int(py=value_obj))
             var ptr = array.data.bitcast[Int32]() + array.offset_elems
             for i in range(array.size_value):
                 ptr[i] = value
             return
-        if array.dtype_code == DTYPE_INT16:
+        if array.dtype_code == ArrayDType.INT16.value:
             var value = Int16(Int(py=value_obj))
             var ptr = array.data.bitcast[Int16]() + array.offset_elems
             for i in range(array.size_value):
                 ptr[i] = value
             return
-        if array.dtype_code == DTYPE_INT8:
+        if array.dtype_code == ArrayDType.INT8.value:
             var value = Int8(Int(py=value_obj))
             var ptr = array.data.bitcast[Int8]() + array.offset_elems
             for i in range(array.size_value):
                 ptr[i] = value
             return
-        if array.dtype_code == DTYPE_UINT64:
+        if array.dtype_code == ArrayDType.UINT64.value:
             var value = UInt64(Int(py=value_obj))
             var ptr = array.data.bitcast[UInt64]() + array.offset_elems
             for i in range(array.size_value):
                 ptr[i] = value
             return
-        if array.dtype_code == DTYPE_UINT32:
+        if array.dtype_code == ArrayDType.UINT32.value:
             var value = UInt32(Int(py=value_obj))
             var ptr = array.data.bitcast[UInt32]() + array.offset_elems
             for i in range(array.size_value):
                 ptr[i] = value
             return
-        if array.dtype_code == DTYPE_UINT16:
+        if array.dtype_code == ArrayDType.UINT16.value:
             var value = UInt16(Int(py=value_obj))
             var ptr = array.data.bitcast[UInt16]() + array.offset_elems
             for i in range(array.size_value):
                 ptr[i] = value
             return
-        if array.dtype_code == DTYPE_UINT8:
+        if array.dtype_code == ArrayDType.UINT8.value:
             var value = UInt8(Int(py=value_obj))
             var ptr = array.data.bitcast[UInt8]() + array.offset_elems
             for i in range(array.size_value):
                 ptr[i] = value
             return
-        if array.dtype_code == DTYPE_FLOAT32:
+        if array.dtype_code == ArrayDType.FLOAT32.value:
             var value = Float32(Float64(py=value_obj))
             var ptr = array.data.bitcast[Float32]() + array.offset_elems
             for i in range(array.size_value):
                 ptr[i] = value
             return
-        if array.dtype_code == DTYPE_FLOAT16:
+        if array.dtype_code == ArrayDType.FLOAT16.value:
             var value = Float16(Float64(py=value_obj))
             var ptr = array.data.bitcast[Float16]() + array.offset_elems
             for i in range(array.size_value):
                 ptr[i] = value
             return
-        if array.dtype_code == DTYPE_FLOAT64:
+        if array.dtype_code == ArrayDType.FLOAT64.value:
             var value = Float64(py=value_obj)
             var ptr = array.data.bitcast[Float64]() + array.offset_elems
             for i in range(array.size_value):
                 ptr[i] = value
             return
-        if array.dtype_code == DTYPE_COMPLEX64:
+        if array.dtype_code == ArrayDType.COMPLEX64.value:
             var real = Float32(Float64(py=value_obj.real))
             var imag = Float32(Float64(py=value_obj.imag))
             var ptr = array.data.bitcast[Float32]() + array.offset_elems * 2
@@ -796,7 +781,7 @@ def fill_all_from_py(mut array: Array, value_obj: PythonObject) raises:
                 ptr[i * 2] = real
                 ptr[i * 2 + 1] = imag
             return
-        if array.dtype_code == DTYPE_COMPLEX128:
+        if array.dtype_code == ArrayDType.COMPLEX128.value:
             var real = Float64(py=value_obj.real)
             var imag = Float64(py=value_obj.imag)
             var ptr = array.data.bitcast[Float64]() + array.offset_elems * 2
@@ -875,17 +860,17 @@ def contiguous_u8_ptr(
 
 
 def contiguous_as_f64(array: Array, index: Int) raises -> Float64:
-    if array.dtype_code == DTYPE_FLOAT32:
+    if array.dtype_code == ArrayDType.FLOAT32.value:
         return Float64(contiguous_f32_ptr(array)[index])
-    if array.dtype_code == DTYPE_FLOAT64:
+    if array.dtype_code == ArrayDType.FLOAT64.value:
         return contiguous_f64_ptr(array)[index]
     return get_physical_as_f64(array, array.offset_elems + index)
 
 
 def set_contiguous_from_f64(mut array: Array, index: Int, value: Float64) raises:
-    if array.dtype_code == DTYPE_FLOAT32:
+    if array.dtype_code == ArrayDType.FLOAT32.value:
         contiguous_f32_ptr(array)[index] = Float32(value)
-    elif array.dtype_code == DTYPE_FLOAT64:
+    elif array.dtype_code == ArrayDType.FLOAT64.value:
         contiguous_f64_ptr(array)[index] = value
     else:
         set_physical_from_f64(array, array.offset_elems + index, value)
@@ -1092,46 +1077,46 @@ def _maybe_copy_rank2_strided(src: Array, mut result: Array) raises -> Bool:
         return False
     if src.size_value == 0:
         return True
-    if src.dtype_code == DTYPE_BOOL:
+    if src.dtype_code == ArrayDType.BOOL.value:
         _copy_rank2_strided_bool(src, result)
         return True
-    if src.dtype_code == DTYPE_INT8:
+    if src.dtype_code == ArrayDType.INT8.value:
         _copy_rank2_strided_typed[DType.int8](src, result)
         return True
-    if src.dtype_code == DTYPE_INT16:
+    if src.dtype_code == ArrayDType.INT16.value:
         _copy_rank2_strided_typed[DType.int16](src, result)
         return True
-    if src.dtype_code == DTYPE_INT32:
+    if src.dtype_code == ArrayDType.INT32.value:
         _copy_rank2_strided_typed[DType.int32](src, result)
         return True
-    if src.dtype_code == DTYPE_INT64:
+    if src.dtype_code == ArrayDType.INT64.value:
         _copy_rank2_strided_typed[DType.int64](src, result)
         return True
-    if src.dtype_code == DTYPE_UINT8:
+    if src.dtype_code == ArrayDType.UINT8.value:
         _copy_rank2_strided_typed[DType.uint8](src, result)
         return True
-    if src.dtype_code == DTYPE_UINT16:
+    if src.dtype_code == ArrayDType.UINT16.value:
         _copy_rank2_strided_typed[DType.uint16](src, result)
         return True
-    if src.dtype_code == DTYPE_UINT32:
+    if src.dtype_code == ArrayDType.UINT32.value:
         _copy_rank2_strided_typed[DType.uint32](src, result)
         return True
-    if src.dtype_code == DTYPE_UINT64:
+    if src.dtype_code == ArrayDType.UINT64.value:
         _copy_rank2_strided_typed[DType.uint64](src, result)
         return True
-    if src.dtype_code == DTYPE_FLOAT16:
+    if src.dtype_code == ArrayDType.FLOAT16.value:
         _copy_rank2_strided_typed[DType.float16](src, result)
         return True
-    if src.dtype_code == DTYPE_FLOAT32:
+    if src.dtype_code == ArrayDType.FLOAT32.value:
         _copy_rank2_strided_typed[DType.float32](src, result)
         return True
-    if src.dtype_code == DTYPE_FLOAT64:
+    if src.dtype_code == ArrayDType.FLOAT64.value:
         _copy_rank2_strided_typed[DType.float64](src, result)
         return True
-    if src.dtype_code == DTYPE_COMPLEX64:
+    if src.dtype_code == ArrayDType.COMPLEX64.value:
         _copy_rank2_strided_complex32(src, result)
         return True
-    if src.dtype_code == DTYPE_COMPLEX128:
+    if src.dtype_code == ArrayDType.COMPLEX128.value:
         _copy_rank2_strided_complex64(src, result)
         return True
     return False
@@ -1154,14 +1139,14 @@ def copy_c_contiguous(src: Array) raises -> Array:
         return result^
     for i in range(src.size_value):
         var physical = physical_offset(src, i)
-        if src.dtype_code == DTYPE_BOOL:
+        if src.dtype_code == ArrayDType.BOOL.value:
             if get_physical_bool(src, physical):
                 set_logical_from_f64(result, i, 1.0)
             else:
                 set_logical_from_f64(result, i, 0.0)
-        elif src.dtype_code == DTYPE_INT64:
+        elif src.dtype_code == ArrayDType.INT64.value:
             set_logical_from_i64(result, i, get_physical_i64(src, physical))
-        elif src.dtype_code == DTYPE_FLOAT32:
+        elif src.dtype_code == ArrayDType.FLOAT32.value:
             set_logical_from_f64(result, i, Float64(get_physical_f32(src, physical)))
         else:
             set_logical_from_f64(result, i, get_physical_f64(src, physical))
@@ -1171,70 +1156,70 @@ def copy_c_contiguous(src: Array) raises -> Array:
 def _maybe_cast_contiguous_core_dtypes(src: Array, mut result: Array) raises -> Bool:
     if not is_c_contiguous(src) or not is_c_contiguous(result):
         return False
-    if src.dtype_code == DTYPE_BOOL:
+    if src.dtype_code == ArrayDType.BOOL.value:
         var src_ptr = src.data + src.offset_elems
-        if result.dtype_code == DTYPE_INT64:
+        if result.dtype_code == ArrayDType.INT64.value:
             var out = contiguous_i64_ptr(result)
             for i in range(src.size_value):
                 out[i] = Int64(1) if src_ptr[i] != UInt8(0) else Int64(0)
             return True
-        if result.dtype_code == DTYPE_FLOAT32:
+        if result.dtype_code == ArrayDType.FLOAT32.value:
             var out = contiguous_f32_ptr(result)
             for i in range(src.size_value):
                 out[i] = Float32(1.0) if src_ptr[i] != UInt8(0) else Float32(0.0)
             return True
-        if result.dtype_code == DTYPE_FLOAT64:
+        if result.dtype_code == ArrayDType.FLOAT64.value:
             var out = contiguous_f64_ptr(result)
             for i in range(src.size_value):
                 out[i] = 1.0 if src_ptr[i] != UInt8(0) else 0.0
             return True
-    if src.dtype_code == DTYPE_INT64:
+    if src.dtype_code == ArrayDType.INT64.value:
         var src_ptr = contiguous_i64_ptr(src)
-        if result.dtype_code == DTYPE_BOOL:
+        if result.dtype_code == ArrayDType.BOOL.value:
             var out = result.data + result.offset_elems
             for i in range(src.size_value):
                 out[i] = UInt8(1) if src_ptr[i] != Int64(0) else UInt8(0)
             return True
-        if result.dtype_code == DTYPE_FLOAT32:
+        if result.dtype_code == ArrayDType.FLOAT32.value:
             var out = contiguous_f32_ptr(result)
             for i in range(src.size_value):
                 out[i] = Float32(Float64(src_ptr[i]))
             return True
-        if result.dtype_code == DTYPE_FLOAT64:
+        if result.dtype_code == ArrayDType.FLOAT64.value:
             var out = contiguous_f64_ptr(result)
             for i in range(src.size_value):
                 out[i] = Float64(src_ptr[i])
             return True
-    if src.dtype_code == DTYPE_FLOAT32:
+    if src.dtype_code == ArrayDType.FLOAT32.value:
         var src_ptr = contiguous_f32_ptr(src)
-        if result.dtype_code == DTYPE_BOOL:
+        if result.dtype_code == ArrayDType.BOOL.value:
             var out = result.data + result.offset_elems
             for i in range(src.size_value):
                 out[i] = UInt8(1) if src_ptr[i] != Float32(0.0) else UInt8(0)
             return True
-        if result.dtype_code == DTYPE_INT64:
+        if result.dtype_code == ArrayDType.INT64.value:
             var out = contiguous_i64_ptr(result)
             for i in range(src.size_value):
                 out[i] = Int64(Float64(src_ptr[i]))
             return True
-        if result.dtype_code == DTYPE_FLOAT64:
+        if result.dtype_code == ArrayDType.FLOAT64.value:
             var out = contiguous_f64_ptr(result)
             for i in range(src.size_value):
                 out[i] = Float64(src_ptr[i])
             return True
-    if src.dtype_code == DTYPE_FLOAT64:
+    if src.dtype_code == ArrayDType.FLOAT64.value:
         var src_ptr = contiguous_f64_ptr(src)
-        if result.dtype_code == DTYPE_BOOL:
+        if result.dtype_code == ArrayDType.BOOL.value:
             var out = result.data + result.offset_elems
             for i in range(src.size_value):
                 out[i] = UInt8(1) if src_ptr[i] != 0.0 else UInt8(0)
             return True
-        if result.dtype_code == DTYPE_INT64:
+        if result.dtype_code == ArrayDType.INT64.value:
             var out = contiguous_i64_ptr(result)
             for i in range(src.size_value):
                 out[i] = Int64(src_ptr[i])
             return True
-        if result.dtype_code == DTYPE_FLOAT32:
+        if result.dtype_code == ArrayDType.FLOAT32.value:
             var out = contiguous_f32_ptr(result)
             for i in range(src.size_value):
                 out[i] = Float32(src_ptr[i])
@@ -1249,28 +1234,28 @@ def cast_copy_array(src: Array, dtype_code: Int) raises -> Array:
     var result = make_empty_array(dtype_code, shape^)
     if _maybe_cast_contiguous_core_dtypes(src, result):
         return result^
-    var dst_is_complex = dtype_code == DTYPE_COMPLEX64 or dtype_code == DTYPE_COMPLEX128
+    var dst_is_complex = dtype_code == ArrayDType.COMPLEX64.value or dtype_code == ArrayDType.COMPLEX128.value
     var src_is_c = is_c_contiguous(src)
     for i in range(src.size_value):
         var physical = src.offset_elems + i
         if not src_is_c:
             physical = physical_offset(src, i)
-        if src.dtype_code == DTYPE_COMPLEX64:
+        if src.dtype_code == ArrayDType.COMPLEX64.value:
             var re = Float64(get_physical_c64_real(src, physical))
             var im = Float64(get_physical_c64_imag(src, physical))
             if dst_is_complex:
-                if dtype_code == DTYPE_COMPLEX64:
+                if dtype_code == ArrayDType.COMPLEX64.value:
                     set_physical_c64(result, i, Float32(re), Float32(im))
                 else:
                     set_physical_c128(result, i, re, im)
             else:
                 set_logical_from_f64(result, i, re)  # numpy drops imag
             continue
-        if src.dtype_code == DTYPE_COMPLEX128:
+        if src.dtype_code == ArrayDType.COMPLEX128.value:
             var re = get_physical_c128_real(src, physical)
             var im = get_physical_c128_imag(src, physical)
             if dst_is_complex:
-                if dtype_code == DTYPE_COMPLEX64:
+                if dtype_code == ArrayDType.COMPLEX64.value:
                     set_physical_c64(result, i, Float32(re), Float32(im))
                 else:
                     set_physical_c128(result, i, re, im)
@@ -1279,32 +1264,32 @@ def cast_copy_array(src: Array, dtype_code: Int) raises -> Array:
             continue
         # Real → anything (including complex). Read source real value and
         # write through the unified setters (which zero imag for complex).
-        if src.dtype_code == DTYPE_BOOL:
+        if src.dtype_code == ArrayDType.BOOL.value:
             if get_physical_bool(src, physical):
                 set_logical_from_i64(result, i, 1)
             else:
                 set_logical_from_i64(result, i, 0)
-        elif src.dtype_code == DTYPE_INT64:
+        elif src.dtype_code == ArrayDType.INT64.value:
             set_logical_from_i64(result, i, get_physical_i64(src, physical))
-        elif src.dtype_code == DTYPE_INT32:
+        elif src.dtype_code == ArrayDType.INT32.value:
             set_logical_from_i64(result, i, Int64(Int(get_physical_i32(src, physical))))
-        elif src.dtype_code == DTYPE_INT16:
+        elif src.dtype_code == ArrayDType.INT16.value:
             set_logical_from_i64(result, i, Int64(Int(get_physical_i16(src, physical))))
-        elif src.dtype_code == DTYPE_INT8:
+        elif src.dtype_code == ArrayDType.INT8.value:
             set_logical_from_i64(result, i, Int64(Int(get_physical_i8(src, physical))))
-        elif src.dtype_code == DTYPE_UINT64:
+        elif src.dtype_code == ArrayDType.UINT64.value:
             set_logical_from_f64(result, i, Float64(Int(get_physical_u64(src, physical))))
-        elif src.dtype_code == DTYPE_UINT32:
+        elif src.dtype_code == ArrayDType.UINT32.value:
             set_logical_from_i64(result, i, Int64(Int(get_physical_u32(src, physical))))
-        elif src.dtype_code == DTYPE_UINT16:
+        elif src.dtype_code == ArrayDType.UINT16.value:
             set_logical_from_i64(result, i, Int64(Int(get_physical_u16(src, physical))))
-        elif src.dtype_code == DTYPE_UINT8:
+        elif src.dtype_code == ArrayDType.UINT8.value:
             set_logical_from_i64(result, i, Int64(Int(get_physical_u8(src, physical))))
-        elif src.dtype_code == DTYPE_FLOAT32:
+        elif src.dtype_code == ArrayDType.FLOAT32.value:
             set_logical_from_f64(result, i, Float64(get_physical_f32(src, physical)))
-        elif src.dtype_code == DTYPE_FLOAT16:
+        elif src.dtype_code == ArrayDType.FLOAT16.value:
             set_logical_from_f64(result, i, Float64(get_physical_f16(src, physical)))
-        elif src.dtype_code == DTYPE_FLOAT64:
+        elif src.dtype_code == ArrayDType.FLOAT64.value:
             set_logical_from_f64(result, i, get_physical_f64(src, physical))
         else:
             raise Error("unsupported dtype code")
@@ -1316,8 +1301,8 @@ def result_dtype_for_unary(dtype_code: Int) -> Int:
 
 
 def result_dtype_for_unary_preserve(dtype_code: Int) -> Int:
-    if dtype_code == DTYPE_BOOL:
-        return DTYPE_INT64
+    if dtype_code == ArrayDType.BOOL.value:
+        return ArrayDType.INT64.value
     return dtype_code
 
 

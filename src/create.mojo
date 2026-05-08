@@ -3,55 +3,15 @@ from std.math import cos, exp, isinf, isnan, log, nan, sin
 from std.python import PythonObject
 
 from domain import (
-    BACKEND_FUSED,
-    CMP_EQ,
-    CMP_GE,
-    CMP_GT,
-    CMP_LE,
-    CMP_LT,
-    CMP_NE,
-    DTYPE_BOOL,
-    DTYPE_COMPLEX128,
-    DTYPE_COMPLEX64,
-    DTYPE_FLOAT32,
-    DTYPE_FLOAT64,
-    DTYPE_INT64,
-    LOGIC_AND,
-    LOGIC_OR,
-    LOGIC_XOR,
-    OP_ADD,
-    OP_DIV,
-    OP_MUL,
-    OP_SUB,
-    PRED_ISFINITE,
-    PRED_ISINF,
-    PRED_ISNAN,
-    PRED_SIGNBIT,
-    REDUCE_ALL,
-    REDUCE_ANY,
-    REDUCE_ARGMAX,
-    REDUCE_ARGMIN,
-    REDUCE_MEAN,
-    REDUCE_MAX,
-    REDUCE_MIN,
-    REDUCE_PROD,
-    REDUCE_SUM,
-    UNARY_CBRT,
-    UNARY_COS,
-    UNARY_COSH,
-    UNARY_EXP,
-    UNARY_EXP2,
-    UNARY_EXPM1,
-    UNARY_LOG,
-    UNARY_LOG10,
-    UNARY_LOG1P,
-    UNARY_LOG2,
-    UNARY_RECIPROCAL,
-    UNARY_SIN,
-    UNARY_SINH,
-    UNARY_SQRT,
-    UNARY_TAN,
-    UNARY_TANH,
+    ArrayDType,
+    BackendKind,
+    BinaryOp,
+    CastingRule,
+    CompareOp,
+    LogicalOp,
+    PredicateOp,
+    ReduceOp,
+    UnaryOp,
     dtype_alignment,
     dtype_can_cast,
     dtype_item_size,
@@ -285,7 +245,7 @@ def linspace_ops(
 
 def indices_ops(dimensions_obj: PythonObject, dtype_obj: PythonObject) raises -> PythonObject:
     var dtype_code = Int(py=dtype_obj)
-    if dtype_code != DTYPE_INT64:
+    if dtype_code != ArrayDType.INT64.value:
         raise Error("indices() native kernel only supports int64")
     var dims = int_list_from_py(dimensions_obj)
     var rank = len(dims)
@@ -301,7 +261,7 @@ def indices_ops(dimensions_obj: PythonObject, dtype_obj: PythonObject) raises ->
     for axis in range(rank - 1, -1, -1):
         strides[axis] = plane_size
         plane_size *= dims[axis]
-    var result = make_empty_array(DTYPE_INT64, out_shape^)
+    var result = make_empty_array(ArrayDType.INT64.value, out_shape^)
     if rank == 0 or plane_size == 0:
         return PythonObject(alloc=result^)
     var out = contiguous_i64_ptr(result)
@@ -576,14 +536,14 @@ def trace_ops(
     var shape = List[Int]()
     var dtype_code = Int(py=dtype_obj)
     if dtype_code < 0:
-        dtype_code = result_dtype_for_reduction(src[].dtype_code, REDUCE_SUM)
+        dtype_code = result_dtype_for_reduction(src[].dtype_code, ReduceOp.SUM.value)
     var result = make_empty_array(dtype_code, shape^)
-    if src[].dtype_code == DTYPE_INT64:
+    if src[].dtype_code == ArrayDType.INT64.value:
         var acc = Int64(0)
         for i in range(diag_len):
             acc += get_physical_i64(src[], diag_offset + i * diag_stride)
         set_logical_from_i64(result, 0, acc)
-    elif src[].dtype_code == DTYPE_BOOL:
+    elif src[].dtype_code == ArrayDType.BOOL.value:
         var acc = Int64(0)
         for i in range(diag_len):
             if get_physical_bool(src[], diag_offset + i * diag_stride):
@@ -599,12 +559,12 @@ def trace_ops(
 
 def unary_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
-    var op = Int(py=op_obj)
+    var op = UnaryOp.from_int(Int(py=op_obj)).value
     var shape = clone_int_list(src[].shape)
     var result = make_empty_array(result_dtype_for_unary(src[].dtype_code), shape^)
     # Complex transcendentals: sin/cos/exp/log/sqrt etc. via Euler identities.
     # Output dtype = input dtype (preserved by result_dtype_for_unary).
-    if src[].dtype_code == DTYPE_COMPLEX64 or src[].dtype_code == DTYPE_COMPLEX128:
+    if src[].dtype_code == ArrayDType.COMPLEX64.value or src[].dtype_code == ArrayDType.COMPLEX128.value:
         for i in range(src[].size_value):
             var re = _complex_real(src[], i)
             var im = _complex_imag(src[], i)
@@ -650,27 +610,27 @@ def apply_unary_complex_f64(re: Float64, im: Float64, op: Int) raises -> Tuple[F
         sqrt as _sqrt,
     )
 
-    if op == UNARY_EXP:
+    if op == UnaryOp.EXP.value:
         # exp(a+bi) = exp(a) * (cos(b) + i sin(b))
         var ea = _exp(re)
         return (ea * _cos(im), ea * _sin(im))
-    if op == UNARY_LOG:
+    if op == UnaryOp.LOG.value:
         # log(z) = log|z| + i arg(z)
         var modulus = _sqrt(re * re + im * im)
         return (_log(modulus), _atan2(im, re))
-    if op == UNARY_SIN:
+    if op == UnaryOp.SIN.value:
         # sin(a+bi) = sin(a)cosh(b) + i cos(a)sinh(b)
         return (_sin(re) * _cosh(im), _cos(re) * _sinh(im))
-    if op == UNARY_COS:
+    if op == UnaryOp.COS.value:
         # cos(a+bi) = cos(a)cosh(b) - i sin(a)sinh(b)
         return (_cos(re) * _cosh(im), -_sin(re) * _sinh(im))
-    if op == UNARY_SINH:
+    if op == UnaryOp.SINH.value:
         # sinh(a+bi) = sinh(a)cos(b) + i cosh(a)sin(b)
         return (_sinh(re) * _cos(im), _cosh(re) * _sin(im))
-    if op == UNARY_COSH:
+    if op == UnaryOp.COSH.value:
         # cosh(a+bi) = cosh(a)cos(b) + i sinh(a)sin(b)
         return (_cosh(re) * _cos(im), _sinh(re) * _sin(im))
-    if op == UNARY_TANH:
+    if op == UnaryOp.TANH.value:
         # tanh(z) = sinh(z) / cosh(z) — use Euler-form identities and divide.
         var s_re = _sinh(re) * _cos(im)
         var s_im = _cosh(re) * _sin(im)
@@ -678,7 +638,7 @@ def apply_unary_complex_f64(re: Float64, im: Float64, op: Int) raises -> Tuple[F
         var c_im = _sinh(re) * _sin(im)
         var denom = c_re * c_re + c_im * c_im
         return ((s_re * c_re + s_im * c_im) / denom, (s_im * c_re - s_re * c_im) / denom)
-    if op == UNARY_TAN:
+    if op == UnaryOp.TAN.value:
         # tan(z) = sin(z) / cos(z)
         var s_re = _sin(re) * _cosh(im)
         var s_im = _cos(re) * _sinh(im)
@@ -686,42 +646,42 @@ def apply_unary_complex_f64(re: Float64, im: Float64, op: Int) raises -> Tuple[F
         var c_im = -_sin(re) * _sinh(im)
         var denom = c_re * c_re + c_im * c_im
         return ((s_re * c_re + s_im * c_im) / denom, (s_im * c_re - s_re * c_im) / denom)
-    if op == UNARY_SQRT:
+    if op == UnaryOp.SQRT.value:
         # sqrt(z): principal branch. z = r * exp(i*theta), sqrt(z) = sqrt(r) * exp(i*theta/2).
         var modulus = _sqrt(re * re + im * im)
         var arg = _atan2(im, re)
         var s = _sqrt(modulus)
         return (s * _cos(arg / 2.0), s * _sin(arg / 2.0))
-    if op == UNARY_LOG2:
+    if op == UnaryOp.LOG2.value:
         # log2(z) = log(z) / log(2)
         var modulus = _sqrt(re * re + im * im)
         var ln2 = 0.6931471805599453
         return (_log(modulus) / ln2, _atan2(im, re) / ln2)
-    if op == UNARY_LOG10:
+    if op == UnaryOp.LOG10.value:
         var modulus = _sqrt(re * re + im * im)
         var ln10 = 2.302585092994046
         return (_log(modulus) / ln10, _atan2(im, re) / ln10)
-    if op == UNARY_LOG1P:
+    if op == UnaryOp.LOG1P.value:
         # log(1 + z)
         var nre = 1.0 + re
         var modulus = _sqrt(nre * nre + im * im)
         return (_log(modulus), _atan2(im, nre))
-    if op == UNARY_EXPM1:
+    if op == UnaryOp.EXPM1.value:
         # exp(z) - 1 — use exp formula then subtract 1 from real part.
         var ea = _exp(re)
         return (ea * _cos(im) - 1.0, ea * _sin(im))
-    if op == UNARY_RECIPROCAL:
+    if op == UnaryOp.RECIPROCAL.value:
         # 1 / (a + bi) = (a - bi) / (a² + b²)
         var denom = re * re + im * im
         return (re / denom, -im / denom)
-    if op == UNARY_EXP2:
+    if op == UnaryOp.EXP2.value:
         # 2^z = exp(z * log(2))
         var ln2 = 0.6931471805599453
         var nre = re * ln2
         var nim = im * ln2
         var ea = _exp(nre)
         return (ea * _cos(nim), ea * _sin(nim))
-    if op == UNARY_CBRT:
+    if op == UnaryOp.CBRT.value:
         # cbrt(z) — principal branch.
         var modulus = _sqrt(re * re + im * im)
         var arg = _atan2(im, re)
@@ -794,19 +754,19 @@ def binary_op_method_ops(py_self: PythonObject, other_obj: PythonObject, op: Int
 
 
 def array_add_method_ops(py_self: PythonObject, other_obj: PythonObject) raises -> PythonObject:
-    return binary_op_method_ops(py_self, other_obj, OP_ADD)
+    return binary_op_method_ops(py_self, other_obj, BinaryOp.ADD.value)
 
 
 def array_sub_method_ops(py_self: PythonObject, other_obj: PythonObject) raises -> PythonObject:
-    return binary_op_method_ops(py_self, other_obj, OP_SUB)
+    return binary_op_method_ops(py_self, other_obj, BinaryOp.SUB.value)
 
 
 def array_mul_method_ops(py_self: PythonObject, other_obj: PythonObject) raises -> PythonObject:
-    return binary_op_method_ops(py_self, other_obj, OP_MUL)
+    return binary_op_method_ops(py_self, other_obj, BinaryOp.MUL.value)
 
 
 def array_div_method_ops(py_self: PythonObject, other_obj: PythonObject) raises -> PythonObject:
-    return binary_op_method_ops(py_self, other_obj, OP_DIV)
+    return binary_op_method_ops(py_self, other_obj, BinaryOp.DIV.value)
 
 
 def array_matmul_method_ops(py_self: PythonObject, other_obj: PythonObject) raises -> PythonObject:
@@ -836,7 +796,7 @@ def array_matmul_method_ops(py_self: PythonObject, other_obj: PythonObject) rais
     elif lhs_ndim == 1 and rhs_ndim == 2:
         out_shape.append(n)
     var result = make_empty_array(
-        result_dtype_for_binary(self_ptr[].dtype_code, other_ptr[].dtype_code, OP_MUL),
+        result_dtype_for_binary(self_ptr[].dtype_code, other_ptr[].dtype_code, BinaryOp.MUL.value),
         out_shape^,
     )
     if lhs_ndim == 1 and rhs_ndim == 1:
@@ -868,7 +828,7 @@ def array_matmul_method_ops(py_self: PythonObject, other_obj: PythonObject) rais
 def binary_ops(lhs_obj: PythonObject, rhs_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
     var lhs = lhs_obj.downcast_value_ptr[Array]()
     var rhs = rhs_obj.downcast_value_ptr[Array]()
-    var op = Int(py=op_obj)
+    var op = BinaryOp.from_int(Int(py=op_obj)).value
     var result = binary_dispatch_ops(lhs[], rhs[], op)
     return PythonObject(alloc=result^)
 
@@ -882,7 +842,7 @@ def binary_into_ops(
     var dst = dst_obj.downcast_value_ptr[Array]()
     var lhs = lhs_obj.downcast_value_ptr[Array]()
     var rhs = rhs_obj.downcast_value_ptr[Array]()
-    var op = Int(py=op_obj)
+    var op = BinaryOp.from_int(Int(py=op_obj)).value
     var dtype_code = result_dtype_for_binary(lhs[].dtype_code, rhs[].dtype_code, op)
     if dst[].dtype_code != dtype_code:
         raise Error("out dtype does not match binary result dtype")
@@ -931,7 +891,7 @@ def binary_scalar_ops(
 ) raises -> PythonObject:
     var array = array_obj.downcast_value_ptr[Array]()
     var scalar_dtype = Int(py=scalar_dtype_obj)
-    var op = Int(py=op_obj)
+    var op = BinaryOp.from_int(Int(py=op_obj)).value
     var scalar_on_left = Bool(py=scalar_on_left_obj)
     var shape = clone_int_list(array[].shape)
     var dtype_code = result_dtype_for_binary(array[].dtype_code, scalar_dtype, op)
@@ -966,11 +926,13 @@ def result_dtype_for_binary_py_ops(
     rhs_dtype_obj: PythonObject,
     op_obj: PythonObject,
 ) raises -> PythonObject:
-    return PythonObject(result_dtype_for_binary(Int(py=lhs_dtype_obj), Int(py=rhs_dtype_obj), Int(py=op_obj)))
+    var op = BinaryOp.from_int(Int(py=op_obj)).value
+    return PythonObject(result_dtype_for_binary(Int(py=lhs_dtype_obj), Int(py=rhs_dtype_obj), op))
 
 
 def result_dtype_for_reduction_py_ops(dtype_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
-    return PythonObject(result_dtype_for_reduction(Int(py=dtype_obj), Int(py=op_obj)))
+    var op = ReduceOp.from_int(Int(py=op_obj)).value
+    return PythonObject(result_dtype_for_reduction(Int(py=dtype_obj), op))
 
 
 def dtype_item_size_py_ops(dtype_obj: PythonObject) raises -> PythonObject:
@@ -994,7 +956,8 @@ def dtype_can_cast_py_ops(
     to_dtype_obj: PythonObject,
     casting_obj: PythonObject,
 ) raises -> PythonObject:
-    return PythonObject(dtype_can_cast(Int(py=from_dtype_obj), Int(py=to_dtype_obj), Int(py=casting_obj)))
+    var casting = CastingRule.from_int(Int(py=casting_obj)).value
+    return PythonObject(dtype_can_cast(Int(py=from_dtype_obj), Int(py=to_dtype_obj), casting))
 
 
 def sin_add_mul_ops(
@@ -1019,8 +982,10 @@ def sin_add_mul_ops(
         if maybe_sin_add_mul_contiguous(lhs[], rhs[], scalar_value, fast_result):
             return PythonObject(alloc=fast_result^)
     var shape = broadcast_shape(lhs[], rhs[])
-    var rhs_mul_dtype = result_dtype_for_binary(rhs[].dtype_code, scalar_dtype, OP_MUL)
-    var dtype_code = result_dtype_for_binary(result_dtype_for_unary(lhs[].dtype_code), rhs_mul_dtype, OP_ADD)
+    var rhs_mul_dtype = result_dtype_for_binary(rhs[].dtype_code, scalar_dtype, BinaryOp.MUL.value)
+    var dtype_code = result_dtype_for_binary(
+        result_dtype_for_unary(lhs[].dtype_code), rhs_mul_dtype, BinaryOp.ADD.value
+    )
     var result = make_empty_array(dtype_code, shape^)
     if maybe_sin_add_mul_contiguous(lhs[], rhs[], scalar_value, result):
         return PythonObject(alloc=result^)
@@ -1049,7 +1014,7 @@ def sin_add_mul_ops(
         )
         set_physical_from_f64(result, iter.element_index(2), output)
         iter.step()
-    result.backend_code = BACKEND_FUSED
+    result.backend_code = BackendKind.FUSED.value
     return PythonObject(alloc=result^)
 
 
@@ -1060,7 +1025,7 @@ def where_ops(cond_obj: PythonObject, lhs_obj: PythonObject, rhs_obj: PythonObje
     var partial_shape = broadcast_shape(cond[], lhs[])
     var tmp = make_empty_array(lhs[].dtype_code, partial_shape^)
     var shape = broadcast_shape(tmp, rhs[])
-    var dtype_code = result_dtype_for_binary(lhs[].dtype_code, rhs[].dtype_code, OP_ADD)
+    var dtype_code = result_dtype_for_binary(lhs[].dtype_code, rhs[].dtype_code, BinaryOp.ADD.value)
     var result = make_empty_array(dtype_code, shape^)
     var cond_layout = as_broadcast_layout(cond[], result.shape)
     var lhs_layout = as_broadcast_layout(lhs[], result.shape)
@@ -1089,7 +1054,7 @@ def where_ops(cond_obj: PythonObject, lhs_obj: PythonObject, rhs_obj: PythonObje
     while iter.has_next():
         var cond_phys = iter.element_index(0)
         var picked: Float64
-        if cond[].dtype_code == DTYPE_BOOL:
+        if cond[].dtype_code == ArrayDType.BOOL.value:
             picked = 1.0 if get_physical_bool(cond[], cond_phys) else 0.0
         else:
             picked = get_physical_as_f64(cond[], cond_phys)
@@ -1111,13 +1076,13 @@ def _reduce_strided_iter(src: Array) raises -> LayoutIter:
 
 def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
-    var op = Int(py=op_obj)
+    var op = ReduceOp.from_int(Int(py=op_obj)).value
     var shape = List[Int]()
-    if op == REDUCE_ARGMAX or op == REDUCE_ARGMIN:
-        var result = make_empty_array(DTYPE_INT64, shape^)
+    if op == ReduceOp.ARGMAX.value or op == ReduceOp.ARGMIN.value:
+        var result = make_empty_array(ArrayDType.INT64.value, shape^)
         if src[].size_value == 0:
             raise Error("argmax/argmin cannot reduce an empty array")
-        if op == REDUCE_ARGMAX and maybe_argmax_contiguous(src[], result):
+        if op == ReduceOp.ARGMAX.value and maybe_argmax_contiguous(src[], result):
             return PythonObject(alloc=result^)
         var iter = _reduce_strided_iter(src[])
         var best_index = 0
@@ -1126,7 +1091,7 @@ def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonOb
         var i = 1
         while iter.has_next():
             var value = get_physical_as_f64(src[], iter.element_index())
-            if op == REDUCE_ARGMAX:
+            if op == ReduceOp.ARGMAX.value:
                 if value > best_value:
                     best_value = value
                     best_index = i
@@ -1138,15 +1103,15 @@ def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonOb
             i += 1
         set_logical_from_i64(result, 0, Int64(best_index))
         return PythonObject(alloc=result^)
-    if op == REDUCE_ALL or op == REDUCE_ANY:
-        var result = make_empty_array(DTYPE_BOOL, shape^)
+    if op == ReduceOp.ALL.value or op == ReduceOp.ANY.value:
+        var result = make_empty_array(ArrayDType.BOOL.value, shape^)
         if src[].size_value == 0:
             # numpy: all() of empty → True; any() of empty → False.
-            var v: Float64 = 1.0 if op == REDUCE_ALL else 0.0
+            var v: Float64 = 1.0 if op == ReduceOp.ALL.value else 0.0
             set_logical_from_f64(result, 0, v)
             return PythonObject(alloc=result^)
         var iter = _reduce_strided_iter(src[])
-        if op == REDUCE_ALL:
+        if op == ReduceOp.ALL.value:
             while iter.has_next():
                 if get_physical_as_f64(src[], iter.element_index()) == 0.0:
                     set_logical_from_f64(result, 0, 0.0)
@@ -1154,7 +1119,7 @@ def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonOb
                 iter.step()
             set_logical_from_f64(result, 0, 1.0)
             return PythonObject(alloc=result^)
-        # REDUCE_ANY
+        # ReduceOp.ANY.value
         while iter.has_next():
             if get_physical_as_f64(src[], iter.element_index()) != 0.0:
                 set_logical_from_f64(result, 0, 1.0)
@@ -1166,10 +1131,10 @@ def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonOb
     var result = make_empty_array(result_dtype, shape^)
     if src[].size_value == 0:
         # numpy: sum of empty → 0; prod of empty → 1; min/max raise.
-        if op == REDUCE_SUM or op == REDUCE_MEAN:
+        if op == ReduceOp.SUM.value or op == ReduceOp.MEAN.value:
             set_logical_from_f64(result, 0, 0.0)
             return PythonObject(alloc=result^)
-        if op == REDUCE_PROD:
+        if op == ReduceOp.PROD.value:
             set_logical_from_f64(result, 0, 1.0)
             return PythonObject(alloc=result^)
         raise Error("cannot reduce an empty array")
@@ -1179,19 +1144,19 @@ def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonOb
         return PythonObject(alloc=result^)
     var iter = _reduce_strided_iter(src[])
     var acc: Float64
-    if op == REDUCE_SUM or op == REDUCE_MEAN:
+    if op == ReduceOp.SUM.value or op == ReduceOp.MEAN.value:
         acc = 0.0
         while iter.has_next():
             acc += get_physical_as_f64(src[], iter.element_index())
             iter.step()
-        if op == REDUCE_MEAN:
+        if op == ReduceOp.MEAN.value:
             acc = acc / Float64(src[].size_value)
-    elif op == REDUCE_PROD:
+    elif op == ReduceOp.PROD.value:
         acc = 1.0
         while iter.has_next():
             acc *= get_physical_as_f64(src[], iter.element_index())
             iter.step()
-    elif op == REDUCE_MIN:
+    elif op == ReduceOp.MIN.value:
         acc = get_physical_as_f64(src[], iter.element_index())
         iter.step()
         while iter.has_next():
@@ -1199,7 +1164,7 @@ def reduce_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> PythonOb
             if value < acc:
                 acc = value
             iter.step()
-    elif op == REDUCE_MAX:
+    elif op == ReduceOp.MAX.value:
         acc = get_physical_as_f64(src[], iter.element_index())
         iter.step()
         while iter.has_next():
@@ -1219,7 +1184,7 @@ def unary_preserve_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> 
     Typed-vec contig fast path for f32/f64/i32/i64/u32/u64; other paths fall through to the f64 round-trip.
     """
     var src = array_obj.downcast_value_ptr[Array]()
-    var op = Int(py=op_obj)
+    var op = UnaryOp.from_int(Int(py=op_obj)).value
     var shape = clone_int_list(src[].shape)
     var dtype_code = result_dtype_for_unary_preserve(src[].dtype_code)
     var result = make_empty_array(dtype_code, shape^)
@@ -1249,14 +1214,14 @@ def compare_ops(
     Walks via MultiLayoutIter so the broadcast divmod amortizes."""
     var lhs = lhs_obj.downcast_value_ptr[Array]()
     var rhs = rhs_obj.downcast_value_ptr[Array]()
-    var op = Int(py=op_obj)
+    var op = CompareOp.from_int(Int(py=op_obj)).value
     var same = same_shape(lhs[].shape, rhs[].shape)
     var shape: List[Int]
     if same:
         shape = clone_int_list(lhs[].shape)
     else:
         shape = broadcast_shape(lhs[], rhs[])
-    var result = make_empty_array(DTYPE_BOOL, shape^)
+    var result = make_empty_array(ArrayDType.BOOL.value, shape^)
     var lhs_layout = as_broadcast_layout(lhs[], result.shape)
     var rhs_layout = as_broadcast_layout(rhs[], result.shape)
     var out_layout = as_layout(result)
@@ -1280,17 +1245,17 @@ def compare_ops(
         var lval = get_physical_as_f64(lhs[], iter.element_index(0))
         var rval = get_physical_as_f64(rhs[], iter.element_index(1))
         var output: Bool
-        if op == CMP_EQ:
+        if op == CompareOp.EQ.value:
             output = lval == rval
-        elif op == CMP_NE:
+        elif op == CompareOp.NE.value:
             output = lval != rval
-        elif op == CMP_LT:
+        elif op == CompareOp.LT.value:
             output = lval < rval
-        elif op == CMP_LE:
+        elif op == CompareOp.LE.value:
             output = lval <= rval
-        elif op == CMP_GT:
+        elif op == CompareOp.GT.value:
             output = lval > rval
-        elif op == CMP_GE:
+        elif op == CompareOp.GE.value:
             output = lval >= rval
         else:
             raise Error("unknown comparison op")
@@ -1308,14 +1273,14 @@ def logical_ops(
     numeric input; result is bool. Walks via MultiLayoutIter."""
     var lhs = lhs_obj.downcast_value_ptr[Array]()
     var rhs = rhs_obj.downcast_value_ptr[Array]()
-    var op = Int(py=op_obj)
+    var op = LogicalOp.from_int(Int(py=op_obj)).value
     var same = same_shape(lhs[].shape, rhs[].shape)
     var shape: List[Int]
     if same:
         shape = clone_int_list(lhs[].shape)
     else:
         shape = broadcast_shape(lhs[], rhs[])
-    var result = make_empty_array(DTYPE_BOOL, shape^)
+    var result = make_empty_array(ArrayDType.BOOL.value, shape^)
     var lhs_layout = as_broadcast_layout(lhs[], result.shape)
     var rhs_layout = as_broadcast_layout(rhs[], result.shape)
     var out_layout = as_layout(result)
@@ -1339,11 +1304,11 @@ def logical_ops(
         var l_truthy = get_physical_as_f64(lhs[], iter.element_index(0)) != 0.0
         var r_truthy = get_physical_as_f64(rhs[], iter.element_index(1)) != 0.0
         var output: Bool
-        if op == LOGIC_AND:
+        if op == LogicalOp.AND.value:
             output = l_truthy and r_truthy
-        elif op == LOGIC_OR:
+        elif op == LogicalOp.OR.value:
             output = l_truthy or r_truthy
-        elif op == LOGIC_XOR:
+        elif op == LogicalOp.XOR.value:
             output = l_truthy != r_truthy
         else:
             raise Error("unknown logical op")
@@ -1357,9 +1322,9 @@ def predicate_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> Pytho
     bool. Walks via LayoutIter so the divmod amortizes across the
     iteration."""
     var src = array_obj.downcast_value_ptr[Array]()
-    var op = Int(py=op_obj)
+    var op = PredicateOp.from_int(Int(py=op_obj)).value
     var shape = clone_int_list(src[].shape)
-    var result = make_empty_array(DTYPE_BOOL, shape^)
+    var result = make_empty_array(ArrayDType.BOOL.value, shape^)
     var src_layout = as_layout(src[])
     var dst_layout = as_layout(result)
     var src_item = item_size(src[].dtype_code)
@@ -1369,13 +1334,13 @@ def predicate_ops(array_obj: PythonObject, op_obj: PythonObject) raises -> Pytho
     while src_iter.has_next():
         var value = get_physical_as_f64(src[], src_iter.element_index())
         var output: Bool
-        if op == PRED_ISNAN:
+        if op == PredicateOp.ISNAN.value:
             output = isnan(value)
-        elif op == PRED_ISINF:
+        elif op == PredicateOp.ISINF.value:
             output = isinf(value)
-        elif op == PRED_ISFINITE:
+        elif op == PredicateOp.ISFINITE.value:
             output = not (isnan(value) or isinf(value))
-        elif op == PRED_SIGNBIT:
+        elif op == PredicateOp.SIGNBIT.value:
             # numpy.signbit returns True for -0.0, so use bitcast.
             output = value < 0.0
             if value == 0.0:
@@ -1401,7 +1366,7 @@ def reduce_axis_ops(
     reduced axes. Strided per-element f64 round-trip path; SIMD-friendly
     kernels can layer in via LayoutIter once the API stabilises."""
     var src = array_obj.downcast_value_ptr[Array]()
-    var op = Int(py=op_obj)
+    var op = ReduceOp.from_int(Int(py=op_obj)).value
     var keepdims = Bool(py=keepdims_obj)
     var ndim = len(src[].shape)
     # Decode axes.
@@ -1429,10 +1394,10 @@ def reduce_axis_ops(
             out_shape.append(1)
             keep_axes.append(d)
     var result_dtype: Int
-    if op == REDUCE_ARGMAX or op == REDUCE_ARGMIN:
-        result_dtype = DTYPE_INT64
-    elif op == REDUCE_ALL or op == REDUCE_ANY:
-        result_dtype = DTYPE_BOOL
+    if op == ReduceOp.ARGMAX.value or op == ReduceOp.ARGMIN.value:
+        result_dtype = ArrayDType.INT64.value
+    elif op == ReduceOp.ALL.value or op == ReduceOp.ANY.value:
+        result_dtype = ArrayDType.BOOL.value
     else:
         result_dtype = result_dtype_for_reduction(src[].dtype_code, op)
     var result = make_empty_array(result_dtype, clone_int_list(out_shape))
@@ -1446,19 +1411,19 @@ def reduce_axis_ops(
         reduce_size *= src[].shape[reduce_axes[i]]
     if reduce_size == 0:
         # Numpy semantics: sum/prod of empty → identity; min/max raise.
-        if op == REDUCE_SUM or op == REDUCE_MEAN:
+        if op == ReduceOp.SUM.value or op == ReduceOp.MEAN.value:
             for j in range(result.size_value):
                 set_logical_from_f64(result, j, 0.0)
             return PythonObject(alloc=result^)
-        if op == REDUCE_PROD:
+        if op == ReduceOp.PROD.value:
             for j in range(result.size_value):
                 set_logical_from_f64(result, j, 1.0)
             return PythonObject(alloc=result^)
-        if op == REDUCE_ALL:
+        if op == ReduceOp.ALL.value:
             for j in range(result.size_value):
                 set_logical_from_f64(result, j, 1.0)
             return PythonObject(alloc=result^)
-        if op == REDUCE_ANY:
+        if op == ReduceOp.ANY.value:
             for j in range(result.size_value):
                 set_logical_from_f64(result, j, 0.0)
             return PythonObject(alloc=result^)
@@ -1521,13 +1486,13 @@ def reduce_axis_ops(
         # Initialise accumulator.
         var acc: Float64
         var best_idx: Int = 0
-        if op == REDUCE_SUM or op == REDUCE_MEAN:
+        if op == ReduceOp.SUM.value or op == ReduceOp.MEAN.value:
             acc = 0.0
-        elif op == REDUCE_PROD:
+        elif op == ReduceOp.PROD.value:
             acc = 1.0
-        elif op == REDUCE_ALL:
+        elif op == ReduceOp.ALL.value:
             acc = 1.0
-        elif op == REDUCE_ANY:
+        elif op == ReduceOp.ANY.value:
             acc = 0.0
         else:
             acc = get_physical_as_f64(src[], src_base)
@@ -1542,29 +1507,29 @@ def reduce_axis_ops(
             for j in range(len(reduce_axes)):
                 phys += rcoords[j] * red_strides[j]
             var value = get_physical_as_f64(src[], phys)
-            if op == REDUCE_SUM or op == REDUCE_MEAN:
+            if op == ReduceOp.SUM.value or op == ReduceOp.MEAN.value:
                 acc += value
-            elif op == REDUCE_PROD:
+            elif op == ReduceOp.PROD.value:
                 acc *= value
-            elif op == REDUCE_MIN:
+            elif op == ReduceOp.MIN.value:
                 if k == 0 or value < acc:
                     acc = value
-            elif op == REDUCE_MAX:
+            elif op == ReduceOp.MAX.value:
                 if k == 0 or value > acc:
                     acc = value
-            elif op == REDUCE_ALL:
+            elif op == ReduceOp.ALL.value:
                 if value == 0.0:
                     acc = 0.0
                     break
-            elif op == REDUCE_ANY:
+            elif op == ReduceOp.ANY.value:
                 if value != 0.0:
                     acc = 1.0
                     break
-            elif op == REDUCE_ARGMAX:
+            elif op == ReduceOp.ARGMAX.value:
                 if k == 0 or value > acc:
                     acc = value
                     best_idx = k
-            elif op == REDUCE_ARGMIN:
+            elif op == ReduceOp.ARGMIN.value:
                 if k == 0 or value < acc:
                     acc = value
                     best_idx = k
@@ -1584,9 +1549,9 @@ def reduce_axis_ops(
                     done = True
             if done:
                 break
-        if op == REDUCE_MEAN:
+        if op == ReduceOp.MEAN.value:
             acc = acc / Float64(reduce_size)
-        if op == REDUCE_ARGMAX or op == REDUCE_ARGMIN:
+        if op == ReduceOp.ARGMAX.value or op == ReduceOp.ARGMIN.value:
             set_logical_from_i64(result, out_i, Int64(best_idx))
         else:
             set_logical_from_f64(result, out_i, acc)
@@ -1620,9 +1585,9 @@ def matmul_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObj
         out_shape.append(m)
     elif lhs_ndim == 1 and rhs_ndim == 2:
         out_shape.append(n)
-    var dtype_code = result_dtype_for_binary(lhs[].dtype_code, rhs[].dtype_code, OP_MUL)
+    var dtype_code = result_dtype_for_binary(lhs[].dtype_code, rhs[].dtype_code, BinaryOp.MUL.value)
     var result = make_empty_array(dtype_code, out_shape^)
-    var is_complex = dtype_code == DTYPE_COMPLEX64 or dtype_code == DTYPE_COMPLEX128
+    var is_complex = dtype_code == ArrayDType.COMPLEX64.value or dtype_code == ArrayDType.COMPLEX128.value
     if lhs_ndim == 1 and rhs_ndim == 1:
         if is_complex:
             var lhs_re_total = 0.0
@@ -1687,9 +1652,9 @@ def matmul_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObj
 def _complex_real(arr: Array, logical: Int) raises -> Float64:
     """Helper: read real part of a complex array at logical index."""
     var phys = physical_offset(arr, logical)
-    if arr.dtype_code == DTYPE_COMPLEX64:
+    if arr.dtype_code == ArrayDType.COMPLEX64.value:
         return Float64(get_physical_c64_real(arr, phys))
-    if arr.dtype_code == DTYPE_COMPLEX128:
+    if arr.dtype_code == ArrayDType.COMPLEX128.value:
         return get_physical_c128_real(arr, phys)
     return get_logical_as_f64(arr, logical)
 
@@ -1697,9 +1662,9 @@ def _complex_real(arr: Array, logical: Int) raises -> Float64:
 def _complex_imag(arr: Array, logical: Int) raises -> Float64:
     """Helper: read imag part of a complex array at logical index."""
     var phys = physical_offset(arr, logical)
-    if arr.dtype_code == DTYPE_COMPLEX64:
+    if arr.dtype_code == ArrayDType.COMPLEX64.value:
         return Float64(get_physical_c64_imag(arr, phys))
-    if arr.dtype_code == DTYPE_COMPLEX128:
+    if arr.dtype_code == ArrayDType.COMPLEX128.value:
         return get_physical_c128_imag(arr, phys)
     return 0.0
 
@@ -1707,9 +1672,9 @@ def _complex_imag(arr: Array, logical: Int) raises -> Float64:
 def _complex_store(mut arr: Array, logical: Int, real: Float64, imag: Float64) raises:
     """Helper: write real+imag to a complex array at logical index."""
     var phys = physical_offset(arr, logical)
-    if arr.dtype_code == DTYPE_COMPLEX64:
+    if arr.dtype_code == ArrayDType.COMPLEX64.value:
         set_physical_c64(arr, phys, Float32(real), Float32(imag))
-    elif arr.dtype_code == DTYPE_COMPLEX128:
+    elif arr.dtype_code == ArrayDType.COMPLEX128.value:
         set_physical_c128(arr, phys, real, imag)
     else:
         set_logical_from_f64(arr, logical, real)
@@ -1793,7 +1758,7 @@ def qr_ops(array_obj: PythonObject, mode_obj: PythonObject) raises -> PythonObje
         r_shape.append(n)
         var q = make_empty_array(dtype_code, q_shape^)
         var r = make_empty_array(dtype_code, r_shape^)
-        if dtype_code == DTYPE_FLOAT32:
+        if dtype_code == ArrayDType.FLOAT32.value:
             lapack_qr_reduced_f32_into(src[], q, r)
         else:
             lapack_qr_reduced_f64_into(src[], q, r)
@@ -1816,7 +1781,7 @@ def qr_ops(array_obj: PythonObject, mode_obj: PythonObject) raises -> PythonObje
         r_shape.append(n)
         var q = make_empty_array(dtype_code, q_shape^)
         var r = make_empty_array(dtype_code, r_shape^)
-        if dtype_code == DTYPE_FLOAT32:
+        if dtype_code == ArrayDType.FLOAT32.value:
             lapack_qr_reduced_f32_into(src[], q, r)
         else:
             lapack_qr_reduced_f64_into(src[], q, r)
@@ -1830,7 +1795,7 @@ def qr_ops(array_obj: PythonObject, mode_obj: PythonObject) raises -> PythonObje
         r_shape.append(k)
         r_shape.append(n)
         var r = make_empty_array(dtype_code, r_shape^)
-        if dtype_code == DTYPE_FLOAT32:
+        if dtype_code == ArrayDType.FLOAT32.value:
             lapack_qr_r_only_f32_into(src[], r)
         else:
             lapack_qr_r_only_f64_into(src[], r)
@@ -1848,7 +1813,7 @@ def cholesky_ops(array_obj: PythonObject) raises -> PythonObject:
     shape.append(n)
     shape.append(n)
     var result = make_empty_array(dtype_code, shape^)
-    if dtype_code == DTYPE_FLOAT32:
+    if dtype_code == ArrayDType.FLOAT32.value:
         lapack_cholesky_f32_into(src[], result)
     else:
         lapack_cholesky_f64_into(src[], result)
@@ -1875,7 +1840,7 @@ def eigh_ops(array_obj: PythonObject, compute_eigenvectors_obj: PythonObject) ra
         # Allocate a 0-element placeholder — caller ignores it for eigvalsh.
         v_shape.append(0)
     var v = make_empty_array(dtype_code, v_shape^)
-    if dtype_code == DTYPE_FLOAT32:
+    if dtype_code == ArrayDType.FLOAT32.value:
         lapack_eigh_f32_into(src[], w, v, compute_v)
     else:
         lapack_eigh_f64_into(src[], w, v, compute_v)
@@ -1908,7 +1873,7 @@ def eig_ops(array_obj: PythonObject, compute_eigenvectors_obj: PythonObject) rai
         v_shape.append(0)
     var v = make_empty_array(dtype_code, v_shape^)
     var all_real: Bool
-    if dtype_code == DTYPE_FLOAT32:
+    if dtype_code == ArrayDType.FLOAT32.value:
         all_real = lapack_eig_f32_real_into(src[], wr, wi, v, compute_v)
     else:
         all_real = lapack_eig_f64_real_into(src[], wr, wi, v, compute_v)
@@ -1955,7 +1920,7 @@ def svd_ops(
         vt_shape.append(0)
     var u = make_empty_array(dtype_code, u_shape^)
     var vt = make_empty_array(dtype_code, vt_shape^)
-    if dtype_code == DTYPE_FLOAT32:
+    if dtype_code == ArrayDType.FLOAT32.value:
         lapack_svd_f32_into(src[], u, s, vt, full_matrices, compute_uv)
     else:
         lapack_svd_f64_into(src[], u, s, vt, full_matrices, compute_uv)
@@ -2058,7 +2023,7 @@ def tril_ops(array_obj: PythonObject, k_obj: PythonObject) raises -> PythonObjec
     var batch = 1
     for d in range(ndim - 2):
         batch *= src[].shape[d]
-    if src[].dtype_code == DTYPE_FLOAT32 and is_c_contiguous(src[]):
+    if src[].dtype_code == ArrayDType.FLOAT32.value and is_c_contiguous(src[]):
         var src_ptr = contiguous_f32_ptr(src[])
         var out_ptr = contiguous_f32_ptr(result)
         for b in range(batch):
@@ -2070,7 +2035,7 @@ def tril_ops(array_obj: PythonObject, k_obj: PythonObject) raises -> PythonObjec
                     else:
                         out_ptr[idx] = Float32(0.0)
         return PythonObject(alloc=result^)
-    if src[].dtype_code == DTYPE_FLOAT64 and is_c_contiguous(src[]):
+    if src[].dtype_code == ArrayDType.FLOAT64.value and is_c_contiguous(src[]):
         var src_ptr = contiguous_f64_ptr(src[])
         var out_ptr = contiguous_f64_ptr(result)
         for b in range(batch):
@@ -2109,7 +2074,7 @@ def triu_ops(array_obj: PythonObject, k_obj: PythonObject) raises -> PythonObjec
     var batch = 1
     for d in range(ndim - 2):
         batch *= src[].shape[d]
-    if src[].dtype_code == DTYPE_FLOAT32 and is_c_contiguous(src[]):
+    if src[].dtype_code == ArrayDType.FLOAT32.value and is_c_contiguous(src[]):
         var src_ptr = contiguous_f32_ptr(src[])
         var out_ptr = contiguous_f32_ptr(result)
         for b in range(batch):
@@ -2121,7 +2086,7 @@ def triu_ops(array_obj: PythonObject, k_obj: PythonObject) raises -> PythonObjec
                     else:
                         out_ptr[idx] = Float32(0.0)
         return PythonObject(alloc=result^)
-    if src[].dtype_code == DTYPE_FLOAT64 and is_c_contiguous(src[]):
+    if src[].dtype_code == ArrayDType.FLOAT64.value and is_c_contiguous(src[]):
         var src_ptr = contiguous_f64_ptr(src[])
         var out_ptr = contiguous_f64_ptr(result)
         for b in range(batch):
@@ -2160,7 +2125,7 @@ def eye_ops(
     shape.append(n)
     shape.append(m)
     var result = make_empty_array(dtype_code, shape^)
-    if dtype_code == DTYPE_FLOAT32:
+    if dtype_code == ArrayDType.FLOAT32.value:
         var out_ptr = contiguous_f32_ptr(result)
         for i in range(n * m):
             out_ptr[i] = Float32(0.0)
@@ -2174,7 +2139,7 @@ def eye_ops(
             if col >= 0 and col < m:
                 out_ptr[i * m + col] = Float32(1.0)
         return PythonObject(alloc=result^)
-    if dtype_code == DTYPE_FLOAT64:
+    if dtype_code == ArrayDType.FLOAT64.value:
         var out_ptr = contiguous_f64_ptr(result)
         for i in range(n * m):
             out_ptr[i] = 0.0
@@ -2218,7 +2183,7 @@ def tri_ops(
     shape.append(n)
     shape.append(m)
     var result = make_empty_array(dtype_code, shape^)
-    if dtype_code == DTYPE_FLOAT32:
+    if dtype_code == ArrayDType.FLOAT32.value:
         var out_ptr = contiguous_f32_ptr(result)
         for r in range(n):
             var row_limit = r + k + 1
@@ -2232,7 +2197,7 @@ def tri_ops(
                 else:
                     out_ptr[r * m + c] = Float32(0.0)
         return PythonObject(alloc=result^)
-    if dtype_code == DTYPE_FLOAT64:
+    if dtype_code == ArrayDType.FLOAT64.value:
         var out_ptr = contiguous_f64_ptr(result)
         for r in range(n):
             var row_limit = r + k + 1
@@ -2346,7 +2311,7 @@ def lstsq_ops(a_obj: PythonObject, b_obj: PythonObject, rcond_obj: PythonObject)
     var s = make_empty_array(dtype_code, s_shape^)
     var rank_buf = Int(0)
     var rank_ptr = rebind[UnsafePointer[Int, MutExternalOrigin]](UnsafePointer(to=rank_buf))
-    if dtype_code == DTYPE_FLOAT32:
+    if dtype_code == ArrayDType.FLOAT32.value:
         var rcond_f32 = Float32(Float64(py=rcond_obj))
         lapack_lstsq_f32_into(a[], b[], x, s, rcond_f32, rank_ptr)
     else:

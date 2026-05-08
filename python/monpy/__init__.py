@@ -3,6 +3,7 @@ from __future__ import annotations
 import builtins,importlib,itertools,math,typing
 from collections.abc import Iterable,Sequence
 from dataclasses import dataclass
+from enum import IntEnum
 from types import ModuleType,SimpleNamespace
 from . import _native
 if typing.TYPE_CHECKING: import numpy as np
@@ -32,57 +33,63 @@ class _NumpyArrayLike(typing.Protocol):
   def strides(self)->tuple[int,...]:...
   def astype(self,dtype:object,copy:builtins.bool=True)->_NumpyArrayLike:...
 
-# dtype, op, and casting codes mirror the Mojo side; identical layout there.
-DTYPE_BOOL,DTYPE_INT64,DTYPE_FLOAT32,DTYPE_FLOAT64=range(4)
-# signed ints.
-DTYPE_INT32,DTYPE_INT16,DTYPE_INT8=4,5,6
-# unsigned ints + float16 + complex.
-DTYPE_UINT64,DTYPE_UINT32,DTYPE_UINT16,DTYPE_UINT8=7,8,9,10
-DTYPE_FLOAT16=11
-DTYPE_COMPLEX64,DTYPE_COMPLEX128=12,13
-DTYPE_KIND_BOOL,DTYPE_KIND_SIGNED_INT,DTYPE_KIND_REAL_FLOAT,DTYPE_KIND_UNSIGNED_INT,DTYPE_KIND_COMPLEX_FLOAT=range(5)
-CASTING_NO,CASTING_EQUIV,CASTING_SAFE,CASTING_SAME_KIND,CASTING_UNSAFE=range(5)
-OP_ADD,OP_SUB,OP_MUL,OP_DIV=range(4)
-# binary op codes; mirror src/domain.mojo.
-OP_FLOOR_DIV,OP_MOD,OP_POWER,OP_MAXIMUM,OP_MINIMUM,OP_FMIN,OP_FMAX,OP_ARCTAN2,OP_HYPOT,OP_COPYSIGN=range(4,14)
-UNARY_SIN,UNARY_COS,UNARY_EXP,UNARY_LOG=range(4)
-# unary transcendentals (float-only result).
-UNARY_TAN,UNARY_ARCSIN,UNARY_ARCCOS,UNARY_ARCTAN,UNARY_SINH,UNARY_COSH,UNARY_TANH,UNARY_LOG1P,UNARY_LOG2,UNARY_LOG10,UNARY_EXP2,UNARY_EXPM1,UNARY_SQRT,UNARY_CBRT,UNARY_DEG2RAD,UNARY_RAD2DEG,UNARY_RECIPROCAL=range(4,21)
-# unary arith (preserve dtype).
-UNARY_NEGATE,UNARY_POSITIVE,UNARY_ABS,UNARY_SQUARE,UNARY_SIGN,UNARY_FLOOR,UNARY_CEIL,UNARY_TRUNC,UNARY_RINT,UNARY_LOGICAL_NOT=range(30,40)
-# complex-only unary.
-UNARY_CONJUGATE=40
-# comparison / logical / predicate op codes.
-CMP_EQ,CMP_NE,CMP_LT,CMP_LE,CMP_GT,CMP_GE=range(6)
-LOGIC_AND,LOGIC_OR,LOGIC_XOR=range(3)
-PRED_ISNAN,PRED_ISINF,PRED_ISFINITE,PRED_SIGNBIT=range(4)
-REDUCE_SUM,REDUCE_MEAN,REDUCE_MIN,REDUCE_MAX,REDUCE_ARGMAX,REDUCE_PROD,REDUCE_ALL,REDUCE_ANY,REDUCE_ARGMIN=range(9)
+_DOMAIN_CODES:dict[str,dict[str,int]]=_native._domain_codes()
+DTypeCode:type[IntEnum]=IntEnum("DTypeCode",_DOMAIN_CODES["dtype"])
+DTypeKindCode:type[IntEnum]=IntEnum("DTypeKindCode",_DOMAIN_CODES["dtype_kind"])
+CastingRule:type[IntEnum]=IntEnum("CastingRule",_DOMAIN_CODES["casting"])
+BinaryOp:type[IntEnum]=IntEnum("BinaryOp",_DOMAIN_CODES["binary"])
+UnaryOp:type[IntEnum]=IntEnum("UnaryOp",_DOMAIN_CODES["unary"])
+CompareOp:type[IntEnum]=IntEnum("CompareOp",_DOMAIN_CODES["compare"])
+LogicalOp:type[IntEnum]=IntEnum("LogicalOp",_DOMAIN_CODES["logical"])
+PredicateOp:type[IntEnum]=IntEnum("PredicateOp",_DOMAIN_CODES["predicate"])
+ReduceOp:type[IntEnum]=IntEnum("ReduceOp",_DOMAIN_CODES["reduce"])
+BackendKind:type[IntEnum]=IntEnum("BackendKind",_DOMAIN_CODES["backend"])
+_DTCODES=_DOMAIN_CODES["dtype"];_DTKCODES=_DOMAIN_CODES["dtype_kind"];_CASTCODES=_DOMAIN_CODES["casting"]
+_BINCODES=_DOMAIN_CODES["binary"];_UNCODES=_DOMAIN_CODES["unary"];_CMPCODES=_DOMAIN_CODES["compare"]
+_LOGCODES=_DOMAIN_CODES["logical"];_PREDCODES=_DOMAIN_CODES["predicate"];_REDCODES=_DOMAIN_CODES["reduce"]
+DTYPE_BOOL,DTYPE_INT64,DTYPE_FLOAT32,DTYPE_FLOAT64=_DTCODES["BOOL"],_DTCODES["INT64"],_DTCODES["FLOAT32"],_DTCODES["FLOAT64"]
+DTYPE_INT32,DTYPE_INT16,DTYPE_INT8=_DTCODES["INT32"],_DTCODES["INT16"],_DTCODES["INT8"]
+DTYPE_UINT64,DTYPE_UINT32,DTYPE_UINT16,DTYPE_UINT8=_DTCODES["UINT64"],_DTCODES["UINT32"],_DTCODES["UINT16"],_DTCODES["UINT8"]
+DTYPE_FLOAT16=_DTCODES["FLOAT16"]
+DTYPE_COMPLEX64,DTYPE_COMPLEX128=_DTCODES["COMPLEX64"],_DTCODES["COMPLEX128"]
+DTYPE_KIND_BOOL,DTYPE_KIND_SIGNED_INT,DTYPE_KIND_REAL_FLOAT,DTYPE_KIND_UNSIGNED_INT,DTYPE_KIND_COMPLEX_FLOAT=_DTKCODES["BOOL"],_DTKCODES["SIGNED_INT"],_DTKCODES["REAL_FLOAT"],_DTKCODES["UNSIGNED_INT"],_DTKCODES["COMPLEX_FLOAT"]
+CASTING_NO,CASTING_EQUIV,CASTING_SAFE,CASTING_SAME_KIND,CASTING_UNSAFE=_CASTCODES["NO"],_CASTCODES["EQUIV"],_CASTCODES["SAFE"],_CASTCODES["SAME_KIND"],_CASTCODES["UNSAFE"]
+OP_ADD,OP_SUB,OP_MUL,OP_DIV=_BINCODES["ADD"],_BINCODES["SUB"],_BINCODES["MUL"],_BINCODES["DIV"]
+OP_FLOOR_DIV,OP_MOD,OP_POWER,OP_MAXIMUM,OP_MINIMUM,OP_FMIN,OP_FMAX,OP_ARCTAN2,OP_HYPOT,OP_COPYSIGN=_BINCODES["FLOOR_DIV"],_BINCODES["MOD"],_BINCODES["POWER"],_BINCODES["MAXIMUM"],_BINCODES["MINIMUM"],_BINCODES["FMIN"],_BINCODES["FMAX"],_BINCODES["ARCTAN2"],_BINCODES["HYPOT"],_BINCODES["COPYSIGN"]
+UNARY_SIN,UNARY_COS,UNARY_EXP,UNARY_LOG=_UNCODES["SIN"],_UNCODES["COS"],_UNCODES["EXP"],_UNCODES["LOG"]
+UNARY_TAN,UNARY_ARCSIN,UNARY_ARCCOS,UNARY_ARCTAN,UNARY_SINH,UNARY_COSH,UNARY_TANH,UNARY_LOG1P,UNARY_LOG2,UNARY_LOG10,UNARY_EXP2,UNARY_EXPM1,UNARY_SQRT,UNARY_CBRT,UNARY_DEG2RAD,UNARY_RAD2DEG,UNARY_RECIPROCAL=_UNCODES["TAN"],_UNCODES["ARCSIN"],_UNCODES["ARCCOS"],_UNCODES["ARCTAN"],_UNCODES["SINH"],_UNCODES["COSH"],_UNCODES["TANH"],_UNCODES["LOG1P"],_UNCODES["LOG2"],_UNCODES["LOG10"],_UNCODES["EXP2"],_UNCODES["EXPM1"],_UNCODES["SQRT"],_UNCODES["CBRT"],_UNCODES["DEG2RAD"],_UNCODES["RAD2DEG"],_UNCODES["RECIPROCAL"]
+UNARY_NEGATE,UNARY_POSITIVE,UNARY_ABS,UNARY_SQUARE,UNARY_SIGN,UNARY_FLOOR,UNARY_CEIL,UNARY_TRUNC,UNARY_RINT,UNARY_LOGICAL_NOT=_UNCODES["NEGATE"],_UNCODES["POSITIVE"],_UNCODES["ABS"],_UNCODES["SQUARE"],_UNCODES["SIGN"],_UNCODES["FLOOR"],_UNCODES["CEIL"],_UNCODES["TRUNC"],_UNCODES["RINT"],_UNCODES["LOGICAL_NOT"]
+UNARY_CONJUGATE=_UNCODES["CONJUGATE"]
+CMP_EQ,CMP_NE,CMP_LT,CMP_LE,CMP_GT,CMP_GE=_CMPCODES["EQ"],_CMPCODES["NE"],_CMPCODES["LT"],_CMPCODES["LE"],_CMPCODES["GT"],_CMPCODES["GE"]
+LOGIC_AND,LOGIC_OR,LOGIC_XOR=_LOGCODES["AND"],_LOGCODES["OR"],_LOGCODES["XOR"]
+PRED_ISNAN,PRED_ISINF,PRED_ISFINITE,PRED_SIGNBIT=_PREDCODES["ISNAN"],_PREDCODES["ISINF"],_PREDCODES["ISFINITE"],_PREDCODES["SIGNBIT"]
+REDUCE_SUM,REDUCE_MEAN,REDUCE_MIN,REDUCE_MAX,REDUCE_ARGMAX,REDUCE_PROD,REDUCE_ALL,REDUCE_ANY,REDUCE_ARGMIN=_REDCODES["SUM"],_REDCODES["MEAN"],_REDCODES["MIN"],_REDCODES["MAX"],_REDCODES["ARGMAX"],_REDCODES["PROD"],_REDCODES["ALL"],_REDCODES["ANY"],_REDCODES["ARGMIN"]
 
 @dataclass(frozen=True,slots=True,eq=False)
 class DType:
-  name:str;code:int;kind:str;itemsize:int;alignment:int;byteorder:str;typestr:str;format:str;scalar_type:type[object]
-  def __repr__(self)->str:return f"monpy.{self.name}"
+  name:builtins.str;code:int;kind:builtins.str;itemsize:int;alignment:int;byteorder:builtins.str;typestr:builtins.str;format:builtins.str;scalar_type:builtins.type[object]
+  def __repr__(self)->builtins.str:return f"monpy.{self.name}"
   def __eq__(self,other:object)->builtins.bool:
     if isinstance(other,DType):return self.code==other.code
     nd=_np_dtype_obj(other)
     if nd is None:return False
     try:return self is _dtype_from_np(nd)
     except NotImplementedError:return False
-  def __hash__(self)->int:return hash(self.code)
+  def __hash__(self)->builtins.int:return hash(self.code)
   @property
-  def type(self)->type[object]:return self.scalar_type
+  def type(self)->builtins.type[object]:return self.scalar_type
   @property
-  def char(self)->str:return self.format
+  def char(self)->builtins.str:return self.format
   @property
-  def str(self)->str:return self.typestr
+  def str(self)->builtins.str:return self.typestr
 
 @dataclass(frozen=True,slots=True)
 class _FInfo:
-  dtype:DType;bits:int;eps:float;epsneg:float;max:float;min:float;smallest_normal:float;tiny:float;resolution:float;precision:int;nmant:int;iexp:int;maxexp:int;minexp:int;machep:int;negep:int
+  dtype:DType;bits:builtins.int;eps:builtins.float;epsneg:builtins.float;max:builtins.float;min:builtins.float;smallest_normal:builtins.float;tiny:builtins.float;resolution:builtins.float;precision:builtins.int;nmant:builtins.int;iexp:builtins.int;maxexp:builtins.int;minexp:builtins.int;machep:builtins.int;negep:builtins.int
 
 @dataclass(frozen=True,slots=True)
 class _IInfo:
-  dtype:DType;bits:int;min:int;max:int
+  dtype:DType;bits:builtins.int;min:builtins.int;max:builtins.int
 
 bool=DType("bool",0,"b",1,1,"|","|b1","?",builtins.bool);bool_=bool
 int64=DType("int64",1,"i",8,8,"=","<i8","l",builtins.int);int_=int64;intp=int64

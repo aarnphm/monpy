@@ -70,6 +70,7 @@ from create import (
     where_ops,
 )
 from array import Array
+from metadata import domain_codes_py_ops
 
 
 # Keep this file as the CPython extension boundary. Mojo modules stay flat and
@@ -140,6 +141,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[result_dtype_for_unary_py_ops]("_result_dtype_for_unary")
         module.def_function[result_dtype_for_binary_py_ops]("_result_dtype_for_binary")
         module.def_function[result_dtype_for_reduction_py_ops]("_result_dtype_for_reduction")
+        module.def_function[domain_codes_py_ops]("_domain_codes")
         module.def_function[dtype_item_size_py_ops]("_dtype_itemsize")
         module.def_function[dtype_alignment_py_ops]("_dtype_alignment")
         module.def_function[dtype_kind_code_py_ops]("_dtype_kind")

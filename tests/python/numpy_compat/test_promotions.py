@@ -122,6 +122,20 @@ def test_supported_dtype_metadata_matches_numpy_and_native_registry(
   assert monpy._native._dtype_kind(monpy_dtype.code) == monpy._DTK[monpy_dtype]
 
 
+def test_native_domain_codes_feed_python_enums_and_aliases() -> None:
+  codes = monpy._native._domain_codes()
+
+  assert codes["dtype"]["FLOAT32"] == monpy.DTYPE_FLOAT32 == monpy.DTypeCode["FLOAT32"].value
+  assert codes["casting"]["SAME_KIND"] == monpy.CASTING_SAME_KIND == monpy.CastingRule["SAME_KIND"].value
+  assert codes["binary"]["ADD"] == monpy.OP_ADD == monpy.BinaryOp["ADD"].value
+  assert codes["unary"]["SIN"] == monpy.UNARY_SIN == monpy.UnaryOp["SIN"].value
+  assert codes["compare"]["LE"] == monpy.CMP_LE == monpy.CompareOp["LE"].value
+  assert codes["logical"]["XOR"] == monpy.LOGIC_XOR == monpy.LogicalOp["XOR"].value
+  assert codes["predicate"]["SIGNBIT"] == monpy.PRED_SIGNBIT == monpy.PredicateOp["SIGNBIT"].value
+  assert codes["reduce"]["ARGMIN"] == monpy.REDUCE_ARGMIN == monpy.ReduceOp["ARGMIN"].value
+  assert codes["backend"]["FUSED"] == monpy.BackendKind["FUSED"].value
+
+
 @pytest.mark.parametrize(("monpy_dtype", "numpy_dtype"), SUPPORTED_DTYPE_PAIRS)
 def test_supported_dtype_objects_compare_equal_to_numpy_dtype_inputs(
   monpy_dtype: np.DType,
