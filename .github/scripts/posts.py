@@ -12,6 +12,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any, cast
 
 MARKER = "<!-- monpy-bench -->"
 LEGACY_MARKERS = (
@@ -22,7 +23,7 @@ API_VERSION = "2026-03-10"
 
 
 def finite_float(value: object) -> float:
-  number = float(value)
+  number = float(cast(Any, value))
   if math.isnan(number):
     raise ValueError("benchmark json contains nan")
   return number
@@ -67,7 +68,7 @@ def string_value(value: object) -> str:
 
 
 def result_rows(results: Sequence[Mapping[str, object]]) -> list[tuple[str, ...]]:
-  rows = [
+  rows: list[tuple[str, ...]] = [
     (
       "group",
       "case",
@@ -101,16 +102,17 @@ def render_markdown_table(payload: Mapping[str, object]) -> str:
   config = payload["config"]
   if not isinstance(config, Mapping):
     raise TypeError("benchmark json config must be an object")
+  config = cast(Mapping[str, object], config)
 
   raw_results = payload["results"]
   if not isinstance(raw_results, Sequence):
     raise TypeError("benchmark json results must be a list")
 
-  results = []
+  results: list[Mapping[str, object]] = []
   for index, result in enumerate(raw_results):
     if not isinstance(result, Mapping):
       raise TypeError(f"benchmark result {index} must be an object")
-    results.append(result)
+    results.append(cast(Mapping[str, object], result))
 
   rows = result_rows(results)
   header = "| " + " | ".join(rows[0]) + " |"
@@ -246,6 +248,7 @@ def existing_comment_id(*, repo: str, sha: str, token: str) -> int | None:
   for comment in comments:
     if not isinstance(comment, Mapping):
       continue
+    comment = cast(Mapping[str, object], comment)
     body = comment.get("body")
     comment_id = comment.get("id")
     markers = (MARKER, *LEGACY_MARKERS)
@@ -278,6 +281,7 @@ def upsert_commit_comment(body: str) -> str:
       body={"body": body},
     )
   if isinstance(response, Mapping):
+    response = cast(Mapping[str, object], response)
     url = response.get("html_url")
     if isinstance(url, str):
       return url
@@ -289,6 +293,7 @@ def load_payload(path: Path) -> Mapping[str, object]:
     payload = json.load(f)
   if not isinstance(payload, Mapping):
     raise TypeError("benchmark json root must be an object")
+  payload = cast(Mapping[str, object], payload)
   if payload.get("kind") == "monpy-bench-manifest":
     return load_payload_from_manifest(path, payload)
   return payload
@@ -298,9 +303,11 @@ def load_payload_from_manifest(path: Path, manifest: Mapping[str, object]) -> Ma
   outputs = manifest.get("outputs")
   if not isinstance(outputs, Mapping):
     raise TypeError("benchmark manifest outputs must be an object")
+  outputs = cast(Mapping[str, object], outputs)
   results = outputs.get("results")
   if not isinstance(results, Mapping):
     raise TypeError("benchmark manifest outputs.results must be an object")
+  results = cast(Mapping[str, object], results)
   result_format = results.get("format")
   if result_format != "json":
     raise TypeError("benchmark manifest must point at json results")

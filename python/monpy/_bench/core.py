@@ -8,21 +8,19 @@ import math
 import statistics
 import sys
 import time
+import warnings
+
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
-import warnings
+from typing import TYPE_CHECKING, Any
 
 import monpy as _monpy
 import monumpy as mnp
 import numpy as np
 import numpy.testing as npt
 
-try:
-  from tqdm import tqdm as _tqdm
-except ModuleNotFoundError:
-  _tqdm = None
+from tqdm import tqdm as _tqdm
 
 BenchFn = Callable[[], Any]
 
@@ -65,48 +63,36 @@ class BenchResult:
 
 
 class _NoProgress:
-  def __enter__(self) -> _NoProgress:
-    return self
+  def __enter__(self) -> _NoProgress: return self
 
-  def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-    return None
+  def __exit__(self, exc_type: object, exc: object, tb: object) -> None: return None
 
-  def update(self, n: int = 1) -> None:
-    return None
+  def update(self, n: int = 1) -> None: return None
 
-  def set_postfix_str(self, s: str, refresh: bool = True) -> None:
-    return None
+  def set_postfix_str(self, s: str, refresh: bool = True) -> None: return None
 
 
 def progress_bar(*, total: int, enabled: bool) -> Any:
-  if not enabled:
-    return _NoProgress()
-  if _tqdm is None:
-    print("progress disabled: install tqdm to render a progress bar", file=sys.stderr)
-    return _NoProgress()
+  if not enabled: return _NoProgress()
   return _tqdm(total=total, desc="bench", dynamic_ncols=True, unit="case", leave=False, file=sys.stderr)
 
 
 def positive_int(value: str) -> int:
   parsed = int(value)
-  if parsed < 1:
-    raise argparse.ArgumentTypeError("must be >= 1")
+  if parsed < 1: raise argparse.ArgumentTypeError("must be >= 1")
   return parsed
 
 
 def parse_sizes(value: str) -> tuple[int, ...]:
   sizes = tuple(positive_int(part.strip()) for part in value.split(",") if part.strip())
-  if not sizes:
-    raise argparse.ArgumentTypeError("must include at least one size")
+  if not sizes: raise argparse.ArgumentTypeError("must include at least one size")
   return sizes
 
 
 def force_monpy(value: Any) -> Any:
   if not isinstance(value, mnp.ndarray):
-    try:
-      _ = getattr(value, "_native")
-    except AttributeError:
-      pass
+    try: _ = getattr(value, "_native")
+    except AttributeError: pass
   return value
 
 
@@ -123,8 +109,7 @@ def suppress_known_numpy_linalg_warnings():
 
 
 def call_bench_fn(fn: BenchFn) -> object:
-  with suppress_known_numpy_linalg_warnings():
-    return fn()
+  with suppress_known_numpy_linalg_warnings(): return fn()
 
 
 def time_call(fn: BenchFn, *, loops: int, repeats: int, force: Callable[[object], object] | None = None) -> float:

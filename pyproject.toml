@@ -8,7 +8,7 @@ version = "0.1.0"
 requires-python = ">=3.11"
 
 [project.optional-dependencies]
-dev = ["numpy>=2", "pytest>=9"]
+dev = ["numpy>=2", "pytest>=9", "tqdm"]
 
 [project.scripts]
 monpy-bench = "monpy._bench.sweep:main"
@@ -26,6 +26,9 @@ ignore = ["E111", "E114"]
 select = ["E", "I", "UP", "B", "ANN"]
 
 [tool.ty]
+
+[tool.ty.src]
+exclude = ["tests/**"]
 
 [tool.ty.rules]
 all = "error"

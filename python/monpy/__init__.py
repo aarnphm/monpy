@@ -1785,7 +1785,6 @@ def searchsorted(a:object, v:object, side:str="left", sorter:object=None)->objec
   if arr.ndim!=1:raise ValueError("searchsorted: a must be 1D")
   haystack=_flat_values(arr)
   is_scalar=_is_scalar(v)
-  haystack=typing.cast(list[typing.Any], haystack)
   needles:list[typing.Any]=[typing.cast(typing.Any, v)] if is_scalar else _flat_values(asarray(v))
   out=[]
   import bisect
