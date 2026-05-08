@@ -645,3 +645,46 @@ The next concatenate-specific lever is a narrower axis-0 vector/list ABI that
 avoids Python list construction and repeated `downcast_value_ptr` inside native.
 That is probably smaller than the remaining linalg/view rows, so the next broad
 target should move to `cholesky_32_f64` or the view wrapper cluster.
+
+### 2026-05-08 Cholesky typed writeback
+
+`array/decomp/cholesky_32_f64` was not losing because it missed LAPACK.
+`sample(1)` on
+`results/profile-20260508-cholesky-32-f64-baseline-monpy/manifest.json`
+showed the native path already inside Accelerate `DPOTRF`; the largest local
+symbol was `array::__init__::physical_offset`, with 686 samples in the report.
+Netlib documents `DPOTRF` as a blocked Cholesky routine that calls Level-3 BLAS,
+so reimplementing the factorization in Mojo was the wrong lever for 32x32. The
+right lever was the row-major result copy after the vendor call.
+
+`lapack_cholesky_{f32,f64}_into` now writes the lower-triangular result through
+typed contiguous pointers instead of `set_logical_from_f64` for every output
+element. This removes the per-element shape/stride divmod from a result that is
+freshly allocated, c-contiguous, and already has the exact dtype.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `array/decomp/cholesky_32_f64` | 16.887 | 9.776 | 2.201x | 1.281x |
+| `array/decomp/cholesky_32_f32` | 16.500 | 9.211 | 1.886x | 1.042x |
+
+Profile artifacts:
+
+- `results/profile-20260508-cholesky-32-f64-direct-writeback/manifest.json`
+  measured the patched monpy row at 9.744 us/call, down from 16.546 us/call in
+  `results/profile-20260508-cholesky-32-f64-baseline-monpy/manifest.json`.
+- The patched sample moved the stack back to Accelerate `DPOTRF`; `physical_offset`
+  no longer appears in the Cholesky hot-path grep. The remaining local staging
+  is `transpose_to_col_major_f64`, so any further Cholesky win needs a layout or
+  `UPLO` policy change rather than another result writeback rewrite.
+- The CPU Counters xctrace artifact was captured under
+  `results/profile-20260508-cholesky-32-f64-direct-writeback/xctrace-cpu-counters.trace`.
+  The child loop in that trace measured 9.838 us/call with 3.0 s of user CPU and
+  no major faults; the profile manifest stays the durable scalar record.
+- Traced Python allocation peak stayed at 110,752 bytes. This pass removed
+  native arithmetic and branch overhead, not Python allocation churn.
+
+The new focused top deficits are view-wrapper and stride rows:
+`reversed_add_f32`, `flatten_f32`, `ravel_f32`, `moveaxis_f32`, and
+`empty_like_shape_override_f32`. Cholesky is no longer the next broad target.

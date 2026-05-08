@@ -4640,6 +4640,36 @@ def lapack_qr_r_only_f64_into(a: Array, mut r_out: Array) raises:
 
 
 # ---------- Cholesky ----------
+def write_cholesky_lower_f32(
+    src: UnsafePointer[Float32, MutExternalOrigin],
+    mut result: Array,
+    n: Int,
+) raises:
+    var dst = contiguous_f32_ptr(result)
+    for row in range(n):
+        var row_base = row * n
+        for col in range(n):
+            if col <= row:
+                dst[row_base + col] = src[col + row_base]
+            else:
+                dst[row_base + col] = 0.0
+
+
+def write_cholesky_lower_f64(
+    src: UnsafePointer[Float64, MutExternalOrigin],
+    mut result: Array,
+    n: Int,
+) raises:
+    var dst = contiguous_f64_ptr(result)
+    for row in range(n):
+        var row_base = row * n
+        for col in range(n):
+            if col <= row:
+                dst[row_base + col] = src[col + row_base]
+            else:
+                dst[row_base + col] = 0.0
+
+
 def lapack_cholesky_f32_into(a: Array, mut result: Array) raises:
     var n = a.shape[0]
     var buf = alloc[Float32](n * n)
@@ -4654,16 +4684,7 @@ def lapack_cholesky_f32_into(a: Array, mut result: Array) raises:
         if info > 0:
             raise Error("linalg.cholesky: matrix is not positive definite")
         raise Error("linalg.cholesky: spotrf failed")
-    # Write back, zeroing the upper triangle in row-major (which is the
-    # lower triangle in column-major — still untouched garbage).
-    for row in range(n):
-        for col in range(n):
-            var val: Float32
-            if col <= row:
-                val = buf[col + row * n]  # transpose: col-major (col,row) → row-major (row,col)
-            else:
-                val = 0.0
-            set_logical_from_f64(result, row * n + col, Float64(val))
+    write_cholesky_lower_f32(buf, result, n)
     buf.free()
     result.backend_code = BackendKind.ACCELERATE.value
 
@@ -4678,14 +4699,7 @@ def lapack_cholesky_f64_into(a: Array, mut result: Array) raises:
         if info > 0:
             raise Error("linalg.cholesky: matrix is not positive definite")
         raise Error("linalg.cholesky: dpotrf failed")
-    for row in range(n):
-        for col in range(n):
-            var val: Float64
-            if col <= row:
-                val = buf[col + row * n]
-            else:
-                val = 0.0
-            set_logical_from_f64(result, row * n + col, val)
+    write_cholesky_lower_f64(buf, result, n)
     buf.free()
     result.backend_code = BackendKind.ACCELERATE.value
 
