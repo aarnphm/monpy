@@ -12,6 +12,7 @@ dev = ["numpy>=2", "pytest>=9", "tqdm"]
 
 [project.scripts]
 monpy-bench = "monpy._bench.sweep:main"
+monpy-profile = "monpy._bench.profile:main"
 
 [tool.mohaus]
 mojo-src = "src"

@@ -140,3 +140,62 @@ not beat numpy, so the next optimization pass should use sampled profiles and
 hardware counters before adding another kernel. The likely split to verify is
 Python wrapper time versus tile shuffle/store pressure versus library-assisted
 iterator behavior in numpy.
+
+## Profiling
+
+`monpy-profile` profiles one benchmark case for enough wall time that OS
+profilers can see native Mojo, C library, and Python frames. It is intentionally
+separate from `monpy-bench`: benchmark runs stay low-overhead and comparable,
+while profile runs collect heavier evidence.
+
+```bash
+monpy-profile \
+  --types strides \
+  --case rank3_transpose_add_f32 \
+  --duration 8 \
+  --output-dir results/profile-rank3
+```
+
+Every run writes:
+
+- `manifest.json`: command, case, child-loop timing, profiler outputs.
+- `measurement.json`: long-loop wall time, calls per second, resource usage,
+  peak RSS, and native backend flags. This pass does not enable `tracemalloc`,
+  because tracing allocations perturbs the CPU timing.
+- `allocation-measurement.json`: a shorter allocation pass with Python
+  `tracemalloc` enabled.
+- `numpy-config.txt`: numpy build and BLAS/LAPACK configuration.
+
+On macOS, the command captures a `sample(1)` stack report by default:
+
+```text
+results/profile-rank3/sample.txt
+```
+
+Use xctrace when the question needs Instruments data rather than text stacks:
+
+```bash
+monpy-profile \
+  --types strides \
+  --case rank3_transpose_add_f32 \
+  --duration 8 \
+  --xctrace time,counters,allocations \
+  --output-dir results/profile-rank3-xctrace
+```
+
+The `time`, `counters`, and `allocations` aliases map to the macOS templates
+`Time Profiler`, `CPU Counters`, and `Allocations`. The output `.trace`
+bundles are designed for Instruments inspection.
+
+On Linux, `monpy-profile` runs `perf stat` by default when `perf` is available:
+
+```bash
+monpy-profile \
+  --types strides \
+  --case rank3_transpose_add_f32 \
+  --duration 8 \
+  --perf-events cycles,instructions,cache-references,cache-misses
+```
+
+This gives a hardware-counter pass that can distinguish a Python wrapper
+regression from a cache-miss, instruction-count, or branch-miss regression.
