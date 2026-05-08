@@ -213,3 +213,21 @@ monpy-profile \
   --duration 8 \
   --output-dir results/profile-rank3-numpy
 ```
+
+### 2026-05-08 scalar ascontiguousarray fast path
+
+`array/copy/ascontiguousarray_scalar_f64` was spending two native crossings on a
+scalar: build a rank-0 array via `asarray(3.5)`, then reshape it to NumPy's
+required shape `(1,)`. The Python facade now handles Python bool/int/float
+inputs directly as `full((1,), scalar, dtype=...)`.
+
+Focused local result:
+
+| run | monpy us | numpy us | monpy/numpy |
+| --- | ---: | ---: | ---: |
+| `results/local-sweep-20260508-pass0/results.json` | 7.808 | 2.216 | 3.524x |
+| `results/local-sweep-20260508-scalar-ascontig/results.json` | 3.498 | 2.164 | 1.618x |
+
+That is a 2.23:1 reduction in monpy wall time for the scalar row. Dense and
+transpose `ascontiguousarray` rows stayed within noise, which is the important
+guardrail for this wrapper-only change.

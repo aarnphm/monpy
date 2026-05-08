@@ -2573,6 +2573,8 @@ def copy(a:object, order:str="K", subok:builtins.bool=False)->ndarray:
 
 def ascontiguousarray(a:object, dtype:object=None, *, device:object=None)->ndarray:
   _check_cpu(device)
+  if _is_scalar(a):
+    return full((1,), a, dtype=_resolve_dtype(dtype) if dtype is not None else _isd(a), device=device)
   arr=asarray(a, dtype=dtype, copy=None)
   if arr.ndim==0:return arr.reshape((1,))
   if arr._native.is_c_contiguous():return arr
