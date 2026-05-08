@@ -330,3 +330,21 @@ That is a 2.46:1 reduction for `stack_axis0_f32` and a 2.62:1 reduction for
 `vstack_f32`. `hstack` and plain `concatenate` did not move, as expected; those
 already route through the native concatenate leaf and need a different target if
 they become important.
+
+### 2026-05-08 rank-1 atleast_2d expand view
+
+`array/creation/atleast_2d_f32` was still paying for Python shape reads plus a
+native reshape when the input was already a monpy rank-1 array. NumPy models
+this case as a view (`arr[None, :]`), so monpy now uses the same shape operation:
+rank-1 `atleast_2d` calls native `expand_dims(axis=0)` directly and keeps the
+original array as the base owner.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `array/creation/atleast_2d_f32` | 6.087 | 3.526 | 2.664x | 1.519x |
+
+The direct microbench moved `mnp.atleast_2d(existing_vector)` from about 4.1 us
+to about 1.4 us. The remaining gap is the generic Python facade and one native
+call, not data movement.

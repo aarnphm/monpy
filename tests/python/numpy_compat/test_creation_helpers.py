@@ -40,6 +40,19 @@ def test_atleast_2d_promotes_rank_1_to_row() -> None:
   assert res.shape == (1, 3)
 
 
+def test_atleast_2d_rank_1_returns_view() -> None:
+  src = np.arange(4, dtype=np.float32)
+  expected = numpy.arange(4, dtype=numpy.float32)
+
+  res = np.atleast_2d(src)
+
+  assert res.shape == (1, 4)
+  assert res.strides == numpy.atleast_2d(expected).strides
+  res[0, 2] = 99
+  expected[2] = 99
+  numpy.testing.assert_array_equal(numpy.asarray(src), expected)
+
+
 def test_atleast_3d_promotes_rank_1_with_trailing_axis() -> None:
   res = np.atleast_3d([1, 2, 3])
   assert res.shape == (1, 3, 1)

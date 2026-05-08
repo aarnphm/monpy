@@ -850,7 +850,7 @@ def atleast_2d(*arys:object)->ndarray|tuple[ndarray, ...]:
   def _bump(a:object)->ndarray:
     arr=asarray(a)
     if arr.ndim==0:return arr.reshape((1, 1))
-    if arr.ndim==1:return arr.reshape((1, arr.shape[0]))
+    if arr.ndim==1:return ndarray._wrap(_native.expand_dims(arr._native, 0), base=arr)
     return arr
   res=tuple(_bump(a) for a in arys)
   return res[0] if len(res)==1 else res
