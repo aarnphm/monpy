@@ -188,7 +188,7 @@ def test_matmul_matches_numpy_for_1d_and_2d() -> None:
 
   assert_same_values(mat @ rhs, oracle_mat @ oracle_rhs)
   assert_same_values(mat @ vec, oracle_mat @ oracle_vec)
-  assert (vec @ vec) == pytest.approx(float(oracle_vec @ oracle_vec))
+  assert float(vec @ vec) == pytest.approx(float(oracle_vec @ oracle_vec))
 
 
 def test_matmul_dense_transpose_rhs_matches_numpy_and_uses_fast_path_on_macos() -> None:

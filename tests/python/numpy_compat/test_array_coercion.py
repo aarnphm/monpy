@@ -181,6 +181,12 @@ def test_numpy_array_copy_none_allows_supported_cast() -> None:
   assert arr.tolist() == [1.0, 2.0, 3.0]
 
 
+def test_core_accepts_numpy_dtype_aliases_through_lazy_numpy_interop() -> None:
+  arr = np.asarray([0, 1, 1], dtype=numpy.dtype("int64"))
+
+  assert arr.dtype is np.int64
+
+
 def test_numpy_array_copy_false_rejects_required_cast() -> None:
   source = numpy.asarray([1, 2, 3], dtype=numpy.int64)
 

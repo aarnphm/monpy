@@ -26,7 +26,7 @@ from monpy._bench.core import (
 )
 from monpy._bench.core import run_benchmarks, sorted_results
 
-SUITE_TYPES = ("array", "strides", "complex")
+SUITE_TYPES = ("array", "strides", "complex", "attention")
 
 
 def local_now() -> datetime:
@@ -311,7 +311,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     "--types",
     type=parse_types,
     default=parse_types("array,strides,complex"),
-    help="comma-separated benchmark types: array,strides,complex,all",
+    help="comma-separated benchmark types: array,strides,complex,attention,all",
   )
   parser.add_argument(
     "--vector-size",

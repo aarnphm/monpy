@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import gc
 
+from monpy import _dlpack
 import monumpy as np
 import numpy
 import pytest
 from _helpers import SUPPORTED_DTYPE_PAIRS, assert_same_shape_dtype, assert_same_values
+from monpy.runtime import ops_numpy
 
 
 @pytest.mark.parametrize("monpy_dtype, numpy_dtype", SUPPORTED_DTYPE_PAIRS)
@@ -88,20 +90,26 @@ def test_numpy_exported_view_keeps_monpy_owner_alive_after_source_scope() -> Non
   assert converted.tolist() == [7, 77, 3, 1]
 
 
-def test_array_dunder_dtype_and_copy_arguments() -> None:
+def test_ops_numpy_to_numpy_dtype_and_copy_arguments() -> None:
   arr = np.asarray([1, 2, 3], dtype=np.int64)
 
-  view = arr.__array__(copy=False)
+  view = ops_numpy.to_numpy(arr, copy=False)
   view[0] = 99
-  copied = arr.__array__(copy=True)
+  copied = ops_numpy.to_numpy(arr, copy=True)
   copied[1] = 77
-  cast = arr.__array__(dtype=numpy.float32)
+  cast = ops_numpy.to_numpy(arr, dtype=numpy.float32)
 
   assert arr.tolist() == [99, 2, 3]
   assert copied.tolist() == [99, 77, 3]
   assert arr.tolist() == [99, 2, 3]
   assert cast.dtype == numpy.float32
   assert cast.tolist() == [99.0, 2.0, 3.0]
+
+
+def test_array_dunder_removed_from_core() -> None:
+  arr = np.asarray([1, 2, 3], dtype=np.int64)
+
+  assert not hasattr(arr, "__array__")
 
 
 def test_dlpack_export_round_trips_to_numpy_cpu_protocol() -> None:
@@ -151,3 +159,39 @@ def test_dlpack_exported_numpy_view_keeps_monpy_owner_alive_after_source_scope()
   converted[2] = 8.5
 
   assert converted.tolist() == [0.0, 1.0, 8.5, 3.0, 4.0]
+
+
+def test_dlpack_import_readonly_copy_policy() -> None:
+  source = numpy.arange(4, dtype=numpy.int64)
+  source.flags.writeable = False
+
+  with pytest.raises(BufferError, match="readonly"):
+    np.from_dlpack(source, copy=False)
+
+  arr = np.from_dlpack(source, copy=None)
+  arr[0] = 99
+
+  assert arr.tolist() == [99, 1, 2, 3]
+  assert source.tolist() == [0, 1, 2, 3]
+
+
+def test_dlpack_import_reversed_view_and_capsule_one_shot() -> None:
+  source = numpy.arange(6, dtype=numpy.int64)[::-1]
+  capsule = source.__dlpack__(max_version=(1, 0))
+  arr = _dlpack.from_dlpack_capsule(capsule, copy=False)
+
+  source[1] = 77
+
+  assert arr.tolist() == [5, 77, 3, 2, 1, 0]
+  assert arr.strides == (-8,)
+  with pytest.raises(BufferError, match="already-consumed"):
+    _dlpack.from_dlpack_capsule(capsule, copy=False)
+
+
+def test_dlpack_zero_size_import_releases_producer() -> None:
+  source = numpy.arange(0, dtype=numpy.float32)
+  arr = np.from_dlpack(source, copy=False)
+
+  assert arr.shape == (0,)
+  assert arr.dtype == np.float32
+  assert arr.tolist() == []

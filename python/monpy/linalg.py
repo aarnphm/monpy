@@ -395,17 +395,17 @@ def eig(a):
   wi_flat=[float(wi._native.get_scalar(i)) for i in range(n)]
   w_complex=[complex(wr_flat[i],wi_flat[i]) for i in range(n)]
   w_arr=ndarray(_native.from_flat(w_complex,(n,),complex128.code))
-  vr_dense=numpy_asarray_local(vr)
+  def vr_value(row:int,col:int)->float:return float(vr._native.get_scalar(row*n+col))
   v_complex=[]
   j=0
   while j<n:
     if wi_flat[j]==0.0:
-      for i in range(n):v_complex.append(complex(vr_dense[i,j],0.0))
+      for i in range(n):v_complex.append(complex(vr_value(i,j),0.0))
       j+=1
     else:
       # Pair: column j → +i*v[:,j+1], column j+1 → -i*v[:,j+1]
-      for i in range(n):v_complex.append(complex(vr_dense[i,j],vr_dense[i,j+1]))
-      for i in range(n):v_complex.append(complex(vr_dense[i,j],-vr_dense[i,j+1]))
+      for i in range(n):v_complex.append(complex(vr_value(i,j),vr_value(i,j+1)))
+      for i in range(n):v_complex.append(complex(vr_value(i,j),-vr_value(i,j+1)))
       j+=2
   # v_complex is column-major (column-by-column appended); reshape needs row-major.
   v_row_major=[]
@@ -414,11 +414,6 @@ def eig(a):
       v_row_major.append(v_complex[c*n+i])
   v_arr=ndarray(_native.from_flat(v_row_major,(n,n),complex128.code))
   return w_arr,v_arr
-
-def numpy_asarray_local(monpy_arr):
-  # Lazy local helper to avoid a top-level numpy import at module load.
-  import numpy
-  return numpy.asarray(monpy_arr)
 
 def eigvals(a):
   from . import complex128

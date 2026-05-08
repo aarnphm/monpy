@@ -8,6 +8,7 @@ def test_monpy_and_monumpy_import_smoke() -> None:
   assert monpy.asarray([1, 2, 3], dtype=monpy.int64).tolist() == [1, 2, 3]
   assert monumpy.asarray([1, 2, 3], dtype=monumpy.int64).tolist() == [1, 2, 3]
   assert monumpy.float32 is monpy.float32
+  assert callable(monpy.runtime.ops_numpy.to_numpy)
 
 
 def test_array_api_import_smoke() -> None:

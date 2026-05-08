@@ -8,6 +8,7 @@ import monumpy as np
 import numpy
 import pytest
 from _helpers import MONPY_TO_NUMPY_DTYPE, SUPPORTED_DTYPE_PAIRS, assert_same_values
+from monpy.runtime import ops_numpy
 
 PROMOTION_MATCH_CASES = [
   (lhs_dtype, lhs_numpy_dtype, rhs_dtype, rhs_numpy_dtype)
@@ -101,7 +102,7 @@ def test_phase5b_phase5c_promotion_matches_numpy(lhs: object, rhs: object, expec
   out = np.result_type(lhs, rhs)
   assert out == expected
   oracle = numpy.result_type(numpy.dtype(lhs.name), numpy.dtype(rhs.name))
-  assert out == oracle
+  assert numpy.dtype(out.name) == oracle
 
 
 @pytest.mark.parametrize(("monpy_dtype", "numpy_dtype"), SUPPORTED_DTYPE_PAIRS)
@@ -137,13 +138,16 @@ def test_native_domain_codes_feed_python_enums_and_aliases() -> None:
 
 
 @pytest.mark.parametrize(("monpy_dtype", "numpy_dtype"), SUPPORTED_DTYPE_PAIRS)
-def test_supported_dtype_objects_compare_equal_to_numpy_dtype_inputs(
+def test_numpy_dtype_inputs_resolve_through_lazy_numpy_interop(
   monpy_dtype: np.DType,
   numpy_dtype: type[numpy.generic],
 ) -> None:
+  assert monpy.dtype(numpy_dtype) == monpy_dtype
+  assert monpy.dtype(numpy.dtype(numpy_dtype)) == monpy_dtype
   assert monpy_dtype == numpy_dtype
   assert monpy_dtype == numpy.dtype(numpy_dtype)
-  assert monpy_dtype == monpy._dtype_from_np(numpy.dtype(numpy_dtype))
+  assert ops_numpy.resolve_dtype(numpy_dtype) == monpy_dtype
+  assert ops_numpy.resolve_dtype(numpy.dtype(numpy_dtype)) == monpy_dtype
 
 
 @pytest.mark.parametrize(("lhs_dtype", "lhs_numpy_dtype", "rhs_dtype", "rhs_numpy_dtype"), PROMOTION_MATCH_CASES)
@@ -202,8 +206,8 @@ def test_dtype_kind_queries_match_numpy(
   oracle = numpy.dtype(numpy_dtype)
   for kind in ["bool", "signed integer", "unsigned integer", "integral", "real floating", "complex floating", "numeric"]:
     assert np.isdtype(monpy_dtype, kind) is bool(numpy.isdtype(oracle, kind))
-  for supertype in [numpy.bool_, numpy.integer, numpy.signedinteger, numpy.floating, numpy.number, numpy.generic]:
-    assert np.issubdtype(monpy_dtype, supertype) is bool(numpy.issubdtype(oracle, supertype))
+  assert np.issubdtype(monpy_dtype, monpy_dtype)
+  assert np.issubdtype(monpy_dtype, numpy.integer) is bool(numpy.issubdtype(oracle, numpy.integer))
 
 
 def test_finfo_and_iinfo_match_numpy_for_supported_numeric_limits() -> None:

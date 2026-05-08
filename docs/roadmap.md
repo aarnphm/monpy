@@ -19,6 +19,12 @@ covered v1 behavior:
 - dlpack import and export are supported for the cpu protocol. device reporting
   stays `(1, 0)`, and `from_dlpack(..., device="cpu")` follows the same
   `copy=` contract as numpy array import.
+- current dlpack support uses a numpy-free python/cpython capsule bridge. the
+  dlpack structs and capsule naming rules are not the hard part; the deferred
+  work is a mojo-native manager context that can retain imported producer
+  storage and run the producer deleter when the final monpy view dies. until
+  mojo can model that external finalizer cleanly, the python bridge owns the
+  lifetime handoff.
 - mixed `int64`/`float32` array promotion now matches numpy instead of carrying
   a strict xfail. python and mojo expose private result-dtype helpers so tests
   can pin both tables to the same rows.
@@ -37,6 +43,10 @@ covered v1 behavior:
   views retain the same storage; only the final managed reference frees bytes.
 - external cpu storage is non-owning in mojo. python `ndarray._owner` pins the
   numpy or dlpack producer while mojo holds the external storage descriptor.
+- future native dlpack should extend `Storage` with an optional external
+  finalizer. buffer and array-interface imports can keep a null finalizer;
+  dlpack imports need to call the producer's `DLManagedTensor` deleter exactly
+  once after the last monpy view releases the storage.
 - layout predicates live with native shape metadata: c-contiguous,
   f-contiguous, zero-stride, negative-stride, physical offset, and explicit
   `materialize_c_contiguous(src)` for copy-before-kernel call sites.

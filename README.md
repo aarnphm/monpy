@@ -75,16 +75,16 @@ uv pip install --no-build-isolation -e ".[dev]"
 For running verification and benchmarks
 
 ```bash
+# to run the tiny monpy GPT example
+python examples/tiny_gpt.py
 # to run benchmark
 monpy-bench --types all --format csv --loops 3 --no-progress
 # to run tests
 python -m pytest tests/python
 ```
 
-Benchmark runs write `results/yyyy-mm-dd/results.<format>` and
-`results/yyyy-mm-dd/manifest.json` by default. See
-[docs/benchmarks.md](docs/benchmarks.md) for suite types, output formats,
-saved manifests, and CI comment posting.
+Benchmark runs write `results/yyyy-mm-dd/results.<format>` and `results/yyyy-mm-dd/manifest.json` by default.
+See [docs/benchmarks.md](docs/benchmarks.md) for suite types, output formats, saved manifests, and CI comment posting.
 
 ## notes
 

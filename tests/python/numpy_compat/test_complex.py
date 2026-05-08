@@ -5,6 +5,7 @@ import math
 import monpy as mp
 import numpy
 import pytest
+from monpy.runtime import ops_numpy
 
 
 # ---------------------------------------------------------------------------
@@ -15,13 +16,15 @@ import pytest
 def test_complex64_registered() -> None:
   assert mp.complex64.itemsize == 8
   assert mp.complex64.kind == "c"
-  assert mp.complex64 == numpy.complex64
+  assert mp.dtype(numpy.complex64) == mp.complex64
+  assert ops_numpy.resolve_dtype(numpy.complex64) == mp.complex64
 
 
 def test_complex128_registered() -> None:
   assert mp.complex128.itemsize == 16
   assert mp.complex128.kind == "c"
-  assert mp.complex128 == numpy.complex128
+  assert mp.dtype(numpy.complex128) == mp.complex128
+  assert ops_numpy.resolve_dtype(numpy.complex128) == mp.complex128
 
 
 def test_complex_inference_from_python_values() -> None:

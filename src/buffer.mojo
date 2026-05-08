@@ -7,7 +7,9 @@ from std.python.python import Python
 
 from array import (
     Array,
+    cast_copy_array,
     copy_c_contiguous,
+    item_size,
     make_external_array,
 )
 from domain import (
@@ -123,16 +125,18 @@ def asarray_from_buffer_ops(
                 release_fn(view_ptr)
                 raise Error("buffer strides must align to itemsize")
             elem_strides.append(byte_stride // item_bytes)
-    # Resolve dtype before releasing so we know whether to copy. dtype
-    # mismatch with `requested_code` is a punt back to python; full
-    # promotion is handled there via astype.
+    # Resolve dtype before releasing so we know whether to copy or cast.
     var src_dtype_code = dtype_code_from_format_char(format_char_value, item_bytes)
-    release_fn(view_ptr)
-    if requested_code >= 0 and requested_code != src_dtype_code:
-        raise Error("asarray_from_buffer: dtype conversion handled in python")
+    var result_dtype_code = src_dtype_code
+    if requested_code >= 0:
+        result_dtype_code = requested_code
+    if requested_code >= 0 and requested_code != src_dtype_code and copy_flag == 0:
+        release_fn(view_ptr)
+        raise Error("asarray_from_buffer: dtype conversion requires copy=True")
     if copy_flag == 0 and readonly:
+        release_fn(view_ptr)
         raise Error("readonly array requires copy=True")
-    var must_copy = (copy_flag == 1) or readonly
+    var must_copy = (copy_flag == 1) or readonly or (result_dtype_code != src_dtype_code)
     var data = UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=data_addr)
     if must_copy:
         var view_shape = List[Int]()
@@ -150,6 +154,69 @@ def asarray_from_buffer_ops(
             byte_len,
         )
         var result = copy_c_contiguous(external)
+        if result_dtype_code != src_dtype_code:
+            var casted = cast_copy_array(result, result_dtype_code)
+            release_fn(view_ptr)
+            return PythonObject(alloc=casted^)
+        release_fn(view_ptr)
         return PythonObject(alloc=result^)
     var result = make_external_array(src_dtype_code, shape^, elem_strides^, 0, data, byte_len)
+    release_fn(view_ptr)
     return PythonObject(alloc=result^)
+
+
+def frombuffer_ops(
+    buffer_obj: PythonObject,
+    dtype_obj: PythonObject,
+    count_obj: PythonObject,
+    offset_obj: PythonObject,
+) raises -> PythonObject:
+    var dtype_code = Int(py=dtype_obj)
+    var count = Int(py=count_obj)
+    var offset = Int(py=offset_obj)
+    if offset < 0:
+        raise Error("frombuffer: offset must be non-negative")
+    if count < -1:
+        raise Error("frombuffer: count must be -1 or non-negative")
+    var item_bytes = item_size(dtype_code)
+    var view = Py_buffer()
+    var view_ptr = UnsafePointer(to=view).as_any_origin()
+    ref cpy = Python().cpython()
+    var get_buffer_fn = PyObject_GetBuffer.load(cpy.lib.borrow())
+    var release_fn = PyBuffer_Release.load(cpy.lib.borrow())
+    var rc = get_buffer_fn(buffer_obj._obj_ptr, view_ptr, PyBUF_SIMPLE)
+    if Int(rc) != 0:
+        raise Error("frombuffer: object does not expose a contiguous buffer")
+    if not view.buf:
+        release_fn(view_ptr)
+        raise Error("frombuffer: buffer has null data pointer")
+    var byte_len = Int(view.len)
+    if offset > byte_len:
+        release_fn(view_ptr)
+        raise Error("frombuffer: offset exceeds buffer length")
+    var available = byte_len - offset
+    var n = count
+    if n < 0:
+        if available % item_bytes != 0:
+            release_fn(view_ptr)
+            raise Error("frombuffer: buffer size must be a multiple of dtype itemsize")
+        n = available // item_bytes
+    else:
+        var needed = n * item_bytes
+        if needed > available:
+            release_fn(view_ptr)
+            raise Error("frombuffer: buffer is smaller than requested size")
+    var shape = List[Int]()
+    shape.append(n)
+    var strides = List[Int]()
+    strides.append(1)
+    var byte_count = n * item_bytes
+    var data_addr = Int(view.buf.value()) + offset
+    var data = UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=data_addr)
+    var external = make_external_array(dtype_code, shape^, strides^, 0, data, byte_count)
+    if Int(view.readonly) != 0:
+        var copied = copy_c_contiguous(external)
+        release_fn(view_ptr)
+        return PythonObject(alloc=copied^)
+    release_fn(view_ptr)
+    return PythonObject(alloc=external^)

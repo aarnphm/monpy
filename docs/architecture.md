@@ -18,7 +18,8 @@ monpy should be a mojo array library with numpy-shaped python APIs.
 - `src/create.mojo` owns every python-callable op dispatcher: creation (`empty` / `full` / `arange` / `linspace` / `eye` / `tri` / `concatenate` / `pad_constant`), elementwise (`unary_ops` / `unary_preserve_ops` / `binary_ops` / `binary_into_ops` / `binary_scalar_ops` / `compare_ops` / `logical_ops` / `predicate_ops`), reductions (`reduce_ops` / `reduce_axis_ops`), matmul (`matmul_ops`), linalg (`solve_ops` / `inv_ops` / `det_ops` / `qr_ops` / `cholesky_ops` / `eigh_ops` / `eig_ops` / `svd_ops` / `lstsq_ops`), shape ops (`reshape` / `transpose` / `slice` / `broadcast_to` / `expand_dims` / `flip` / `diagonal` / `trace`), casting (`astype_ops` / `materialize_c_contiguous_ops`), python-side dtype helpers. a top-level `linalg.mojo` would shadow Mojo's stdlib `linalg`, so the linalg dispatchers live here.
 - `src/elementwise.mojo` owns numeric loops, contiguous fast paths via the typed-vec dispatcher (`apply_binary_typed_vec[dtype, width]`, `apply_unary_preserve_typed_vec[dtype, width]`) covering f16 / f32 / f64 and the eight integer dtypes, strided fallbacks, fused elementwise kernels (`sin_add_mul`), the complex kernels (schoolbook FMA multiply, Smith-algorithm divide, conjugate / negate / square preserve, plus `apply_unary_complex_f64` for transcendentals via Euler identities), reductions, matmul dispatch helpers, and the LAPACK call sites (`lapack_qr_reduced_*_into`, `lapack_cholesky_*_into`, `lapack_eigh_*_into`, `lapack_eig_*_real_into`, `lapack_svd_*_into`, `lapack_lstsq_*_into`).
 - `src/accelerate.mojo` owns Apple Accelerate ffi shims only. BLAS: `cblas_sgemm` / `dgemm` / `cgemm` / `zgemm`. LAPACK: `getrf` / `gesv` / `geqrf` + `orgqr` / `potrf` / `syev` / `geev` / `gesdd` / `gelsd` for f32 and f64. each wrapper follows the F77 calling convention — pointers everywhere, character flags as `Int8` byte pointers, workspace queries via `LWORK = -1`.
-- `python/monpy` is the python API facade. it parses python objects, numpy cpu arrays, dlpack cpu producers, keyword arguments, and numpy-flavored ergonomics, then delegates implemented work into mojo. NEP 50 weak-scalar dispatch lives here; the registry mirrors numpy's dtype metadata (`kind`, `itemsize`, `alignment`, `byteorder`, `format`, `scalar_type`).
+- `python/monpy` is the python API facade. it parses python objects, cpython buffers, array-interface exporters, dlpack cpu producers, keyword arguments, and numpy-shaped ergonomics, then delegates implemented work into mojo. NEP 50 weak-scalar dispatch lives here; the registry mirrors numpy's dtype metadata (`kind`, `itemsize`, `alignment`, `byteorder`, `format`, `scalar_type`).
+- `python/monpy/runtime/ops_numpy.py` is the explicit numpy interop boundary. core `monpy` does not import numpy; numpy dtype aliases, `to_numpy(...)`, and numpy-aware `asarray(...)` live in this module.
 - `python/monpy/linalg.py` is the numpy-shaped linear algebra namespace. wraps the LAPACK dispatchers and adds python-level `pinv` / `matrix_rank` / `einsum` / `tensorinv` / `tensorsolve`. `einsum` parses the subscript string, folds pairwise contractions through `tensordot` (transpose + reshape + matmul), and unpacks LAPACK's compressed conjugate-pair `WR` / `WI` representation when `eig` returns a complex spectrum.
 - `python/monpy/array_api.py` is the standards-shaped namespace and re-exports the same `linalg` module for the currently supported surface.
 - `python/monumpy` is a compatibility shim that re-exports `monpy`.
@@ -34,14 +35,18 @@ monpy should be a mojo array library with numpy-shaped python APIs.
 | linalg    | `solve` / `inv` / `det` / `qr` / `cholesky` / `eigh` / `eig` / `svd` / `lstsq` via Accelerate LAPACK; `pinv` / `matrix_rank` / `einsum` / `tensorinv` / `tensorsolve` in python |
 | creation  | `empty` / `full` / `zeros` / `ones` / `arange` / `linspace` / `eye` / `tri` / `tril` / `triu` / `concatenate` / `pad` (constant mode) native                                    |
 | views     | slicing, reshape, transpose, broadcast, expand_dims, flip, diagonal — all stride-only, no copies                                                                                |
-| io        | numpy `__array__` / `__array_interface__` / dlpack round-trips; cpython buffer protocol fast path via `buffer.mojo`                                                             |
+| io        | `__array_interface__` export, dlpack round-trips, explicit `runtime.ops_numpy` conversion, and cpython buffer protocol fast paths via `buffer.mojo`                             |
 
 v1 non-goals: `numpy.random`, `numpy.fft`, `numpy.ma`, `numpy.strings`, `numpy.io`. see [[numpy-port-gaps]].
 
 ## policy
 
 - implemented array operations must not call numpy internally.
-- numpy is allowed as a test oracle and as an explicit cpu interchange boundary for numpy array import, `ndarray.__array__`, and dlpack round-trips.
+- numpy is allowed as a test oracle and inside the explicit `runtime.ops_numpy` cpu interchange boundary. core array import uses the cpython buffer protocol first, then direct array-interface parsing, and does not call numpy internally.
+- core dtype resolution may lazy-load `runtime.ops_numpy` when the caller passes
+  a concrete numpy dtype object or dtype class. that preserves existing
+  frontend code like `asarray(x, dtype=np.float32)` while keeping plain
+  `import monpy` and non-numpy code paths numpy-free.
 - `copy=False` at an interchange boundary means storage sharing or a loud error; `copy=True` means a detached monpy-owned allocation; `copy=None` may copy only when dtype conversion or readonly memory makes zero-copy unsafe.
 - views retain storage instead of copying raw pointers. external storage is non-owning in mojo and is kept alive by python owner slots.
 - inserted-axis views use stride-zero native metadata and retain the same storage owner.
