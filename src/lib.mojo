@@ -80,6 +80,7 @@ from create import (
     where_ops,
 )
 from array import Array
+from elementwise import layer_norm_last_axis_ops, scaled_masked_softmax_last_axis_ops, softmax_last_axis_ops
 from metadata import domain_codes_py_ops
 
 
@@ -155,6 +156,9 @@ def PyInit__native() -> PythonObject:
         module.def_function[logical_ops]("logical")
         module.def_function[predicate_ops]("predicate")
         module.def_function[sin_add_mul_ops]("sin_add_mul")
+        module.def_function[layer_norm_last_axis_ops]("layer_norm_last_axis")
+        module.def_function[softmax_last_axis_ops]("softmax_last_axis")
+        module.def_function[scaled_masked_softmax_last_axis_ops]("scaled_masked_softmax_last_axis")
         module.def_function[where_ops]("where")
         module.def_function[reduce_ops]("reduce")
         module.def_function[reduce_axis_ops]("reduce_axis")

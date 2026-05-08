@@ -80,9 +80,7 @@ def _softmax_numpy(scores: FloatArray) -> FloatArray:
 
 
 def _softmax_monpy(scores: MonpyArray) -> MonpyArray:
-  shifted = scores - cast(MonpyArray, mnp.max(scores, axis=-1, keepdims=True))
-  weights = cast(MonpyArray, mnp.exp(shifted))
-  return weights / cast(MonpyArray, mnp.sum(weights, axis=-1, keepdims=True))
+  return cast(MonpyArray, mnp.nn.softmax(scores, axis=-1))
 
 
 def _gelu_numpy(x: FloatArray) -> FloatArray:
@@ -116,10 +114,7 @@ def _layer_norm_monpy(
   *,
   eps: float = 1e-5,
 ) -> MonpyArray:
-  mean = cast(MonpyArray, mnp.mean(x, axis=-1, keepdims=True))
-  centered = x - mean
-  variance = cast(MonpyArray, mnp.mean(centered * centered, axis=-1, keepdims=True))
-  return centered / cast(MonpyArray, mnp.sqrt(variance + eps)) * gain + bias
+  return cast(MonpyArray, mnp.nn.layer_norm(x, gain, bias, eps))
 
 
 def _causal_attention_numpy(
@@ -149,10 +144,9 @@ def _causal_attention_monpy(
   q = x @ w_q
   k = x @ w_k
   v = x @ w_v
-  scores = (q @ k.T) / math.sqrt(q.shape[-1])
-  fill = cast(MonpyArray, mnp.full(scores.shape, -1.0e9, dtype=mnp.float32))
-  scores = cast(MonpyArray, mnp.where(causal_mask, fill, scores))
-  return (_softmax_monpy(scores) @ v) @ w_o
+  scores = q @ k.T
+  weights = cast(MonpyArray, mnp.nn.scaled_masked_softmax(scores, causal_mask, 1.0 / math.sqrt(q.shape[-1])))
+  return (weights @ v) @ w_o
 
 
 def _gpt_logits_numpy(x: FloatArray, params: NumpyAttentionParams) -> FloatArray:

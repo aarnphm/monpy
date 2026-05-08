@@ -206,6 +206,10 @@ class Ufunc:
   @property
   def identity(self)->object:return self._identity
   def __call__(self, *args:object, out:ndarray|None=None, where:object=True, casting:typing.Literal["no", "equiv", "safe", "same_kind", "unsafe"]="same_kind", dtype:object=None)->ndarray:
+    if _has_kernel_arg(args):
+      if out is not None or where is not True or dtype is not None:raise NotImplementedError(f"{self.__name__}: staged ufunc out/where/dtype are not implemented")
+      from .kernels import dsl as _kernel_dsl
+      return typing.cast(ndarray, _kernel_dsl.ufunc(self.__name__, *args))
     if where is not True:raise NotImplementedError(f"{self.__name__}: where= not implemented")
     if casting not in("no", "equiv", "safe", "same_kind", "unsafe"):raise ValueError(f"unknown casting: {casting}")
     if len(args)!=self.nin:raise TypeError(f"{self.__name__}() expected {self.nin} positional args, got {len(args)}")
@@ -963,7 +967,11 @@ def ix_(*args:object)->tuple[ndarray, ...]:
     results.append(a.reshape(tuple(bcast)))
   return tuple(results)
 
-def reshape(x:object, shape:int|Sequence[int])->ndarray:return asarray(x).reshape(shape)
+def reshape(x:object, shape:int|Sequence[int])->ndarray:
+  if _is_kernel_value(x):
+    from .kernels import dsl as _kernel_dsl
+    return typing.cast(ndarray, _kernel_dsl.reshape(x, shape))
+  return asarray(x).reshape(shape)
 
 def squeeze(x:object, axis:int|Sequence[int]|None=None)->ndarray:
   arr=asarray(x)
@@ -1195,9 +1203,16 @@ def dsplit(ary:object, indices_or_sections:int|Sequence[int])->list[ndarray]:
   arr=asarray(ary)
   if arr.ndim<3:raise ValueError("dsplit: array must have at least 3 dimensions")
   return split(arr, indices_or_sections, axis=2)
-def transpose(x:object, axes:Sequence[int]|None=None)->ndarray:return asarray(x).transpose(axes)
+def transpose(x:object, axes:Sequence[int]|None=None)->ndarray:
+  if _is_kernel_value(x):
+    from .kernels import dsl as _kernel_dsl
+    return typing.cast(ndarray, _kernel_dsl.transpose(x, axes))
+  return asarray(x).transpose(axes)
 def matrix_transpose(x:object)->ndarray:return asarray(x).mT
 def broadcast_to(x:object, shape:int|Sequence[int])->ndarray:
+  if _is_kernel_value(x):
+    from .kernels import dsl as _kernel_dsl
+    return typing.cast(ndarray, _kernel_dsl.broadcast_to(x, shape))
   a=asarray(x)
   return ndarray(_native.broadcast_to(a._native, _norm_shape(shape)), base=a)
 def flip(m:object, axis:int|Sequence[int]|None=None)->ndarray:
@@ -2553,6 +2568,9 @@ def _advanced_setitem_tuple(self:ndarray, k:tuple, v:object)->None:
   raise NotImplementedError("setitem with tuple of fancy indices not implemented in v1")
 
 def matmul(x1:object, x2:object)->ndarray:
+  if _is_kernel_value(x1) or _is_kernel_value(x2):
+    from .kernels import dsl as _kernel_dsl
+    return typing.cast(ndarray, _kernel_dsl.matmul(x1, x2))
   if type(x1) is ndarray and type(x2) is ndarray:                                                                             # ndarray×ndarray fast path; mojo handles promotion
     return ndarray._wrap(_native.matmul(x1._native, x2._native))
   l=_mat(_av(x1))
@@ -3022,8 +3040,12 @@ def _check_cpu(d:object)->None:
 def _check_order(order:str)->None:
   if order not in("C", "A", "K"):raise NotImplementedError("monpy v1 only supports c-contiguous materialization")
 
+def _is_kernel_value(v:object)->builtins.bool:return builtins.bool(getattr(v, "__monpy_kernel_tensor__", False))
+def _has_kernel_arg(args:Sequence[object])->builtins.bool:return builtins.any(_is_kernel_value(arg) for arg in args)
+
 runtime=importlib.import_module(f"{__name__}.runtime")
 linalg=importlib.import_module(f"{__name__}.linalg")
+nn=importlib.import_module(f"{__name__}.nn")
 
 # Top-level numpy aliases for the linalg surface; numpy exposes both `numpy.dot` and `numpy.linalg` paths.
 dot=linalg.dot
@@ -3037,6 +3059,19 @@ matvec=linalg.matvec
 vecmat=linalg.vecmat
 vecdot=linalg.vecdot
 einsum=linalg.einsum
+
+# monpy extensions
+layer_norm=nn.layer_norm
+scaled_masked_softmax=nn.scaled_masked_softmax
+softmax=nn.softmax
 from_numpy=runtime.ops_numpy.from_numpy
 
-__all__=["DType", "Ufunc", "abs", "absolute", "add", "all", "any", "append", "arange", "arccos", "arcsin", "arctan", "arctan2", "argpartition", "argsort", "argwhere", "array", "array_split", "asarray", "ascontiguousarray", "argmax", "argmin", "asfortranarray", "astype", "atleast_1d", "atleast_2d", "atleast_3d", "average", "bincount", "block", "bool", "bool_", "broadcast_arrays", "broadcast_to", "can_cast", "cbrt", "cdouble", "ceil", "clongdouble", "column_stack", "complex_", "complex64", "complex128", "concatenate", "conj", "conjugate", "copy", "copysign", "cos", "cosh", "count_nonzero", "cross", "csingle", "cummax", "cummin", "cumprod", "cumsum", "deg2rad", "degrees", "delete", "diagonal", "diag_indices", "digitize", "divide", "dot", "dsplit", "dstack", "dtype", "einsum", "e", "empty", "empty_like", "equal", "exp", "exp2", "expm1", "expand_dims", "eye", "fabs", "finfo", "fix", "flatnonzero", "flatten", "flip", "fliplr", "flipud", "float_", "float16", "float32", "float64", "floor", "floor_divide", "fmax", "fmin", "frombuffer", "from_dlpack", "fromiter", "full", "full_like", "geomspace", "greater", "greater_equal", "half", "hsplit", "hstack", "hypot", "identity", "iinfo", "imag", "indices", "inf", "inner", "insert", "int_", "int8", "int16", "int32", "int64", "intersect1d", "intp", "isdtype", "isfinite", "isinf", "isin", "isnan", "issubdtype", "ix_", "kron", "less", "less_equal", "lexsort", "linalg", "linspace", "log", "log2", "log10", "log1p", "logical_and", "logical_not", "logical_or", "logical_xor", "logspace", "matmul", "matrix_transpose", "matvec", "max", "maximum", "mean", "median", "meshgrid", "min", "minimum", "mod", "moveaxis", "multiply", "nan", "nanargmax", "nanargmin", "nancumprod", "nancumsum", "nanmax", "nanmean", "nanmedian", "nanmin", "nanpercentile", "nanprod", "nanquantile", "nanstd", "nansum", "nanvar", "ndarray", "negative", "newaxis", "nonzero", "not_equal", "ones", "ones_like", "outer", "pad", "partition", "percentile", "pi", "positive", "power", "prod", "promote_types", "ptp", "put", "put_along_axis", "quantile", "radians", "rad2deg", "ravel", "ravel_multi_index", "real", "reciprocal", "remainder", "repeat", "reshape", "result_type", "rint", "roll", "rot90", "searchsorted", "setdiff1d", "setxor1d", "sign", "signbit", "sin", "sin_add_mul", "sinh", "sort", "split", "sqrt", "square", "squeeze", "stack", "std", "subtract", "sum", "swapaxes", "take", "take_along_axis", "tan", "tanh", "angle", "tensordot", "tile", "trace", "transpose", "tri", "trim_zeros", "triu", "tril", "triu_indices", "tril_indices", "true_divide", "trunc", "ubyte", "ufunc", "uint8", "uint16", "uint32", "uint64", "uintc", "ulonglong", "union1d", "unique", "unravel_index", "ushort", "var", "vdot", "vecdot", "vecmat", "vsplit", "vstack", "where", "zeros", "zeros_like"]
+_KERNEL_LAZY_EXPORTS={"jit", "Tensor", "TensorSpec", "LayoutSpec", "TileSpec", "DTypeSpec", "DeviceSpec", "SymbolicDim"}
+
+def __getattr__(name:str)->object:
+  if name in _KERNEL_LAZY_EXPORTS:
+    kernels=importlib.import_module(f"{__name__}.kernels")
+    return getattr(kernels, name)
+  raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+__all__=["DType", "Ufunc", "abs", "absolute", "add", "all", "any", "append", "arange", "arccos", "arcsin", "arctan", "arctan2", "argpartition", "argsort", "argwhere", "array", "array_split", "asarray", "ascontiguousarray", "argmax", "argmin", "asfortranarray", "astype", "atleast_1d", "atleast_2d", "atleast_3d", "average", "bincount", "block", "bool", "bool_", "broadcast_arrays", "broadcast_to", "can_cast", "cbrt", "cdouble", "ceil", "clongdouble", "column_stack", "complex_", "complex64", "complex128", "concatenate", "conj", "conjugate", "copy", "copysign", "cos", "cosh", "count_nonzero", "cross", "csingle", "cummax", "cummin", "cumprod", "cumsum", "deg2rad", "degrees", "delete", "diagonal", "diag_indices", "digitize", "divide", "dot", "dsplit", "dstack", "dtype", "einsum", "e", "empty", "empty_like", "equal", "exp", "exp2", "expm1", "expand_dims", "eye", "fabs", "finfo", "fix", "flatnonzero", "flatten", "flip", "fliplr", "flipud", "float_", "float16", "float32", "float64", "floor", "floor_divide", "fmax", "fmin", "frombuffer", "from_dlpack", "fromiter", "full", "full_like", "geomspace", "greater", "greater_equal", "half", "hsplit", "hstack", "hypot", "identity", "iinfo", "imag", "indices", "inf", "inner", "insert", "int_", "int8", "int16", "int32", "int64", "intersect1d", "intp", "isdtype", "isfinite", "isinf", "isin", "isnan", "issubdtype", "ix_", "kron", "less", "less_equal", "lexsort", "linalg", "layer_norm", "linspace", "log", "log2", "log10", "log1p", "logical_and", "logical_not", "logical_or", "logical_xor", "logspace", "matmul", "matrix_transpose", "matvec", "max", "maximum", "mean", "median", "meshgrid", "min", "minimum", "mod", "moveaxis", "multiply", "nan", "nanargmax", "nanargmin", "nancumprod", "nancumsum", "nanmax", "nanmean", "nanmedian", "nanmin", "nanpercentile", "nanprod", "nanquantile", "nanstd", "nansum", "nanvar", "ndarray", "negative", "newaxis", "nn", "nonzero", "not_equal", "ones", "ones_like", "outer", "pad", "partition", "percentile", "pi", "positive", "power", "prod", "promote_types", "ptp", "put", "put_along_axis", "quantile", "radians", "rad2deg", "ravel", "ravel_multi_index", "real", "reciprocal", "remainder", "repeat", "reshape", "result_type", "rint", "roll", "rot90", "scaled_masked_softmax", "searchsorted", "setdiff1d", "setxor1d", "sign", "signbit", "sin", "sin_add_mul", "sinh", "softmax", "sort", "split", "sqrt", "square", "squeeze", "stack", "std", "subtract", "sum", "swapaxes", "take", "take_along_axis", "tan", "tanh", "angle", "tensordot", "tile", "trace", "transpose", "tri", "trim_zeros", "triu", "tril", "triu_indices", "tril_indices", "true_divide", "trunc", "ubyte", "ufunc", "uint8", "uint16", "uint32", "uint64", "uintc", "ulonglong", "union1d", "unique", "unravel_index", "ushort", "var", "vdot", "vecdot", "vecmat", "vsplit", "vstack", "where", "zeros", "zeros_like"]+sorted(_KERNEL_LAZY_EXPORTS)

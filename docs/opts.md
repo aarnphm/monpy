@@ -858,3 +858,41 @@ is no longer absurd, but the benchmark still makes several Python/native
 round-trips and temporary arrays per row-normalization step. A single-pass
 last-axis layer norm and a stable row softmax would attack the remaining
 1.57x GPT gap directly.
+
+### 2026-05-08 `monpy.nn` compile fix
+
+The first `src/nn` split failed at the Mojo extension boundary:
+
+```text
+src/lib.mojo:84:16: error: package 'nn' does not contain 'layer_norm_last_axis_ops'
+```
+
+The source file was present, but the name `nn` is already claimed by Modular/MAX
+kernel packages in the compiler search path. Importing `from nn import ...` did
+not resolve to monpy's local directory. A second attempt to import `nn.kernels`
+hit the same owner. The working shape is:
+
+- keep the Mojo implementation in `src/elementwise/nn_ops.mojo`
+- re-export the bridge functions from `src/elementwise/__init__.mojo`
+- import the bridge functions in `src/lib.mojo` with `from elementwise import ...`
+- keep `python/monpy/nn` as the public Python import scope
+
+This keeps the public Python surface as `monpy.nn` while avoiding collision with
+MAX's own `nn` package. Focused verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_numeric.py::test_fused_layer_norm_matches_numpy_formula tests/python/numpy_compat/test_numeric.py::test_fused_softmax_matches_numpy_formula tests/python/numpy_compat/test_numeric.py::test_fused_scaled_masked_softmax_matches_numpy_formula -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python - <<'PY'
+import monpy
+import monumpy as mnp
+print(monpy.nn.softmax is monpy.softmax)
+print(mnp.nn.layer_norm is monpy.nn.layer_norm)
+PY
+```
+
+The editable build completed with the existing ld64 target-version warning, the
+three focused tests passed, and both import-scope identity checks printed
+`True`. A one-round attention benchmark smoke also wrote
+`results/local-sweep-20260508-nn-compile-smoke/manifest.json`; treat that as an
+import/runner smoke only, not a stable performance sample.

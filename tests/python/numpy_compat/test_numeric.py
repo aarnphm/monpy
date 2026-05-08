@@ -432,6 +432,70 @@ def test_numpy_shaped_expression_lowers_to_fused_kernel() -> None:
   assert_same_values(out, numpy.sin(oracle_lhs) + oracle_rhs * 3.0)
 
 
+def test_fused_layer_norm_matches_numpy_formula() -> None:
+  x = (np.arange(4 * 5, dtype=np.float32).reshape(4, 5) / 11.0) - 1.0
+  gain = np.asarray([1.0, 0.5, 1.5, -1.0, 2.0], dtype=np.float32)
+  bias = np.asarray([0.0, 0.1, -0.2, 0.3, -0.4], dtype=np.float32)
+  oracle_x = (numpy.arange(4 * 5, dtype=numpy.float32).reshape(4, 5) / 11.0) - 1.0
+  oracle_gain = numpy.asarray(gain)
+  oracle_bias = numpy.asarray(bias)
+  mean = numpy.mean(oracle_x, axis=-1, keepdims=True)
+  centered = oracle_x - mean
+  variance = numpy.mean(centered * centered, axis=-1, keepdims=True)
+  oracle = centered / numpy.sqrt(variance + 1e-5) * oracle_gain + oracle_bias
+
+  assert np.layer_norm is np.nn.layer_norm
+
+  out = np.nn.layer_norm(x, gain, bias)
+
+  assert out.dtype == np.float32
+  assert out._native.used_fused()
+  numpy.testing.assert_allclose(numpy.asarray(out), oracle, rtol=1e-5, atol=1e-5)
+
+
+def test_fused_softmax_matches_numpy_formula() -> None:
+  x = (np.arange(4 * 5, dtype=np.float32).reshape(4, 5) / 3.0) - 2.0
+  oracle_x = (numpy.arange(4 * 5, dtype=numpy.float32).reshape(4, 5) / 3.0) - 2.0
+  shifted = oracle_x - numpy.max(oracle_x, axis=-1, keepdims=True)
+  weights = numpy.exp(shifted)
+  oracle = weights / numpy.sum(weights, axis=-1, keepdims=True)
+
+  assert np.softmax is np.nn.softmax
+
+  out = np.nn.softmax(x, axis=-1)
+
+  assert out.dtype == np.float32
+  assert out._native.used_fused()
+  numpy.testing.assert_allclose(numpy.asarray(out), oracle, rtol=1e-5, atol=1e-5)
+
+
+def test_fused_scaled_masked_softmax_matches_numpy_formula() -> None:
+  x = (np.arange(4 * 5, dtype=np.float32).reshape(4, 5) / 7.0) - 1.0
+  mask = np.asarray(
+    [
+      [False, True, False, False, True],
+      [False, False, True, False, True],
+      [True, False, False, True, False],
+      [False, False, False, True, True],
+    ],
+    dtype=np.bool,
+  )
+  oracle_x = (numpy.arange(4 * 5, dtype=numpy.float32).reshape(4, 5) / 7.0) - 1.0
+  oracle_mask = numpy.asarray(mask)
+  masked = numpy.where(oracle_mask, numpy.full_like(oracle_x, -1.0e9), oracle_x * 0.5)
+  shifted = masked - numpy.max(masked, axis=-1, keepdims=True)
+  weights = numpy.exp(shifted)
+  oracle = weights / numpy.sum(weights, axis=-1, keepdims=True)
+
+  assert np.scaled_masked_softmax is np.nn.scaled_masked_softmax
+
+  out = np.nn.scaled_masked_softmax(x, mask, scale=0.5)
+
+  assert out.dtype == np.float32
+  assert out._native.used_fused()
+  numpy.testing.assert_allclose(numpy.asarray(out), oracle, rtol=1e-5, atol=1e-5)
+
+
 def test_where_matches_numpy() -> None:
   cond = np.asarray([True, False, True])
   lhs = np.asarray([1, 2, 3])

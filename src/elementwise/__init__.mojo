@@ -104,6 +104,7 @@ from .linalg_kernels import (
     write_col_major_to_array,
     write_solve_result,
 )
+from .nn_ops import layer_norm_last_axis_ops, scaled_masked_softmax_last_axis_ops, softmax_last_axis_ops
 from .matmul import (
     matmul_small_typed,
     maybe_matmul_complex_accelerate,
