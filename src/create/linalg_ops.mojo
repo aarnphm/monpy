@@ -23,20 +23,13 @@ from array import (
 )
 from domain import ArrayDType, BinaryOp
 from elementwise import (
-    lapack_cholesky_f32_into,
-    lapack_cholesky_f64_into,
-    lapack_eig_f32_real_into,
-    lapack_eig_f64_real_into,
-    lapack_eigh_f32_into,
-    lapack_eigh_f64_into,
-    lapack_lstsq_f32_into,
-    lapack_lstsq_f64_into,
-    lapack_qr_r_only_f32_into,
-    lapack_qr_r_only_f64_into,
-    lapack_qr_reduced_f32_into,
-    lapack_qr_reduced_f64_into,
-    lapack_svd_f32_into,
-    lapack_svd_f64_into,
+    lapack_cholesky_into,
+    lapack_eig_real_into,
+    lapack_eigh_into,
+    lapack_lstsq_into,
+    lapack_qr_r_only_into,
+    lapack_qr_reduced_into,
+    lapack_svd_into,
     lu_det_into,
     lu_inverse_into,
     lu_solve_into,
@@ -202,9 +195,9 @@ def qr_ops(array_obj: PythonObject, mode_obj: PythonObject) raises -> PythonObje
         var q = make_empty_array(dtype_code, q_shape^)
         var r = make_empty_array(dtype_code, r_shape^)
         if dtype_code == ArrayDType.FLOAT32.value:
-            lapack_qr_reduced_f32_into(src[], q, r)
+            lapack_qr_reduced_into[DType.float32](src[], q, r)
         else:
-            lapack_qr_reduced_f64_into(src[], q, r)
+            lapack_qr_reduced_into[DType.float64](src[], q, r)
         var out = Python.evaluate("[]")
         _ = out.append(PythonObject(alloc=q^))
         _ = out.append(PythonObject(alloc=r^))
@@ -225,9 +218,9 @@ def qr_ops(array_obj: PythonObject, mode_obj: PythonObject) raises -> PythonObje
         var q = make_empty_array(dtype_code, q_shape^)
         var r = make_empty_array(dtype_code, r_shape^)
         if dtype_code == ArrayDType.FLOAT32.value:
-            lapack_qr_reduced_f32_into(src[], q, r)
+            lapack_qr_reduced_into[DType.float32](src[], q, r)
         else:
-            lapack_qr_reduced_f64_into(src[], q, r)
+            lapack_qr_reduced_into[DType.float64](src[], q, r)
         var out = Python.evaluate("[]")
         _ = out.append(PythonObject(alloc=q^))
         _ = out.append(PythonObject(alloc=r^))
@@ -239,9 +232,9 @@ def qr_ops(array_obj: PythonObject, mode_obj: PythonObject) raises -> PythonObje
         r_shape.append(n)
         var r = make_empty_array(dtype_code, r_shape^)
         if dtype_code == ArrayDType.FLOAT32.value:
-            lapack_qr_r_only_f32_into(src[], r)
+            lapack_qr_r_only_into[DType.float32](src[], r)
         else:
-            lapack_qr_r_only_f64_into(src[], r)
+            lapack_qr_r_only_into[DType.float64](src[], r)
         return PythonObject(alloc=r^)
     raise Error("linalg.qr: unsupported mode")
 
@@ -257,9 +250,9 @@ def cholesky_ops(array_obj: PythonObject) raises -> PythonObject:
     shape.append(n)
     var result = make_empty_array(dtype_code, shape^)
     if dtype_code == ArrayDType.FLOAT32.value:
-        lapack_cholesky_f32_into(src[], result)
+        lapack_cholesky_into[DType.float32](src[], result)
     else:
-        lapack_cholesky_f64_into(src[], result)
+        lapack_cholesky_into[DType.float64](src[], result)
     return PythonObject(alloc=result^)
 
 
@@ -282,9 +275,9 @@ def eigh_ops(array_obj: PythonObject, compute_eigenvectors_obj: PythonObject) ra
         v_shape.append(0)
     var v = make_empty_array(dtype_code, v_shape^)
     if dtype_code == ArrayDType.FLOAT32.value:
-        lapack_eigh_f32_into(src[], w, v, compute_v)
+        lapack_eigh_into[DType.float32](src[], w, v, compute_v)
     else:
-        lapack_eigh_f64_into(src[], w, v, compute_v)
+        lapack_eigh_into[DType.float64](src[], w, v, compute_v)
     var out = Python.evaluate("[]")
     _ = out.append(PythonObject(alloc=w^))
     _ = out.append(PythonObject(alloc=v^))
@@ -313,9 +306,9 @@ def eig_ops(array_obj: PythonObject, compute_eigenvectors_obj: PythonObject) rai
     var v = make_empty_array(dtype_code, v_shape^)
     var all_real: Bool
     if dtype_code == ArrayDType.FLOAT32.value:
-        all_real = lapack_eig_f32_real_into(src[], wr, wi, v, compute_v)
+        all_real = lapack_eig_real_into[DType.float32](src[], wr, wi, v, compute_v)
     else:
-        all_real = lapack_eig_f64_real_into(src[], wr, wi, v, compute_v)
+        all_real = lapack_eig_real_into[DType.float64](src[], wr, wi, v, compute_v)
     var out = Python.evaluate("[]")
     _ = out.append(PythonObject(alloc=wr^))
     _ = out.append(PythonObject(alloc=wi^))
@@ -358,9 +351,9 @@ def svd_ops(
     var u = make_empty_array(dtype_code, u_shape^)
     var vt = make_empty_array(dtype_code, vt_shape^)
     if dtype_code == ArrayDType.FLOAT32.value:
-        lapack_svd_f32_into(src[], u, s, vt, full_matrices, compute_uv)
+        lapack_svd_into[DType.float32](src[], u, s, vt, full_matrices, compute_uv)
     else:
-        lapack_svd_f64_into(src[], u, s, vt, full_matrices, compute_uv)
+        lapack_svd_into[DType.float64](src[], u, s, vt, full_matrices, compute_uv)
     var out = Python.evaluate("[]")
     _ = out.append(PythonObject(alloc=u^))
     _ = out.append(PythonObject(alloc=s^))
@@ -397,10 +390,10 @@ def lstsq_ops(a_obj: PythonObject, b_obj: PythonObject, rcond_obj: PythonObject)
     var rank_ptr = rebind[UnsafePointer[Int, MutExternalOrigin]](UnsafePointer(to=rank_buf))
     if dtype_code == ArrayDType.FLOAT32.value:
         var rcond_f32 = Float32(Float64(py=rcond_obj))
-        lapack_lstsq_f32_into(a[], b[], x, s, rcond_f32, rank_ptr)
+        lapack_lstsq_into[DType.float32](a[], b[], x, s, rcond_f32, rank_ptr)
     else:
         var rcond_f64 = Float64(py=rcond_obj)
-        lapack_lstsq_f64_into(a[], b[], x, s, rcond_f64, rank_ptr)
+        lapack_lstsq_into[DType.float64](a[], b[], x, s, rcond_f64, rank_ptr)
     var out = Python.evaluate("[]")
     _ = out.append(PythonObject(alloc=x^))
     _ = out.append(PythonObject(alloc=s^))
@@ -436,8 +429,8 @@ def pinv_ops(a_obj: PythonObject, rcond_obj: PythonObject) raises -> PythonObjec
     var rank_ptr = rebind[UnsafePointer[Int, MutExternalOrigin]](UnsafePointer(to=rank_buf))
     if dtype_code == ArrayDType.FLOAT32.value:
         var rcond_f32 = Float32(Float64(py=rcond_obj))
-        lapack_lstsq_f32_into(a[], rhs, x, s, rcond_f32, rank_ptr)
+        lapack_lstsq_into[DType.float32](a[], rhs, x, s, rcond_f32, rank_ptr)
     else:
         var rcond_f64 = Float64(py=rcond_obj)
-        lapack_lstsq_f64_into(a[], rhs, x, s, rcond_f64, rank_ptr)
+        lapack_lstsq_into[DType.float64](a[], rhs, x, s, rcond_f64, rank_ptr)
     return PythonObject(alloc=x^)
