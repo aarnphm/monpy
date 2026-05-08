@@ -1,28 +1,434 @@
 """Shape-manipulation `_ops` Python-bridge entry points.
 
-Hosts native fast paths for concatenate / stack / tril / triu / pad_constant.
-Each routes through `memcpy` when all inputs are c-contiguous and same-dtype,
-and falls back to per-element f64 round-trip when not. The fallback paths
-match numpy semantics but are slower.
+Hosts the layout/view manipulators (reshape/ravel/flatten/squeeze/transpose/
+swapaxes/flip/slice/broadcast_to/expand_dims/materialize), the rank-2
+diagonal/trace pair, and the data-moving combinators (concatenate / stack /
+tril / triu / pad_constant). The view ops are pure stride-rewrites: they
+allocate a fresh `Array` header that aliases the source storage. The
+combinators route through `memcpy` when all inputs are c-contiguous and
+same-dtype, falling back to per-element f64 round-trip otherwise.
 
 Why grouped: every op shares the same ABI shape (PythonObject in/out) and
-the same fast-path-or-fallback dispatch pattern.
+either does layout-algebra view construction or fast-path-or-fallback
+copy dispatch.
 """
 
+from std.collections import List
 from std.memory import memcpy as _memcpy
 from std.python import PythonObject
 
 from array import (
     Array,
+    array_with_layout,
+    as_broadcast_layout,
+    as_layout,
+    clone_int_list,
     contiguous_f32_ptr,
     contiguous_f64_ptr,
+    copy_c_contiguous,
     get_logical_as_f64,
+    get_physical_as_f64,
+    get_physical_bool,
+    get_physical_i64,
+    int_list_from_py,
     is_c_contiguous,
     item_size,
     make_empty_array,
+    make_view_array,
+    result_dtype_for_reduction,
     set_logical_from_f64,
+    set_logical_from_i64,
+    shape_size,
+    slice_length,
 )
-from domain import ArrayDType
+from cute.functional import select as cute_select
+from cute.int_tuple import IntTuple
+from cute.layout import make_layout_row_major
+from domain import ArrayDType, ReduceOp
+
+
+def reshape_ops(array_obj: PythonObject, shape_obj: PythonObject) raises -> PythonObject:
+    # Layout-algebra view: c-contig source → fresh row-major layout over
+    # the new shape (no data movement). Non-contig source → materialize
+    # a c-contig copy first, then reshape it. Matches numpy: reshape
+    # returns a view when possible, a copy when not.
+    var src = array_obj.downcast_value_ptr[Array]()
+    var new_shape = int_list_from_py(shape_obj)
+    var new_size = shape_size(new_shape)
+    if new_size != src[].size_value:
+        raise Error("cannot reshape array to requested size")
+    if is_c_contiguous(src[]):
+        var shape_tuple = IntTuple.flat(clone_int_list(new_shape))
+        var new_layout = make_layout_row_major(shape_tuple^)
+        var view = array_with_layout(src[], new_layout)
+        return PythonObject(alloc=view^)
+    var copied = copy_c_contiguous(src[])
+    var shape_tuple = IntTuple.flat(clone_int_list(new_shape))
+    var copy_layout = make_layout_row_major(shape_tuple^)
+    var view = array_with_layout(copied, copy_layout)
+    return PythonObject(alloc=view^)
+
+
+def ravel_ops(array_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var shape = List[Int]()
+    shape.append(src[].size_value)
+    var strides = List[Int]()
+    strides.append(1)
+    if is_c_contiguous(src[]):
+        var view = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+        return PythonObject(alloc=view^)
+    var copied = copy_c_contiguous(src[])
+    var view = make_view_array(copied, shape^, strides^, copied.size_value, copied.offset_elems)
+    return PythonObject(alloc=view^)
+
+
+def flatten_ops(array_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var copied = copy_c_contiguous(src[])
+    var shape = List[Int]()
+    shape.append(copied.size_value)
+    var strides = List[Int]()
+    strides.append(1)
+    var view = make_view_array(copied, shape^, strides^, copied.size_value, copied.offset_elems)
+    return PythonObject(alloc=view^)
+
+
+def squeeze_all_ops(array_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var shape = List[Int]()
+    var strides = List[Int]()
+    for axis in range(len(src[].shape)):
+        if src[].shape[axis] != 1:
+            shape.append(src[].shape[axis])
+            strides.append(src[].strides[axis])
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    return PythonObject(alloc=result^)
+
+
+def squeeze_axis_ops(array_obj: PythonObject, axis_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var ndim = len(src[].shape)
+    var axis = Int(py=axis_obj)
+    if axis < 0:
+        axis += ndim
+    if axis < 0 or axis >= ndim:
+        raise Error("squeeze: axis out of range")
+    if src[].shape[axis] != 1:
+        raise Error("squeeze: cannot select an axis with size != 1")
+    var shape = List[Int]()
+    var strides = List[Int]()
+    for src_axis in range(ndim):
+        if src_axis != axis:
+            shape.append(src[].shape[src_axis])
+            strides.append(src[].strides[src_axis])
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    return PythonObject(alloc=result^)
+
+
+def squeeze_axes_ops(array_obj: PythonObject, axes_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var ndim = len(src[].shape)
+    var axes = int_list_from_py(axes_obj)
+    var drop = List[Bool]()
+    for _ in range(ndim):
+        drop.append(False)
+    for i in range(len(axes)):
+        var axis = axes[i]
+        if axis < 0:
+            axis += ndim
+        if axis < 0 or axis >= ndim:
+            raise Error("squeeze: axis out of range")
+        if src[].shape[axis] != 1:
+            raise Error("squeeze: cannot select an axis with size != 1")
+        if drop[axis]:
+            raise Error("squeeze: repeated axis")
+        drop[axis] = True
+    var shape = List[Int]()
+    var strides = List[Int]()
+    for axis in range(ndim):
+        if not drop[axis]:
+            shape.append(src[].shape[axis])
+            strides.append(src[].strides[axis])
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    return PythonObject(alloc=result^)
+
+
+def transpose_ops(array_obj: PythonObject, axes_obj: PythonObject) raises -> PythonObject:
+    # Layout-algebra view: `select(L, axes)` permutes the top-level modes.
+    # Equivalent to manual stride-list permutation but algebraically sourced.
+    var src = array_obj.downcast_value_ptr[Array]()
+    var axes = int_list_from_py(axes_obj)
+    if len(axes) != len(src[].shape):
+        raise Error("transpose() axes length must match ndim")
+    for i in range(len(axes)):
+        if axes[i] < 0 or axes[i] >= len(src[].shape):
+            raise Error("transpose() axis out of bounds")
+    var src_layout = as_layout(src[])
+    var permuted = cute_select(src_layout, axes)
+    var view = array_with_layout(src[], permuted)
+    return PythonObject(alloc=view^)
+
+
+def swapaxes_ops(array_obj: PythonObject, axis1_obj: PythonObject, axis2_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var ndim = len(src[].shape)
+    var axis1 = Int(py=axis1_obj)
+    var axis2 = Int(py=axis2_obj)
+    if axis1 < 0:
+        axis1 += ndim
+    if axis2 < 0:
+        axis2 += ndim
+    if axis1 < 0 or axis1 >= ndim or axis2 < 0 or axis2 >= ndim:
+        raise Error("swapaxes: axis out of range")
+    var shape = clone_int_list(src[].shape)
+    var strides = clone_int_list(src[].strides)
+    var tmp_shape = shape[axis1]
+    shape[axis1] = shape[axis2]
+    shape[axis2] = tmp_shape
+    var tmp_stride = strides[axis1]
+    strides[axis1] = strides[axis2]
+    strides[axis2] = tmp_stride
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    return PythonObject(alloc=result^)
+
+
+def flip_ops(
+    array_obj: PythonObject,
+    axes_obj: PythonObject,
+) raises -> PythonObject:
+    # Flip the iteration order on each axis in `axes` by negating its
+    # stride and shifting `offset_elems`. Pure view; no data movement.
+    # An empty `axes` list flips every axis (numpy default).
+    var src = array_obj.downcast_value_ptr[Array]()
+    var ndim = len(src[].shape)
+    var shape = clone_int_list(src[].shape)
+    var strides = clone_int_list(src[].strides)
+    var offset = src[].offset_elems
+
+    var flip_all = len(axes_obj) == 0
+    var seen = List[Bool]()
+    for _ in range(ndim):
+        seen.append(False)
+
+    if flip_all:
+        for i in range(ndim):
+            seen[i] = True
+    else:
+        for k in range(len(axes_obj)):
+            var ax = Int(py=axes_obj[k])
+            if ax < 0:
+                ax += ndim
+            if ax < 0 or ax >= ndim:
+                raise Error("flip() axis out of bounds")
+            if seen[ax]:
+                raise Error("flip() repeated axis")
+            seen[ax] = True
+
+    for i in range(ndim):
+        if seen[i]:
+            offset += (shape[i] - 1) * strides[i]
+            strides[i] = -strides[i]
+
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, offset)
+    return PythonObject(alloc=result^)
+
+
+def transpose_full_reverse_ops(
+    array_obj: PythonObject,
+) raises -> PythonObject:
+    # Fast path for `.T` on rank>=2: reverse every axis without crossing
+    # Python boundaries for an axes tuple. Avoids `int_list_from_py` and
+    # the per-axis bounds check; `make_view_array` validates shape/strides
+    # match.
+    var src = array_obj.downcast_value_ptr[Array]()
+    var ndim = len(src[].shape)
+    var shape = List[Int]()
+    var strides = List[Int]()
+    for i in range(ndim - 1, -1, -1):
+        shape.append(src[].shape[i])
+        strides.append(src[].strides[i])
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    return PythonObject(alloc=result^)
+
+
+def slice_ops(
+    array_obj: PythonObject,
+    starts_obj: PythonObject,
+    stops_obj: PythonObject,
+    steps_obj: PythonObject,
+    drops_obj: PythonObject,
+) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var starts = int_list_from_py(starts_obj)
+    var stops = int_list_from_py(stops_obj)
+    var steps = int_list_from_py(steps_obj)
+    var drops = int_list_from_py(drops_obj)
+    if (
+        len(starts) != len(src[].shape)
+        or len(stops) != len(src[].shape)
+        or len(steps) != len(src[].shape)
+        or len(drops) != len(src[].shape)
+    ):
+        raise Error("slice metadata rank mismatch")
+    var offset = src[].offset_elems
+    var shape = List[Int]()
+    var strides = List[Int]()
+    for axis in range(len(src[].shape)):
+        offset += starts[axis] * src[].strides[axis]
+        if drops[axis] == 0:
+            shape.append(slice_length(src[].shape[axis], starts[axis], stops[axis], steps[axis]))
+            strides.append(src[].strides[axis] * steps[axis])
+    var result = make_view_array(src[], shape^, strides^, shape_size(shape), offset)
+    return PythonObject(alloc=result^)
+
+
+def broadcast_to_ops(array_obj: PythonObject, shape_obj: PythonObject) raises -> PythonObject:
+    # Layout-algebra view: build the broadcast layout (stride-zero
+    # injection on size-1 / new outer dims) and materialize a view.
+    var src = array_obj.downcast_value_ptr[Array]()
+    var out_shape = int_list_from_py(shape_obj)
+    var ndim_out = len(out_shape)
+    var ndim_src = len(src[].shape)
+    if ndim_src > ndim_out:
+        raise Error("cannot broadcast to fewer dimensions")
+    # Validate broadcast compatibility before delegating to the layout
+    # builder — `as_broadcast_layout` injects stride-0 silently on
+    # size-1 mismatches but doesn't catch hard incompatibilities.
+    for out_axis in range(ndim_out):
+        var src_axis = out_axis - (ndim_out - ndim_src)
+        if src_axis >= 0:
+            var src_dim = src[].shape[src_axis]
+            var out_dim = out_shape[out_axis]
+            if src_dim != out_dim and src_dim != 1:
+                raise Error("shape is not broadcastable")
+    var bcast_layout = as_broadcast_layout(src[], out_shape)
+    var view = array_with_layout(src[], bcast_layout)
+    return PythonObject(alloc=view^)
+
+
+def expand_dims_ops(array_obj: PythonObject, axis_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var axis = Int(py=axis_obj)
+    if axis < 0 or axis > len(src[].shape):
+        raise Error("axis out of bounds")
+    var shape = List[Int]()
+    var strides = List[Int]()
+    for i in range(axis):
+        shape.append(src[].shape[i])
+        strides.append(src[].strides[i])
+    shape.append(1)
+    strides.append(0)
+    for i in range(axis, len(src[].shape)):
+        shape.append(src[].shape[i])
+        strides.append(src[].strides[i])
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    return PythonObject(alloc=result^)
+
+
+def materialize_c_contiguous_ops(
+    array_obj: PythonObject,
+) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var result = copy_c_contiguous(src[])
+    return PythonObject(alloc=result^)
+
+
+def normalize_axis_ops(axis_value: Int, ndim: Int, name: String) raises -> Int:
+    var axis = axis_value
+    if axis < 0:
+        axis += ndim
+    if axis < 0 or axis >= ndim:
+        raise Error(name, " axis out of bounds")
+    return axis
+
+
+@fieldwise_init
+struct DiagonalMetadata(ImplicitlyCopyable, Movable, Writable):
+    var length: Int
+    var offset: Int
+    var stride: Int
+
+
+def diagonal_metadata_ops(src: Array, offset: Int, axis1: Int, axis2: Int) raises -> DiagonalMetadata:
+    if len(src.shape) != 2:
+        raise Error("diagonal() and trace() currently require rank-2 arrays")
+    if axis1 == axis2:
+        raise Error("diagonal axes must be different")
+    var rows = src.shape[axis1]
+    var cols = src.shape[axis2]
+    var row_start = 0
+    var col_start = 0
+    if offset >= 0:
+        col_start = offset
+    else:
+        row_start = -offset
+    var diag_len = 0
+    if row_start < rows and col_start < cols:
+        var rows_left = rows - row_start
+        var cols_left = cols - col_start
+        diag_len = rows_left
+        if cols_left < diag_len:
+            diag_len = cols_left
+    var diag_offset = src.offset_elems + row_start * src.strides[axis1] + col_start * src.strides[axis2]
+    var diag_stride = src.strides[axis1] + src.strides[axis2]
+    return DiagonalMetadata(diag_len, diag_offset, diag_stride)
+
+
+def diagonal_ops(
+    array_obj: PythonObject,
+    offset_obj: PythonObject,
+    axis1_obj: PythonObject,
+    axis2_obj: PythonObject,
+) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var axis1 = normalize_axis_ops(Int(py=axis1_obj), len(src[].shape), "axis1")
+    var axis2 = normalize_axis_ops(Int(py=axis2_obj), len(src[].shape), "axis2")
+    var metadata = diagonal_metadata_ops(src[], Int(py=offset_obj), axis1, axis2)
+    var shape = List[Int]()
+    shape.append(metadata.length)
+    var strides = List[Int]()
+    strides.append(metadata.stride)
+    var result = make_view_array(src[], shape^, strides^, metadata.length, metadata.offset)
+    return PythonObject(alloc=result^)
+
+
+def trace_ops(
+    array_obj: PythonObject,
+    offset_obj: PythonObject,
+    axis1_obj: PythonObject,
+    axis2_obj: PythonObject,
+    dtype_obj: PythonObject,
+) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var axis1 = normalize_axis_ops(Int(py=axis1_obj), len(src[].shape), "axis1")
+    var axis2 = normalize_axis_ops(Int(py=axis2_obj), len(src[].shape), "axis2")
+    var metadata = diagonal_metadata_ops(src[], Int(py=offset_obj), axis1, axis2)
+    var diag_len = metadata.length
+    var diag_offset = metadata.offset
+    var diag_stride = metadata.stride
+    var shape = List[Int]()
+    var dtype_code = Int(py=dtype_obj)
+    if dtype_code < 0:
+        dtype_code = result_dtype_for_reduction(src[].dtype_code, ReduceOp.SUM.value)
+    var result = make_empty_array(dtype_code, shape^)
+    if src[].dtype_code == ArrayDType.INT64.value:
+        var acc = Int64(0)
+        for i in range(diag_len):
+            acc += get_physical_i64(src[], diag_offset + i * diag_stride)
+        set_logical_from_i64(result, 0, acc)
+    elif src[].dtype_code == ArrayDType.BOOL.value:
+        var acc = Int64(0)
+        for i in range(diag_len):
+            if get_physical_bool(src[], diag_offset + i * diag_stride):
+                acc += 1
+        set_logical_from_i64(result, 0, acc)
+    else:
+        var acc = 0.0
+        for i in range(diag_len):
+            acc += get_physical_as_f64(src[], diag_offset + i * diag_stride)
+        set_logical_from_f64(result, 0, acc)
+    return PythonObject(alloc=result^)
 
 
 def concatenate_ops(
