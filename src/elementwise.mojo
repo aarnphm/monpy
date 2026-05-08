@@ -1917,6 +1917,61 @@ def maybe_complex_binary_contiguous_accelerate(lhs: Array, rhs: Array, mut resul
     return False
 
 
+comptime BinaryContigKernel = def[dt: DType](
+    UnsafePointer[Scalar[dt], MutExternalOrigin],
+    UnsafePointer[Scalar[dt], MutExternalOrigin],
+    UnsafePointer[Scalar[dt], MutExternalOrigin],
+    Int,
+    Int,
+) thin raises -> None
+"""Shape of any same-dtype contiguous binary kernel: three pointers, size, op code.
+"""
+
+
+def dispatch_real_typed_simd_binary[
+    kernel: BinaryContigKernel,
+](dtype_code: Int, lhs: Array, rhs: Array, mut result: Array, size: Int, op: Int,) raises -> Bool:
+    """dtype dispatch from runtime `dtype_code` to comptime-typed kernel.
+
+    Caller invariant: `lhs.dtype_code == rhs.dtype_code == result.dtype_code` and all three arrays are c-contiguous.
+    Returns True if a typed path was taken; False if the dtype isn't covered (caller should fall through to the f64 round-trip path).
+    """
+    if dtype_code == ArrayDType.FLOAT32.value:
+        kernel[DType.float32](contiguous_f32_ptr(lhs), contiguous_f32_ptr(rhs), contiguous_f32_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.FLOAT64.value:
+        kernel[DType.float64](contiguous_f64_ptr(lhs), contiguous_f64_ptr(rhs), contiguous_f64_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.INT64.value:
+        kernel[DType.int64](contiguous_i64_ptr(lhs), contiguous_i64_ptr(rhs), contiguous_i64_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.INT32.value:
+        kernel[DType.int32](contiguous_i32_ptr(lhs), contiguous_i32_ptr(rhs), contiguous_i32_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.UINT64.value:
+        kernel[DType.uint64](contiguous_u64_ptr(lhs), contiguous_u64_ptr(rhs), contiguous_u64_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.UINT32.value:
+        kernel[DType.uint32](contiguous_u32_ptr(lhs), contiguous_u32_ptr(rhs), contiguous_u32_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.INT16.value:
+        kernel[DType.int16](contiguous_i16_ptr(lhs), contiguous_i16_ptr(rhs), contiguous_i16_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.INT8.value:
+        kernel[DType.int8](contiguous_i8_ptr(lhs), contiguous_i8_ptr(rhs), contiguous_i8_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.UINT16.value:
+        kernel[DType.uint16](contiguous_u16_ptr(lhs), contiguous_u16_ptr(rhs), contiguous_u16_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.UINT8.value:
+        kernel[DType.uint8](contiguous_u8_ptr(lhs), contiguous_u8_ptr(rhs), contiguous_u8_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.FLOAT16.value:
+        kernel[DType.float16](contiguous_f16_ptr(lhs), contiguous_f16_ptr(rhs), contiguous_f16_ptr(result), size, op)
+        return True
+    return False
+
+
 def maybe_binary_same_shape_contiguous(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
     if (
         not same_shape(lhs.shape, rhs.shape)
@@ -1957,165 +2012,33 @@ def maybe_binary_same_shape_contiguous(lhs: Array, rhs: Array, mut result: Array
             op,
         )
         return True
-    # Float fast paths first (most common).
-    if (
-        lhs.dtype_code == ArrayDType.FLOAT32.value
-        and rhs.dtype_code == ArrayDType.FLOAT32.value
-        and result.dtype_code == ArrayDType.FLOAT32.value
-    ):
-        comptime if CompilationTarget.is_macos():
+    # Accelerate fast-paths for f32/f64 (macOS only). Try first, fall through to typed kernel.
+    comptime if CompilationTarget.is_macos():
+        if (
+            lhs.dtype_code == ArrayDType.FLOAT32.value
+            and rhs.dtype_code == ArrayDType.FLOAT32.value
+            and result.dtype_code == ArrayDType.FLOAT32.value
+        ):
             if maybe_binary_accelerate_f32(lhs, rhs, result, op):
                 return True
-        binary_same_shape_contig_typed[DType.float32](
-            contiguous_f32_ptr(lhs),
-            contiguous_f32_ptr(rhs),
-            contiguous_f32_ptr(result),
-            result.size_value,
-            op,
-        )
-        return True
-    if (
-        lhs.dtype_code == ArrayDType.FLOAT64.value
-        and rhs.dtype_code == ArrayDType.FLOAT64.value
-        and result.dtype_code == ArrayDType.FLOAT64.value
-    ):
-        comptime if CompilationTarget.is_macos():
+        elif (
+            lhs.dtype_code == ArrayDType.FLOAT64.value
+            and rhs.dtype_code == ArrayDType.FLOAT64.value
+            and result.dtype_code == ArrayDType.FLOAT64.value
+        ):
             if maybe_binary_accelerate_f64(lhs, rhs, result, op):
                 return True
-        binary_same_shape_contig_typed[DType.float64](
-            contiguous_f64_ptr(lhs),
-            contiguous_f64_ptr(rhs),
-            contiguous_f64_ptr(result),
-            result.size_value,
-            op,
-        )
-        return True
-    # Phase 5b: typed int paths (int32/int64/uint32/uint64). Closes the
-    # ~50× wrapper-bound gap on uint8/uint16/uint32/uint64 + int paths.
-    if (
-        lhs.dtype_code == ArrayDType.INT64.value
-        and rhs.dtype_code == ArrayDType.INT64.value
-        and result.dtype_code == ArrayDType.INT64.value
-    ):
-        binary_same_shape_contig_typed[DType.int64](
-            contiguous_i64_ptr(lhs),
-            contiguous_i64_ptr(rhs),
-            contiguous_i64_ptr(result),
-            result.size_value,
-            op,
-        )
-        return True
-    if (
-        lhs.dtype_code == ArrayDType.INT32.value
-        and rhs.dtype_code == ArrayDType.INT32.value
-        and result.dtype_code == ArrayDType.INT32.value
-    ):
-        binary_same_shape_contig_typed[DType.int32](
-            contiguous_i32_ptr(lhs),
-            contiguous_i32_ptr(rhs),
-            contiguous_i32_ptr(result),
-            result.size_value,
-            op,
-        )
-        return True
-    if (
-        lhs.dtype_code == ArrayDType.UINT64.value
-        and rhs.dtype_code == ArrayDType.UINT64.value
-        and result.dtype_code == ArrayDType.UINT64.value
-    ):
-        binary_same_shape_contig_typed[DType.uint64](
-            contiguous_u64_ptr(lhs),
-            contiguous_u64_ptr(rhs),
-            contiguous_u64_ptr(result),
-            result.size_value,
-            op,
-        )
-        return True
-    if (
-        lhs.dtype_code == ArrayDType.UINT32.value
-        and rhs.dtype_code == ArrayDType.UINT32.value
-        and result.dtype_code == ArrayDType.UINT32.value
-    ):
-        binary_same_shape_contig_typed[DType.uint32](
-            contiguous_u32_ptr(lhs),
-            contiguous_u32_ptr(rhs),
-            contiguous_u32_ptr(result),
-            result.size_value,
-            op,
-        )
-        return True
-    # Small-int paths: int8/int16/uint8/uint16.
-    if (
-        lhs.dtype_code == ArrayDType.INT16.value
-        and rhs.dtype_code == ArrayDType.INT16.value
-        and result.dtype_code == ArrayDType.INT16.value
-    ):
-        binary_same_shape_contig_typed[DType.int16](
-            contiguous_i16_ptr(lhs),
-            contiguous_i16_ptr(rhs),
-            contiguous_i16_ptr(result),
-            result.size_value,
-            op,
-        )
-        return True
-    if (
-        lhs.dtype_code == ArrayDType.INT8.value
-        and rhs.dtype_code == ArrayDType.INT8.value
-        and result.dtype_code == ArrayDType.INT8.value
-    ):
-        binary_same_shape_contig_typed[DType.int8](
-            contiguous_i8_ptr(lhs),
-            contiguous_i8_ptr(rhs),
-            contiguous_i8_ptr(result),
-            result.size_value,
-            op,
-        )
-        return True
-    if (
-        lhs.dtype_code == ArrayDType.UINT16.value
-        and rhs.dtype_code == ArrayDType.UINT16.value
-        and result.dtype_code == ArrayDType.UINT16.value
-    ):
-        binary_same_shape_contig_typed[DType.uint16](
-            contiguous_u16_ptr(lhs),
-            contiguous_u16_ptr(rhs),
-            contiguous_u16_ptr(result),
-            result.size_value,
-            op,
-        )
-        return True
-    if (
-        lhs.dtype_code == ArrayDType.UINT8.value
-        and rhs.dtype_code == ArrayDType.UINT8.value
-        and result.dtype_code == ArrayDType.UINT8.value
-    ):
-        binary_same_shape_contig_typed[DType.uint8](
-            contiguous_u8_ptr(lhs),
-            contiguous_u8_ptr(rhs),
-            contiguous_u8_ptr(result),
-            result.size_value,
-            op,
-        )
-        return True
-    # Phase 5c float16: typed-vec dispatch landed after the codegen workaround.
-    # `apply_binary_typed_vec` now gates `atan2`/`hypot`/`copysign` via
-    # `comptime if dtype is not DType.float16` so the f16 path skips those
-    # extern bindings (which Mojo can't legalize for half-precision).
-    # ARCTAN2/HYPOT/COPYSIGN with f16 inputs upstream-promote to f32/f64
-    # via `dtype_result_for_binary` so they never enter this kernel.
-    if (
-        lhs.dtype_code == ArrayDType.FLOAT16.value
-        and rhs.dtype_code == ArrayDType.FLOAT16.value
-        and result.dtype_code == ArrayDType.FLOAT16.value
-    ):
-        binary_same_shape_contig_typed[DType.float16](
-            contiguous_f16_ptr(lhs),
-            contiguous_f16_ptr(rhs),
-            contiguous_f16_ptr(result),
-            result.size_value,
-            op,
-        )
-        return True
+    # 11-way real-dtype dispatch via comptime-fn-parametric helper. Caller invariant:
+    # all three arrays share dtype_code (we only enter this path when the dispatcher
+    # has already promoted to a single type). f16 KGEN gates atan2/hypot/copysign
+    # inside `apply_binary_typed_vec` itself; ARCTAN2/HYPOT/COPYSIGN with f16 inputs
+    # are upstream-promoted to f32/f64 via `dtype_result_for_binary` so they never
+    # reach this kernel.
+    if lhs.dtype_code == rhs.dtype_code and lhs.dtype_code == result.dtype_code:
+        if dispatch_real_typed_simd_binary[binary_same_shape_contig_typed](
+            result.dtype_code, lhs, rhs, result, result.size_value, op
+        ):
+            return True
     # Fallback: f64 round-trip for any dtype combo we don't have a typed path for.
     for i in range(result.size_value):
         set_contiguous_from_f64(
