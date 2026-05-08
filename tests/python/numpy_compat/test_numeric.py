@@ -133,6 +133,7 @@ def test_shape_manipulation_matches_numpy() -> None:
 
   assert arr.reshape(2, 3).tolist() == oracle.reshape(2, 3).tolist()
   assert arr.reshape(2, 3).T.tolist() == oracle.reshape(2, 3).T.tolist()
+  assert np.swapaxes(arr.reshape(1, 2, 3), 0, -1).tolist() == numpy.swapaxes(oracle.reshape(1, 2, 3), 0, -1).tolist()
   assert xp.matrix_transpose(arr.reshape(2, 3)).tolist() == oracle.reshape(2, 3).T.tolist()
   assert np.broadcast_to(np.asarray([1, 2, 3]), (2, 3)).tolist() == [[1, 2, 3], [1, 2, 3]]
 

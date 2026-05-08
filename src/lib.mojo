@@ -61,6 +61,7 @@ from create import (
     squeeze_all_ops,
     squeeze_axes_ops,
     solve_ops,
+    swapaxes_ops,
     svd_ops,
     trace_ops,
     transpose_full_reverse_ops,
@@ -124,6 +125,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[squeeze_axes_ops]("squeeze_axes")
         module.def_function[transpose_ops]("transpose")
         module.def_function[transpose_full_reverse_ops]("transpose_full_reverse")
+        module.def_function[swapaxes_ops]("swapaxes")
         module.def_function[slice_ops]("slice")
         module.def_function[broadcast_to_ops]("broadcast_to")
         module.def_function[expand_dims_ops]("expand_dims")

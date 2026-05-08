@@ -352,6 +352,29 @@ def transpose_ops(array_obj: PythonObject, axes_obj: PythonObject) raises -> Pyt
     return PythonObject(alloc=view^)
 
 
+def swapaxes_ops(array_obj: PythonObject, axis1_obj: PythonObject, axis2_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var ndim = len(src[].shape)
+    var axis1 = Int(py=axis1_obj)
+    var axis2 = Int(py=axis2_obj)
+    if axis1 < 0:
+        axis1 += ndim
+    if axis2 < 0:
+        axis2 += ndim
+    if axis1 < 0 or axis1 >= ndim or axis2 < 0 or axis2 >= ndim:
+        raise Error("swapaxes: axis out of range")
+    var shape = clone_int_list(src[].shape)
+    var strides = clone_int_list(src[].strides)
+    var tmp_shape = shape[axis1]
+    shape[axis1] = shape[axis2]
+    shape[axis2] = tmp_shape
+    var tmp_stride = strides[axis1]
+    strides[axis1] = strides[axis2]
+    strides[axis2] = tmp_stride
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    return PythonObject(alloc=result^)
+
+
 def flip_ops(
     array_obj: PythonObject,
     axes_obj: PythonObject,

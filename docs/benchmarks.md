@@ -370,3 +370,21 @@ Focused local result:
 The direct microbench moved the exact `helper[:, None, :]` view from about 3.6
 us to about 1.1 us. The row is still not NumPy-fast, but it no longer pays the
 full generic slice tax for a fixed full-slice newaxis.
+
+### 2026-05-08 native swapaxes view
+
+`array/views/swapaxes_f32` was still implemented as Python permutation
+construction followed by generic `transpose`. For a pure axis swap, the native
+side can avoid layout selection and Python tuple normalization entirely: clone
+the shape and stride lists, swap two slots, then return a view with the original
+storage.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `array/views/swapaxes_f32` | 5.534 | 3.072 | 2.550x | 1.379x |
+
+The direct microbench moved `mnp.swapaxes(existing_rank3, 0, 2)` from about 3.3
+us to about 0.87 us. The residual benchmark time is mostly the Python facade and
+benchmark harness overhead, not data movement.

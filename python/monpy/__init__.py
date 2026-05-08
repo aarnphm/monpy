@@ -982,13 +982,8 @@ def moveaxis(x:object, source:int|Sequence[int], destination:int|Sequence[int])-
 
 def swapaxes(x:object, axis1:int, axis2:int)->ndarray:
   arr=asarray(x)
-  n=arr.ndim
-  a=axis1+n if axis1<0 else axis1
-  b=axis2+n if axis2<0 else axis2
-  if a<0 or a>=n or b<0 or b>=n:raise ValueError("swapaxes: axis out of range")
-  perm=list(range(n))
-  perm[a], perm[b]=perm[b], perm[a]
-  return arr.transpose(tuple(perm))
+  try:return ndarray._wrap(_native.swapaxes(arr._native, axis1, axis2), base=arr)
+  except Exception as exc:raise ValueError(str(exc)) from exc
 
 def ravel(x:object, order:str="C")->ndarray:
   if order not in("C", "K", "A"):raise NotImplementedError("ravel order != C/K/A")
