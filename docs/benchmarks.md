@@ -388,3 +388,27 @@ Focused local result:
 The direct microbench moved `mnp.swapaxes(existing_rank3, 0, 2)` from about 3.3
 us to about 0.87 us. The residual benchmark time is mostly the Python facade and
 benchmark harness overhead, not data movement.
+
+### 2026-05-08 direct NumPy ndarray ingest
+
+The NumPy-input rows were still entering through the generic
+`__array_interface__` parser even after the detector fast path. That generic
+path is required for non-NumPy producers, but real NumPy arrays already expose
+the same fields directly as attributes. `runtime.ops_numpy._from_numpy_unchecked`
+now reads `dtype.str`, `shape`, `strides`, `ctypes.data`, and `flags.writeable`
+directly, then calls native `from_external` / `copy_from_external` with the same
+copy and readonly policy as before.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `array/interop/asarray_zero_copy_f32` | 5.095 | 4.923 | 2.628x | 2.532x |
+| `array/interop/asarray_zero_copy_f64` | 5.155 | 4.826 | 2.654x | 2.486x |
+| `array/interop/asarray_zero_copy_bool` | 5.134 | 4.834 | 2.630x | 2.528x |
+| `array/interop/asarray_zero_copy_i64` | 5.138 | 4.819 | 2.654x | 2.494x |
+| `array/interop/from_dlpack_f32` | 4.900 | 4.596 | 2.262x | 2.173x |
+
+This is a small per-call win, but it lands on every NumPy ndarray import path.
+The remaining cost is mostly Python attribute access plus the native array-view
+constructor.

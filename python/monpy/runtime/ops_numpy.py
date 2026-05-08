@@ -71,7 +71,24 @@ def to_numpy(arr:object, dtype:object=None, copy:bool|None=None)->NDArray[typing
 
 def _from_numpy_unchecked(arr:object, dtype:object=None, copy:bool|None=None, device:object=None)->_mp.ndarray:
   if device is not None and device!="cpu":raise NotImplementedError("monpy v1 only supports cpu arrays")
-  return _mp._ai_asarray(arr, dtype=dtype, copy=copy)
+  source_dtype=_mp._dtype_from_typestr(arr.dtype.str)
+  target=None if dtype is None else resolve_dtype(dtype)
+  shape=tuple(int(d) for d in arr.shape)
+  item_size=source_dtype.itemsize
+  strides=tuple(int(s) for s in arr.strides)
+  for stride in strides:
+    if stride%item_size!=0:raise NotImplementedError("numpy strides must align to dtype itemsize")
+  elem_strides=tuple(stride//item_size for stride in strides)
+  data_address=int(arr.ctypes.data)
+  byte_len=int(arr.size)*item_size
+  readonly=not bool(arr.flags.writeable)
+  if target is not None and target!=source_dtype:
+    if copy is False:raise ValueError(_mp._CFE)
+    return _mp.ndarray(_mp._native.copy_from_external(data_address, shape, elem_strides, source_dtype.code, byte_len)).astype(target)
+  if copy is True or readonly:
+    if readonly and copy is False:raise ValueError("readonly array requires copy=True")
+    return _mp.ndarray(_mp._native.copy_from_external(data_address, shape, elem_strides, source_dtype.code, byte_len))
+  return _mp.ndarray(_mp._native.from_external(data_address, shape, elem_strides, source_dtype.code, byte_len), owner=arr)
 
 def from_numpy(arr:object, dtype:object=None, copy:bool|None=None, device:object=None)->_mp.ndarray:
   if not is_array_input(arr):raise TypeError("from_numpy() expects a numpy.ndarray")
