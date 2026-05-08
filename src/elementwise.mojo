@@ -1260,85 +1260,11 @@ def maybe_unary_preserve_contiguous(src: Array, mut result: Array, op: Int) rais
             op,
         )
         return True
-    if src.dtype_code == ArrayDType.FLOAT32.value:
-        unary_preserve_contig_typed[DType.float32](
-            contiguous_f32_ptr(src),
-            contiguous_f32_ptr(result),
-            src.size_value,
-            op,
-        )
-        return True
-    if src.dtype_code == ArrayDType.FLOAT64.value:
-        unary_preserve_contig_typed[DType.float64](
-            contiguous_f64_ptr(src),
-            contiguous_f64_ptr(result),
-            src.size_value,
-            op,
-        )
-        return True
-    if src.dtype_code == ArrayDType.INT64.value:
-        unary_preserve_contig_typed[DType.int64](
-            contiguous_i64_ptr(src),
-            contiguous_i64_ptr(result),
-            src.size_value,
-            op,
-        )
-        return True
-    if src.dtype_code == ArrayDType.INT32.value:
-        unary_preserve_contig_typed[DType.int32](
-            contiguous_i32_ptr(src),
-            contiguous_i32_ptr(result),
-            src.size_value,
-            op,
-        )
-        return True
-    if src.dtype_code == ArrayDType.UINT64.value:
-        unary_preserve_contig_typed[DType.uint64](
-            contiguous_u64_ptr(src),
-            contiguous_u64_ptr(result),
-            src.size_value,
-            op,
-        )
-        return True
-    if src.dtype_code == ArrayDType.UINT32.value:
-        unary_preserve_contig_typed[DType.uint32](
-            contiguous_u32_ptr(src),
-            contiguous_u32_ptr(result),
-            src.size_value,
-            op,
-        )
-        return True
-    if src.dtype_code == ArrayDType.INT16.value:
-        unary_preserve_contig_typed[DType.int16](
-            contiguous_i16_ptr(src),
-            contiguous_i16_ptr(result),
-            src.size_value,
-            op,
-        )
-        return True
-    if src.dtype_code == ArrayDType.INT8.value:
-        unary_preserve_contig_typed[DType.int8](
-            contiguous_i8_ptr(src),
-            contiguous_i8_ptr(result),
-            src.size_value,
-            op,
-        )
-        return True
-    if src.dtype_code == ArrayDType.UINT16.value:
-        unary_preserve_contig_typed[DType.uint16](
-            contiguous_u16_ptr(src),
-            contiguous_u16_ptr(result),
-            src.size_value,
-            op,
-        )
-        return True
-    if src.dtype_code == ArrayDType.UINT8.value:
-        unary_preserve_contig_typed[DType.uint8](
-            contiguous_u8_ptr(src),
-            contiguous_u8_ptr(result),
-            src.size_value,
-            op,
-        )
+    # 11-way real-dtype dispatch via unary helper. f16 not in `unary_preserve_contig_typed`
+    # support set yet (only the 10 real-vec dtypes), so explicit fallback below.
+    if dispatch_real_typed_simd_unary[unary_preserve_contig_typed](
+        src.dtype_code, src, result, src.size_value, op
+    ):
         return True
     return False
 
@@ -1968,6 +1894,70 @@ def dispatch_real_typed_simd_binary[
         return True
     if dtype_code == ArrayDType.FLOAT16.value:
         kernel[DType.float16](contiguous_f16_ptr(lhs), contiguous_f16_ptr(rhs), contiguous_f16_ptr(result), size, op)
+        return True
+    return False
+
+
+comptime UnaryContigKernel = def[dt: DType](
+    UnsafePointer[Scalar[dt], MutExternalOrigin],
+    UnsafePointer[Scalar[dt], MutExternalOrigin],
+    Int,
+    Int,
+) thin raises -> None
+"""Shape of any same-dtype contiguous unary kernel: src ptr, out ptr, size, op code.
+
+Used by `maybe_unary_preserve_contiguous` (14-way real dispatch, integer-friendly)
+and `maybe_unary_contiguous` (float-only sub-variant, integer dtypes raise).
+"""
+
+
+def dispatch_real_typed_simd_unary[
+    kernel: UnaryContigKernel,
+](
+    dtype_code: Int,
+    src: Array,
+    mut result: Array,
+    size: Int,
+    op: Int,
+) raises -> Bool:
+    """11-way real-dtype dispatch for unary kernels (src ptr → out ptr, both same dtype).
+
+    Caller invariant: `src.dtype_code == result.dtype_code` and both arrays are
+    c-contiguous. Returns True if a typed path was taken; False if the dtype isn't
+    covered (caller falls through to f64 round-trip or complex specialization).
+    """
+    if dtype_code == ArrayDType.FLOAT32.value:
+        kernel[DType.float32](contiguous_f32_ptr(src), contiguous_f32_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.FLOAT64.value:
+        kernel[DType.float64](contiguous_f64_ptr(src), contiguous_f64_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.INT64.value:
+        kernel[DType.int64](contiguous_i64_ptr(src), contiguous_i64_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.INT32.value:
+        kernel[DType.int32](contiguous_i32_ptr(src), contiguous_i32_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.UINT64.value:
+        kernel[DType.uint64](contiguous_u64_ptr(src), contiguous_u64_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.UINT32.value:
+        kernel[DType.uint32](contiguous_u32_ptr(src), contiguous_u32_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.INT16.value:
+        kernel[DType.int16](contiguous_i16_ptr(src), contiguous_i16_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.INT8.value:
+        kernel[DType.int8](contiguous_i8_ptr(src), contiguous_i8_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.UINT16.value:
+        kernel[DType.uint16](contiguous_u16_ptr(src), contiguous_u16_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.UINT8.value:
+        kernel[DType.uint8](contiguous_u8_ptr(src), contiguous_u8_ptr(result), size, op)
+        return True
+    if dtype_code == ArrayDType.FLOAT16.value:
+        kernel[DType.float16](contiguous_f16_ptr(src), contiguous_f16_ptr(result), size, op)
         return True
     return False
 
