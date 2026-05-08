@@ -1932,3 +1932,269 @@ def lapack_dgeev(
     )
     work.free()
     return Int(info)
+
+
+# ============================================================================
+# Parametric LAPACK dispatchers — pick s/d at compile time from `dt`.
+# These are thin shims so callers in `linalg_kernels.mojo` can write
+# `lapack_gesv[dt](...)` instead of `comptime if dt == DType.float32:
+# lapack_sgesv(...) else: lapack_dgesv(...)` with manual pointer rebinds.
+# ============================================================================
+
+
+@always_inline
+def lapack_gesv[
+    dt: DType
+](
+    n_value: Int,
+    rhs_columns_value: Int,
+    a_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    pivot_ptr: UnsafePointer[Int32, MutExternalOrigin],
+    b_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+) raises -> Int:
+    comptime if dt == DType.float32:
+        return lapack_sgesv(
+            n_value,
+            rhs_columns_value,
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](a_ptr),
+            pivot_ptr,
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](b_ptr),
+        )
+    else:
+        return lapack_dgesv(
+            n_value,
+            rhs_columns_value,
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](a_ptr),
+            pivot_ptr,
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](b_ptr),
+        )
+
+
+@always_inline
+def lapack_getrf[
+    dt: DType
+](
+    n_value: Int,
+    a_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    pivot_ptr: UnsafePointer[Int32, MutExternalOrigin],
+) raises -> Int:
+    comptime if dt == DType.float32:
+        return lapack_sgetrf(
+            n_value,
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](a_ptr),
+            pivot_ptr,
+        )
+    else:
+        return lapack_dgetrf(
+            n_value,
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](a_ptr),
+            pivot_ptr,
+        )
+
+
+@always_inline
+def lapack_geqrf[
+    dt: DType
+](
+    m_value: Int,
+    n_value: Int,
+    a_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    tau_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+) raises -> Int:
+    comptime if dt == DType.float32:
+        return lapack_sgeqrf(
+            m_value,
+            n_value,
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](a_ptr),
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](tau_ptr),
+        )
+    else:
+        return lapack_dgeqrf(
+            m_value,
+            n_value,
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](a_ptr),
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](tau_ptr),
+        )
+
+
+@always_inline
+def lapack_orgqr[
+    dt: DType
+](
+    m_value: Int,
+    n_value: Int,
+    k_value: Int,
+    a_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    tau_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+) raises -> Int:
+    comptime if dt == DType.float32:
+        return lapack_sorgqr(
+            m_value,
+            n_value,
+            k_value,
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](a_ptr),
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](tau_ptr),
+        )
+    else:
+        return lapack_dorgqr(
+            m_value,
+            n_value,
+            k_value,
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](a_ptr),
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](tau_ptr),
+        )
+
+
+@always_inline
+def lapack_potrf[
+    dt: DType
+](
+    n_value: Int,
+    a_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    upper: Bool,
+) raises -> Int:
+    comptime if dt == DType.float32:
+        return lapack_spotrf(
+            n_value,
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](a_ptr),
+            upper,
+        )
+    else:
+        return lapack_dpotrf(
+            n_value,
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](a_ptr),
+            upper,
+        )
+
+
+@always_inline
+def lapack_syev[
+    dt: DType
+](
+    n_value: Int,
+    a_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    w_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    compute_eigenvectors: Bool,
+    upper: Bool,
+) raises -> Int:
+    comptime if dt == DType.float32:
+        return lapack_ssyev(
+            n_value,
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](a_ptr),
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](w_ptr),
+            compute_eigenvectors,
+            upper,
+        )
+    else:
+        return lapack_dsyev(
+            n_value,
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](a_ptr),
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](w_ptr),
+            compute_eigenvectors,
+            upper,
+        )
+
+
+@always_inline
+def lapack_geev[
+    dt: DType
+](
+    n_value: Int,
+    a_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    wr_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    wi_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    vr_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    compute_eigenvectors: Bool,
+) raises -> Int:
+    comptime if dt == DType.float32:
+        return lapack_sgeev(
+            n_value,
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](a_ptr),
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](wr_ptr),
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](wi_ptr),
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](vr_ptr),
+            compute_eigenvectors,
+        )
+    else:
+        return lapack_dgeev(
+            n_value,
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](a_ptr),
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](wr_ptr),
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](wi_ptr),
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](vr_ptr),
+            compute_eigenvectors,
+        )
+
+
+@always_inline
+def lapack_gesdd[
+    dt: DType
+](
+    m_value: Int,
+    n_value: Int,
+    a_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    s_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    u_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    vt_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    full_matrices: Bool,
+    compute_uv: Bool,
+) raises -> Int:
+    comptime if dt == DType.float32:
+        return lapack_sgesdd(
+            m_value,
+            n_value,
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](a_ptr),
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](s_ptr),
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](u_ptr),
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](vt_ptr),
+            full_matrices,
+            compute_uv,
+        )
+    else:
+        return lapack_dgesdd(
+            m_value,
+            n_value,
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](a_ptr),
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](s_ptr),
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](u_ptr),
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](vt_ptr),
+            full_matrices,
+            compute_uv,
+        )
+
+
+@always_inline
+def lapack_gelsd[
+    dt: DType
+](
+    m_value: Int,
+    n_value: Int,
+    nrhs_value: Int,
+    a_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    b_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    s_ptr: UnsafePointer[Scalar[dt], MutExternalOrigin],
+    rcond: Scalar[dt],
+    rank_out_ptr: UnsafePointer[Int, MutExternalOrigin],
+) raises -> Int:
+    comptime if dt == DType.float32:
+        return lapack_sgelsd(
+            m_value,
+            n_value,
+            nrhs_value,
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](a_ptr),
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](b_ptr),
+            rebind[UnsafePointer[Float32, MutExternalOrigin]](s_ptr),
+            rebind[Float32](rcond),
+            rank_out_ptr,
+        )
+    else:
+        return lapack_dgelsd(
+            m_value,
+            n_value,
+            nrhs_value,
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](a_ptr),
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](b_ptr),
+            rebind[UnsafePointer[Float64, MutExternalOrigin]](s_ptr),
+            rebind[Float64](rcond),
+            rank_out_ptr,
+        )
