@@ -1,4 +1,4 @@
-"""Linalg `_ops` Python-bridge entry points.
+"""Linalg PythonObject bridge ops.
 
 Hosts matmul + solve/inv/det (LU-backed) + LAPACK-backed
 qr/cholesky/eigh/eig/svd/lstsq + pinv (lstsq-driven). All twelve `_ops`
@@ -36,7 +36,7 @@ from elementwise import (
     maybe_matmul_contiguous,
 )
 
-from ._complex_helpers import _complex_imag, _complex_real, _complex_store
+from create._complex_helpers import _complex_imag, _complex_real, _complex_store
 
 
 def matmul_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObject:

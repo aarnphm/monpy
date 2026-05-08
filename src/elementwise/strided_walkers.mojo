@@ -15,7 +15,7 @@ from std.sys import simd_width_of
 from array import Array
 from domain import ArrayDType, BinaryOp
 
-from .typed_kernels import apply_binary_typed_vec
+from .kernels.typed import apply_binary_typed_vec
 
 
 def strided_binary_walk_typed[

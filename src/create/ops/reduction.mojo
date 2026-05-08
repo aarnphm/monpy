@@ -1,4 +1,4 @@
-"""Reduction `_ops` Python-bridge entry points.
+"""Reduction PythonObject bridge ops.
 
 Hosts whole-array `reduce_ops` and axis-aware `reduce_axis_ops`. Both go
 through three speed tiers: typed contiguous SIMD path

@@ -1,4 +1,4 @@
-"""Array-creation `_ops` Python-bridge entry points.
+"""Array-creation PythonObject bridge ops.
 
 Hosts the empty/full/from_*/range-style constructors that allocate a fresh
 `Array` and fill it. None of these go through kernel dispatch — they're pure

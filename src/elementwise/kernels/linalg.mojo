@@ -1,4 +1,4 @@
-"""LAPACK-backed linalg kernels + pure-Mojo LU fallback.
+"""LAPACK-backed linalg kernels and pure-Mojo LU fallback.
 
 This module owns:
   - column-major transpose / write helpers (rectangular and square)

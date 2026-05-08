@@ -1,4 +1,4 @@
-"""Shape-manipulation `_ops` Python-bridge entry points.
+"""Shape-manipulation PythonObject bridge ops.
 
 Hosts the layout/view manipulators (reshape/ravel/flatten/squeeze/transpose/
 swapaxes/flip/slice/broadcast_to/expand_dims/materialize), the rank-2

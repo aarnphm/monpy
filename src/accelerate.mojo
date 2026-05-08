@@ -2026,7 +2026,7 @@ def lapack_dgeev(
 
 # ============================================================================
 # Parametric LAPACK dispatchers — pick s/d at compile time from `dt`.
-# These are thin shims so callers in `linalg_kernels.mojo` can write
+# These are thin shims so callers in `elementwise/kernels/linalg.mojo` can write
 # `lapack_gesv[dt](...)` instead of `comptime if dt == DType.float32:
 # lapack_sgesv(...) else: lapack_dgesv(...)` with manual pointer rebinds.
 # ============================================================================

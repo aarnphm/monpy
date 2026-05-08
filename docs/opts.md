@@ -872,9 +872,10 @@ kernel packages in the compiler search path. Importing `from nn import ...` did
 not resolve to monpy's local directory. A second attempt to import `nn.kernels`
 hit the same owner. The working shape is:
 
-- keep the Mojo implementation in `src/elementwise/nn_ops.mojo`
-- re-export the bridge functions from `src/elementwise/__init__.mojo`
-- import the bridge functions in `src/lib.mojo` with `from elementwise import ...`
+- keep the Mojo loop bodies in `src/elementwise/kernels/nn.mojo`
+- keep the PythonObject bridge functions in `src/create/ops/nn.mojo`
+- re-export the bridge functions from `src/create/__init__.mojo`
+- import the bridge functions in `src/lib.mojo` with the rest of `from create import ...`
 - keep `python/monpy/nn` as the public Python import scope
 
 This keeps the public Python surface as `monpy.nn` while avoiding collision with
@@ -896,3 +897,27 @@ three focused tests passed, and both import-scope identity checks printed
 `True`. A one-round attention benchmark smoke also wrote
 `results/local-sweep-20260508-nn-compile-smoke/manifest.json`; treat that as an
 import/runner smoke only, not a stable performance sample.
+
+Follow-up naming consolidation:
+
+- `src/create/ops/elementwise.mojo` now owns the elementwise PythonObject bridge
+  functions that used to sit in `src/create/elementwise_ops.mojo`
+- `src/create/ops/nn.mojo` owns the public `monpy.nn` bridge functions
+- `src/elementwise/kernels/nn.mojo` owns the row-wise NN loop bodies
+- `src/elementwise/kernels/matmul.mojo` owns the matmul loop/BLAS dispatchers
+
+Focused verification after the role-first package move:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+find src/create src/elementwise -name '*.mojo' -print0 | xargs -0 /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_numeric.py::test_fused_layer_norm_matches_numpy_formula tests/python/numpy_compat/test_numeric.py::test_fused_softmax_matches_numpy_formula tests/python/numpy_compat/test_numeric.py::test_fused_scaled_masked_softmax_matches_numpy_formula -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types attention --loops 1 --repeats 1 --rounds 1 --format json --sort ratio --output-dir results/local-sweep-20260508-role-first-smoke --no-progress --no-stdout
+```
+
+The build completed in 38.95 s, formatter rewrote three files, and the three
+focused tests passed. The one-round role-first smoke wrote
+`results/local-sweep-20260508-role-first-smoke/manifest.json`; single-sample
+medians: softmax 15.584 us vs NumPy 20.375 us (0.765x), attention 34.125 us vs
+NumPy 36.250 us (0.941x), GPT 111.917 us vs NumPy 140.750 us (0.795x). Treat
+these as import/runner signal only.

@@ -95,8 +95,10 @@ from cute.layout import Layout, make_layout_row_major
 from cute.functional import select as cute_select
 from cute.int_tuple import IntTuple
 
+# Python-callable entrypoints.
+# Includes Storage -> Shape -> Backend FFI imports from submodules.
 from ._complex_helpers import _complex_imag, _complex_real, _complex_store
-from .creation_ops import (
+from .ops.creation import (
     arange_ops,
     copy_from_external_ops,
     copyto_ops,
@@ -112,7 +114,7 @@ from .creation_ops import (
     logspace_ops,
     tri_ops,
 )
-from .elementwise_ops import (
+from .ops.elementwise import (
     apply_unary_complex_f64,
     array_add_method_ops,
     array_div_method_ops,
@@ -132,8 +134,8 @@ from .elementwise_ops import (
     unary_preserve_ops,
     where_ops,
 )
-from .reduction_ops import reduce_axis_ops, reduce_ops
-from .shape_ops import (
+from .ops.reduction import reduce_axis_ops, reduce_ops
+from .ops.shape import (
     DiagonalMetadata,
     broadcast_to_ops,
     concatenate_ops,
@@ -161,7 +163,7 @@ from .shape_ops import (
     tril_ops,
     triu_ops,
 )
-from .dtype_ops import (
+from .ops.dtype import (
     astype_ops,
     dtype_alignment_py_ops,
     dtype_can_cast_py_ops,
@@ -172,7 +174,7 @@ from .dtype_ops import (
     result_dtype_for_reduction_py_ops,
     result_dtype_for_unary_py_ops,
 )
-from .linalg_ops import (
+from .ops.linalg import (
     cholesky_ops,
     det_ops,
     eig_ops,
@@ -185,7 +187,8 @@ from .linalg_ops import (
     solve_ops,
     svd_ops,
 )
-
-
-# Python-callable entrypoints.
-# Includes Storage -> Shape -> Backend FFI imports from submodules.
+from .ops.nn import (
+    layer_norm_last_axis_ops,
+    scaled_masked_softmax_last_axis_ops,
+    softmax_last_axis_ops,
+)

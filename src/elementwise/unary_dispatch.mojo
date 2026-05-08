@@ -1,7 +1,7 @@
 """Unary maybe_* dispatchers: contiguous, preserve, rank-2 strided.
 
 These are the entry points called by the upstream `apply_unary_*` ops in
-`src/ops/elementwise_ops.mojo`. Each `maybe_*` returns True if it took a
+`src/create/ops/elementwise.mojo`. Each `maybe_*` returns True if it took a
 fast path, False if the caller should fall back to the f64 round-trip.
 """
 
@@ -15,10 +15,10 @@ from array import (
 from domain import ArrayDType, BackendKind, UnaryOp
 
 from .accelerate_dispatch import maybe_unary_accelerate
-from .complex_kernels import complex_unary_preserve_contig_typed
+from .kernels.complex import complex_unary_preserve_contig_typed
 from .dispatch_helpers import dispatch_real_typed_simd_unary
 from .predicates import is_contiguous_float_array
-from .typed_kernels import (
+from .kernels.typed import (
     unary_contig_typed,
     unary_preserve_contig_typed,
     unary_rank2_strided_typed,

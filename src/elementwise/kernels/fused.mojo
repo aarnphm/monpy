@@ -23,7 +23,9 @@ from array import (
 )
 from domain import ArrayDType, BackendKind
 
-from .predicates import is_contiguous_float_array
+from elementwise.predicates import is_contiguous_float_array
+
+
 def maybe_sin_add_mul_contiguous(
     lhs: Array,
     rhs: Array,

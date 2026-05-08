@@ -31,9 +31,7 @@ from array import (
 from domain import ArrayDType, BackendKind, BinaryOp, UnaryOp
 
 
-def maybe_unary_accelerate[
-    dt: DType
-](src: Array, mut result: Array, op: Int) raises -> Bool:
+def maybe_unary_accelerate[dt: DType](src: Array, mut result: Array, op: Int) raises -> Bool:
     var src_ptr = contiguous_ptr[dt](src)
     var out_ptr = contiguous_ptr[dt](result)
     if op == UnaryOp.SIN.value:
@@ -58,37 +56,25 @@ def maybe_unary_accelerate[
     return True
 
 
-def maybe_binary_accelerate[
-    dt: DType
-](lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
+def maybe_binary_accelerate[dt: DType](lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
     var lhs_ptr = contiguous_ptr[dt](lhs)
     var rhs_ptr = contiguous_ptr[dt](rhs)
     var out_ptr = contiguous_ptr[dt](result)
     if op == BinaryOp.ADD.value:
-        call_vdsp_binary[dt, "vDSP_vadd", "vDSP_vaddD"](
-            lhs_ptr, rhs_ptr, out_ptr, result.size_value
-        )
+        call_vdsp_binary[dt, "vDSP_vadd", "vDSP_vaddD"](lhs_ptr, rhs_ptr, out_ptr, result.size_value)
     elif op == BinaryOp.SUB.value:
-        call_vdsp_binary[dt, "vDSP_vsub", "vDSP_vsubD"](
-            rhs_ptr, lhs_ptr, out_ptr, result.size_value
-        )
+        call_vdsp_binary[dt, "vDSP_vsub", "vDSP_vsubD"](rhs_ptr, lhs_ptr, out_ptr, result.size_value)
     elif op == BinaryOp.MUL.value:
-        call_vdsp_binary[dt, "vDSP_vmul", "vDSP_vmulD"](
-            lhs_ptr, rhs_ptr, out_ptr, result.size_value
-        )
+        call_vdsp_binary[dt, "vDSP_vmul", "vDSP_vmulD"](lhs_ptr, rhs_ptr, out_ptr, result.size_value)
     elif op == BinaryOp.DIV.value:
-        call_vdsp_binary[dt, "vDSP_vdiv", "vDSP_vdivD"](
-            rhs_ptr, lhs_ptr, out_ptr, result.size_value
-        )
+        call_vdsp_binary[dt, "vDSP_vdiv", "vDSP_vdivD"](rhs_ptr, lhs_ptr, out_ptr, result.size_value)
     else:
         return False
     result.backend_code = BackendKind.ACCELERATE.value
     return True
 
 
-def _try_rank1_strided[
-    dt: DType
-](lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
+def _try_rank1_strided[dt: DType](lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
     # Returns True iff lhs/rhs/result all have dtype `dt` and the op was
     # dispatched to the vDSP fast path.
     var matching_code: Int
@@ -97,9 +83,7 @@ def _try_rank1_strided[
     else:
         matching_code = ArrayDType.FLOAT64.value
     if not (
-        lhs.dtype_code == matching_code
-        and rhs.dtype_code == matching_code
-        and result.dtype_code == matching_code
+        lhs.dtype_code == matching_code and rhs.dtype_code == matching_code and result.dtype_code == matching_code
     ):
         return False
     var lhs_ptr = contiguous_ptr[dt](lhs)
@@ -107,25 +91,45 @@ def _try_rank1_strided[
     var out_ptr = contiguous_ptr[dt](result)
     if op == BinaryOp.ADD.value:
         call_vdsp_binary_strided[dt, "vDSP_vadd", "vDSP_vaddD"](
-            lhs_ptr, lhs.strides[0], rhs_ptr, rhs.strides[0],
-            out_ptr, 1, result.size_value,
+            lhs_ptr,
+            lhs.strides[0],
+            rhs_ptr,
+            rhs.strides[0],
+            out_ptr,
+            1,
+            result.size_value,
         )
     elif op == BinaryOp.SUB.value:
         # vDSP_vsub computes B - A; numpy is A - B, so swap operands.
         call_vdsp_binary_strided[dt, "vDSP_vsub", "vDSP_vsubD"](
-            rhs_ptr, rhs.strides[0], lhs_ptr, lhs.strides[0],
-            out_ptr, 1, result.size_value,
+            rhs_ptr,
+            rhs.strides[0],
+            lhs_ptr,
+            lhs.strides[0],
+            out_ptr,
+            1,
+            result.size_value,
         )
     elif op == BinaryOp.MUL.value:
         call_vdsp_binary_strided[dt, "vDSP_vmul", "vDSP_vmulD"](
-            lhs_ptr, lhs.strides[0], rhs_ptr, rhs.strides[0],
-            out_ptr, 1, result.size_value,
+            lhs_ptr,
+            lhs.strides[0],
+            rhs_ptr,
+            rhs.strides[0],
+            out_ptr,
+            1,
+            result.size_value,
         )
     elif op == BinaryOp.DIV.value:
         # vDSP_vdiv computes B / A; numpy is A / B, so swap operands.
         call_vdsp_binary_strided[dt, "vDSP_vdiv", "vDSP_vdivD"](
-            rhs_ptr, rhs.strides[0], lhs_ptr, lhs.strides[0],
-            out_ptr, 1, result.size_value,
+            rhs_ptr,
+            rhs.strides[0],
+            lhs_ptr,
+            lhs.strides[0],
+            out_ptr,
+            1,
+            result.size_value,
         )
     else:
         return False
@@ -150,9 +154,7 @@ def maybe_binary_rank1_strided_accelerate(lhs: Array, rhs: Array, mut result: Ar
     return False
 
 
-def _try_complex_rank1_strided[
-    real_dt: DType
-](lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
+def _try_complex_rank1_strided[real_dt: DType](lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
     # Treats interleaved (re, im) pairs as a stride-2 real array, then runs
     # the corresponding real vDSP op twice — once on the re channel, once
     # on the im channel — sharing a stride that's 2× the logical stride.
@@ -161,11 +163,7 @@ def _try_complex_rank1_strided[
         complex_code = ArrayDType.COMPLEX64.value
     else:
         complex_code = ArrayDType.COMPLEX128.value
-    if not (
-        lhs.dtype_code == complex_code
-        and rhs.dtype_code == complex_code
-        and result.dtype_code == complex_code
-    ):
+    if not (lhs.dtype_code == complex_code and rhs.dtype_code == complex_code and result.dtype_code == complex_code):
         return False
     var lhs_ptr = lhs.data.bitcast[Scalar[real_dt]]() + lhs.offset_elems * 2
     var rhs_ptr = rhs.data.bitcast[Scalar[real_dt]]() + rhs.offset_elems * 2

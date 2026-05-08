@@ -1,4 +1,4 @@
-"""Matmul kernels: BLAS GEMM/GEMV fast paths + small-N typed-SIMD path.
+"""Matmul kernels: BLAS GEMM/GEMV fast paths plus small-N typed-SIMD path.
 
 `maybe_matmul_contiguous` is the entry point — picks the best path:
   1. `maybe_matmul_vector_accelerate` for rank-2 × rank-1 (GEMV)
@@ -31,7 +31,7 @@ from array import (
 )
 from domain import ArrayDType, BackendKind
 
-from .predicates import is_contiguous_float_array, rank2_blas_layout
+from elementwise.predicates import is_contiguous_float_array, rank2_blas_layout
 
 
 def maybe_matmul_contiguous(

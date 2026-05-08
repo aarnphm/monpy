@@ -1,7 +1,7 @@
 """Binary maybe_* dispatchers: contig, scalar, row-broadcast, strided, top-level.
 
 These are the entry points called by the upstream `apply_binary_*` ops in
-`src/ops/elementwise_ops.mojo`. Each `maybe_*` returns True if it took a
+`src/create/ops/elementwise.mojo`. Each `maybe_*` returns True if it took a
 fast path, False if the caller should fall back to the f64 round-trip
 walker.
 
@@ -32,7 +32,7 @@ from .accelerate_dispatch import (
     maybe_binary_rank1_strided_accelerate,
 )
 from .apply_scalar import apply_binary_f64
-from .complex_kernels import (
+from .kernels.complex import (
     complex_binary_contig_typed,
     complex_scalar_complex_contig_typed,
     complex_scalar_real_contig_typed,
@@ -41,13 +41,13 @@ from .complex_kernels import (
 )
 from .dispatch_helpers import dispatch_real_typed_simd_binary
 from .strided_walkers import strided_binary_walk_typed
-from .tile_kernels import (
+from .kernels.tile import (
     maybe_binary_column_broadcast_dispatch,
     maybe_binary_rank2_transposed_tile,
     maybe_binary_rank3_axis0_tile,
     pick_inner_axis_for_strided_binary,
 )
-from .typed_kernels import (
+from .kernels.typed import (
     binary_column_broadcast_contig_typed,
     binary_row_broadcast_contig_typed,
     binary_same_shape_contig_typed,

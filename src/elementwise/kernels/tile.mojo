@@ -30,7 +30,7 @@ from array import (
 )
 from domain import ArrayDType, BackendKind, BinaryOp
 
-from .typed_kernels import apply_binary_typed_vec
+from elementwise.kernels.typed import apply_binary_typed_vec
 
 
 @fieldwise_init

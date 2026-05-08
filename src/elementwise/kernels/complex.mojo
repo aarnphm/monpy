@@ -43,8 +43,8 @@ from array import (
 )
 from domain import ArrayDType, BackendKind, BinaryOp, UnaryOp
 
-from .accelerate_dispatch import maybe_complex_binary_rank1_strided_accelerate
-from .typed_kernels import binary_same_shape_contig_typed
+from elementwise.accelerate_dispatch import maybe_complex_binary_rank1_strided_accelerate
+from elementwise.kernels.typed import binary_same_shape_contig_typed
 
 
 def complex_unary_preserve_contig_typed[
@@ -144,6 +144,7 @@ def maybe_complex_binary_same_shape_strided(lhs: Array, rhs: Array, mut result: 
         return True
     return False
 
+
 def complex_scalar_complex_contig_typed[
     dtype: DType
 ](
@@ -196,6 +197,8 @@ def complex_scalar_complex_contig_typed[
                 out_ptr[i * 2 + 1] = (b * scalar_real - a * scalar_imag) / denom
         return
     raise Error("unsupported op for complex × complex-scalar kernel")
+
+
 def complex_scalar_real_contig_typed[
     dtype: DType
 ](

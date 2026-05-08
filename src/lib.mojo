@@ -41,6 +41,7 @@ from create import (
     full_ops,
     indices_ops,
     inv_ops,
+    layer_norm_last_axis_ops,
     linspace_ops,
     logspace_ops,
     logical_ops,
@@ -59,9 +60,11 @@ from create import (
     result_dtype_for_binary_py_ops,
     result_dtype_for_reduction_py_ops,
     result_dtype_for_unary_py_ops,
+    scaled_masked_softmax_last_axis_ops,
     sin_add_mul_ops,
     slice_1d_ops,
     slice_ops,
+    softmax_last_axis_ops,
     stack_axis0_ops,
     squeeze_axis_ops,
     squeeze_all_ops,
@@ -80,7 +83,6 @@ from create import (
     where_ops,
 )
 from array import Array
-from elementwise import layer_norm_last_axis_ops, scaled_masked_softmax_last_axis_ops, softmax_last_axis_ops
 from metadata import domain_codes_py_ops
 
 

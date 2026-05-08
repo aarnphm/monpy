@@ -1,4 +1,4 @@
-"""Typed-vec kernels: comptime-parametric SIMD primitives for binary/unary ops.
+"""Typed SIMD kernels: comptime-parametric primitives for binary/unary ops.
 
 Hosts the ground-floor kernels that every higher-level dispatcher (binary,
 scalar broadcast, row broadcast, tile, strided walker) ultimately calls

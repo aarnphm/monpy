@@ -1,4 +1,4 @@
-"""Python-bridge thin wrappers for dtype helpers.
+"""DType PythonObject bridge ops.
 
 These are CPython ABI shims — each one is a one-liner that unboxes a
 `PythonObject`, calls into the Mojo-side dtype machinery (`array.result_dtype_for_*`,

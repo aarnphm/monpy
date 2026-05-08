@@ -37,7 +37,7 @@ from array import (
 from cute.iter import LayoutIter
 from domain import ArrayDType, BackendKind, ReduceOp
 
-from .predicates import is_contiguous_float_array
+from elementwise.predicates import is_contiguous_float_array
 
 
 def reduce_sum_typed[

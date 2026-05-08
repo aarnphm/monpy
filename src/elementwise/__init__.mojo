@@ -12,34 +12,36 @@ deeper; this is just a map.
     (`maybe_*_accelerate`, `maybe_*_rank1_strided_accelerate`).
 
 Typed kernels (`[dt: DType]` parametric, comptime SIMD width):
-  - `typed_kernels` — `apply_*_typed_vec`, `*_static`, `*_contig_typed`
+  - `kernels/typed` — `apply_*_typed_vec`, `*_static`, `*_contig_typed`
     family (binary, scalar, row-broadcast, unary, unary-preserve,
     rank-2-strided unary).
-  - `complex_kernels` — interleaved (re, im) variants: unary preserve,
+  - `kernels/complex` — interleaved (re, im) variants: unary preserve,
     binary strided, complex×complex / complex×real scalar broadcast,
     `complex_binary_contig_typed`, vDSP fast path.
-  - `reduce_kernels` — `reduce_sum_typed`, `reduce_strided_typed`,
+  - `kernels/reduce` — `reduce_sum_typed`, `reduce_strided_typed`,
     `maybe_argmax_contiguous`.
-  - `linalg_kernels` — LAPACK-backed kernels (qr/cholesky/eigh/eig/svd/
+  - `kernels/linalg` — LAPACK-backed kernels (qr/cholesky/eigh/eig/svd/
     lstsq) and the LU pure-Mojo fallback.
-  - `matmul` — `matmul_small_typed`, `maybe_matmul_*` family.
+  - `kernels/matmul` — `matmul_small_typed`, `maybe_matmul_*` family.
+  - `kernels/nn` — row-wise layer norm / softmax bodies consumed by
+    `create/ops/nn.mojo`.
 
 Strided / tile / fused fast paths:
   - `strided_walkers` — `strided_binary_walk_typed`,
     `binary_strided_walk_typed`, `maybe_binary_strided_typed`.
-  - `tile_kernels` — `StridedInnerChoice`, 4×4 transposed tiles,
+  - `kernels/tile` — `StridedInnerChoice`, 4×4 transposed tiles,
     rank-3 axis-0 tile, column-broadcast tile dispatch.
-  - `fused_kernels` — `maybe_sin_add_mul_contiguous`.
+  - `kernels/fused` — `maybe_sin_add_mul_contiguous`.
 
 Dispatch:
   - `dispatch_helpers` — comptime-fn-parametric 11-way dtype monomorphizers
     (`dispatch_real_typed_simd_binary/unary`).
   - `binary_dispatch` — `maybe_binary_*` entry points called by
-    `src/ops/elementwise_ops.mojo`.
+    `src/create/ops/elementwise.mojo`.
   - `unary_dispatch` — `maybe_unary_*` entry points.
 
-Public re-exports below cover the union all upstream callers (lib, ops/,
-create/) consume. Kept as a flat re-export so existing `from elementwise
+Public re-exports below cover the union all upstream callers (lib,
+create/*/ops) consume. Kept as a flat re-export so existing `from elementwise
 import X` lines keep working.
 """
 
@@ -58,7 +60,7 @@ from .binary_dispatch import (
     maybe_binary_scalar_contiguous,
     maybe_binary_scalar_value_contiguous,
 )
-from .complex_kernels import (
+from .kernels.complex import (
     complex_binary_contig_typed,
     complex_binary_same_shape_strided_typed,
     complex_scalar_complex_contig_typed,
@@ -73,8 +75,8 @@ from .dispatch_helpers import (
     dispatch_real_typed_simd_binary,
     dispatch_real_typed_simd_unary,
 )
-from .fused_kernels import maybe_sin_add_mul_contiguous
-from .linalg_kernels import (
+from .kernels.fused import maybe_sin_add_mul_contiguous
+from .kernels.linalg import (
     abs_f64,
     copy_rhs_to_col_major,
     lapack_cholesky_into,
@@ -104,8 +106,12 @@ from .linalg_kernels import (
     write_col_major_to_array,
     write_solve_result,
 )
-from .nn_ops import layer_norm_last_axis_ops, scaled_masked_softmax_last_axis_ops, softmax_last_axis_ops
-from .matmul import (
+from .kernels.nn import (
+    layer_norm_last_axis_typed,
+    scaled_masked_softmax_last_axis_typed,
+    softmax_last_axis_typed,
+)
+from .kernels.matmul import (
     matmul_small_typed,
     maybe_matmul_complex_accelerate,
     maybe_matmul_contiguous,
@@ -121,7 +127,7 @@ from .predicates import (
     max_int,
     rank2_blas_layout,
 )
-from .reduce_kernels import (
+from .kernels.reduce import (
     maybe_argmax_contiguous,
     maybe_reduce_axis_last_contiguous,
     maybe_reduce_contiguous,
@@ -134,7 +140,7 @@ from .strided_walkers import (
     maybe_binary_strided_typed,
     strided_binary_walk_typed,
 )
-from .tile_kernels import (
+from .kernels.tile import (
     StridedInnerChoice,
     maybe_binary_column_broadcast_dispatch,
     maybe_binary_rank2_transposed_tile,
@@ -142,7 +148,7 @@ from .tile_kernels import (
     maybe_binary_rank3_axis0_tile,
     pick_inner_axis_for_strided_binary,
 )
-from .typed_kernels import (
+from .kernels.typed import (
     apply_binary_typed_vec,
     apply_binary_typed_vec_static,
     apply_unary_preserve_typed_vec,

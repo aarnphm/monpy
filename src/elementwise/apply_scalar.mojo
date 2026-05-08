@@ -5,7 +5,7 @@ These are used by:
   - complex kernels (after Smith division)
   - boxed scalar paths
   - reduction gather sites that don't have a typed-SIMD specialisation
-  - the LayoutIter strided fallbacks in `create/elementwise_ops`
+  - the LayoutIter strided fallbacks in `create/ops/elementwise`
 
 No `Array` dependency — pure scalar in/out plus the int op-code.
 """

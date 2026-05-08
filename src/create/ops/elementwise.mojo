@@ -1,4 +1,4 @@
-"""Elementwise `_ops` Python-bridge entry points.
+"""Elementwise PythonObject bridge ops.
 
 Hosts the elementwise compute surface — unary preserve, comparison, logical,
 predicate. Each one walks via `LayoutIter` (single-source) or `MultiLayoutIter`
@@ -63,7 +63,7 @@ from elementwise import (
     maybe_unary_rank2_strided,
 )
 
-from ._complex_helpers import _complex_imag, _complex_real, _complex_store
+from create._complex_helpers import _complex_imag, _complex_real, _complex_store
 
 
 def _where_bool_same_shape_contig_typed[dt: DType](cond: Array, lhs: Array, rhs: Array, mut result: Array) raises:
