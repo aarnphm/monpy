@@ -2059,6 +2059,7 @@ def concatenate_ops(
         raise Error("concatenate: need at least one array")
     var axis = Int(py=axis_obj)
     var dtype_code = Int(py=dtype_code_obj)
+    var infer_dtype = dtype_code < 0
     # Pull rank from first input.
     var first = arrays_obj[0].downcast_value_ptr[Array]()
     var ndim = len(first[].shape)
@@ -2066,6 +2067,8 @@ def concatenate_ops(
         axis = axis + ndim
     if axis < 0 or axis >= ndim:
         raise Error("concatenate: axis out of range")
+    if dtype_code < 0:
+        dtype_code = first[].dtype_code
     # Build out_shape; check shape consistency across arrays.
     var out_shape = List[Int]()
     for d in range(ndim):
@@ -2085,6 +2088,8 @@ def concatenate_ops(
             raise Error("concatenate: dtype mismatch (caller must pre-cast)")
         if not is_c_contiguous(a[]):
             all_c_contig = False
+    if infer_dtype and not all_c_contig:
+        raise Error("concatenate: fast path requires c-contiguous inputs")
     var out_shape_clone = List[Int]()
     for d in range(ndim):
         out_shape_clone.append(out_shape[d])

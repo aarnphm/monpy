@@ -151,6 +151,31 @@ def test_join_helpers_match_numpy_for_axis0_fast_paths() -> None:
   numpy.testing.assert_array_equal(numpy.asarray(np.vstack([a, b])), numpy.vstack([a_np, b_np]))
 
 
+def test_concatenate_falls_back_for_promotion() -> None:
+  a = np.arange(3, dtype=np.int64)
+  b = np.arange(3, 6, dtype=np.float32)
+  expected = numpy.concatenate([
+    numpy.arange(3, dtype=numpy.int64),
+    numpy.arange(3, 6, dtype=numpy.float32),
+  ])
+
+  out = np.concatenate([a, b])
+
+  assert out.dtype == np.float64
+  numpy.testing.assert_array_equal(numpy.asarray(out), expected)
+
+
+def test_concatenate_falls_back_for_non_contiguous_inputs() -> None:
+  a_np = numpy.arange(8, dtype=numpy.float64)
+  b_np = numpy.arange(8, 16, dtype=numpy.float64)
+  a = np.asarray(a_np)[::-1]
+  b = np.asarray(b_np)[::2]
+
+  out = np.concatenate([a, b])
+
+  numpy.testing.assert_array_equal(numpy.asarray(out), numpy.concatenate([a_np[::-1], b_np[::2]]))
+
+
 def test_stack_axis0_fast_path_preserves_dtype_override() -> None:
   a = np.arange(3, dtype=np.int64)
   b = np.arange(3, 6, dtype=np.int64)

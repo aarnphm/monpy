@@ -1047,14 +1047,12 @@ def concatenate(arrays:Sequence[object], axis:int=0, *, out:object=None, dtype:o
   if out is not None:raise NotImplementedError("concatenate out= not implemented in monpy v1")
   arrs=[asarray(a) for a in arrays]
   if not arrs:raise ValueError("concatenate: need at least one array")
+  natives=[a._native for a in arrs]
   if dtype is None:
-    dtype_code=builtins.int(arrs[0]._native.dtype_code())
-    all_fast=True
-    for a in arrs:
-      if builtins.int(a._native.dtype_code())!=dtype_code or not a._native.is_c_contiguous():
-        all_fast=False
-        break
-    if all_fast:return ndarray._wrap(_native.concatenate([a._native for a in arrs], axis, dtype_code))
+    try:return ndarray._wrap(_native.concatenate(natives, axis, -1))
+    except Exception as exc:
+      message=str(exc)
+      if "dtype mismatch" not in message and "c-contiguous" not in message:raise
   t=_resolve_dtype(dtype) if dtype is not None else result_type(*arrs)
   # Pre-cast all inputs and pre-materialise into c-contig — native concat
   # walks logical indices, but the f64 round-trip path is faster on

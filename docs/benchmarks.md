@@ -597,3 +597,51 @@ Profile artifacts:
   so the sampled dynamic-loader hotspot is gone. The remaining time is now in
   the Python extension wrapper, native `Array` construction, and Python-side
   `ndarray` wrapper allocation.
+
+### 2026-05-08 native concatenate dtype inference
+
+`array/native_kernels/concatenate_axis0_8x128_f64` copies only 8 KiB of data
+total: eight contiguous 128-element `float64` inputs. The native side was
+already doing one 1 KiB `memcpy` per input, and Mojo's `std.memory.memcpy`
+already lowers byte copies through width-32 vectorized chunks for this size.
+The slow part was Python preflight: before calling native concat, the facade
+crossed the extension boundary once per input for `dtype_code()` and once per
+input for `is_c_contiguous()`. A direct microbench measured that metadata
+preflight at about 1.94 us for the eight-input benchmark, while the raw native
+concat was about 1.68 us.
+
+`concatenate(..., dtype=None)` now optimistically calls native concat with
+`dtype_code=-1`. The native entrypoint infers the first dtype, validates equal
+dtypes and c-contiguous inputs, and raises a narrow fallback error when the
+Python facade needs the old promotion or materialization path. Shape and axis
+errors still propagate directly.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `array/native_kernels/concatenate_axis0_8x128_f64` | 6.956 | 5.093 | 2.252x | 1.657x |
+| `array/views/concatenate_axis0_f32` | 4.231 | 3.528 | 1.684x | 1.448x |
+| `array/views/hstack_f32` | 4.827 | 4.120 | 1.596x | 1.402x |
+
+Direct microbenchmarks for the benchmark inputs:
+
+| operation | previous us | new us |
+| --- | ---: | ---: |
+| `mnp.concatenate(inp_mp)` | 4.791 | 2.842 |
+| raw native concat | 1.684 | 1.676 |
+
+Profile artifacts:
+
+- `results/profile-20260508-concat-axis0-8x128-native-infer/manifest.json`
+  measured the patched row at 5.243 us/call in the long child loop, down from
+  7.268 us/call in
+  `results/profile-20260508-concat-axis0-8x128-baseline/manifest.json`.
+- Max RSS dropped from 87.4 MB to 85.0 MB in the profile child. The traced
+  Python allocation peak stayed at 1,718 bytes, so this pass removed call
+  overhead rather than changing allocation shape.
+
+The next concatenate-specific lever is a narrower axis-0 vector/list ABI that
+avoids Python list construction and repeated `downcast_value_ptr` inside native.
+That is probably smaller than the remaining linalg/view rows, so the next broad
+target should move to `cholesky_32_f64` or the view wrapper cluster.
