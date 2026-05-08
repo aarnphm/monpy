@@ -329,6 +329,31 @@ def reshape_ops(array_obj: PythonObject, shape_obj: PythonObject) raises -> Pyth
     return PythonObject(alloc=view^)
 
 
+def ravel_ops(array_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var shape = List[Int]()
+    shape.append(src[].size_value)
+    var strides = List[Int]()
+    strides.append(1)
+    if is_c_contiguous(src[]):
+        var view = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+        return PythonObject(alloc=view^)
+    var copied = copy_c_contiguous(src[])
+    var view = make_view_array(copied, shape^, strides^, copied.size_value, copied.offset_elems)
+    return PythonObject(alloc=view^)
+
+
+def flatten_ops(array_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var copied = copy_c_contiguous(src[])
+    var shape = List[Int]()
+    shape.append(copied.size_value)
+    var strides = List[Int]()
+    strides.append(1)
+    var view = make_view_array(copied, shape^, strides^, copied.size_value, copied.offset_elems)
+    return PythonObject(alloc=view^)
+
+
 def squeeze_all_ops(array_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
     var shape = List[Int]()

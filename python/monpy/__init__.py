@@ -982,13 +982,12 @@ def swapaxes(x:object, axis1:int, axis2:int)->ndarray:
 def ravel(x:object, order:str="C")->ndarray:
   if order not in("C", "K", "A"):raise NotImplementedError("ravel order != C/K/A")
   arr=asarray(x)
-  if not arr._native.is_c_contiguous():arr=ascontiguousarray(arr)
-  return arr.reshape((arr.size,))
+  return ndarray._wrap(_native.ravel(arr._native), base=arr)
 
 def flatten(x:object, order:str="C")->ndarray:
   if order not in("C", "K", "A"):raise NotImplementedError("flatten order != C/K/A")
   arr=asarray(x)
-  return ascontiguousarray(arr).reshape((arr.size,))
+  return ndarray._wrap(_native.flatten(arr._native))
 
 # concatenate/stack family.
 # collect element values via .tolist() and reconstruct via asarray.

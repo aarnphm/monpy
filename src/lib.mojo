@@ -33,6 +33,7 @@ from create import (
     expand_dims_ops,
     eye_ops,
     fill_ops,
+    flatten_ops,
     flip_ops,
     from_external_ops,
     from_flat_ops,
@@ -52,6 +53,7 @@ from create import (
     qr_ops,
     reduce_axis_ops,
     reduce_ops,
+    ravel_ops,
     reshape_ops,
     result_dtype_for_binary_py_ops,
     result_dtype_for_reduction_py_ops,
@@ -125,6 +127,8 @@ def PyInit__native() -> PythonObject:
         module.def_function[logspace_ops]("logspace")
         module.def_function[indices_ops]("indices")
         module.def_function[reshape_ops]("reshape")
+        module.def_function[ravel_ops]("ravel")
+        module.def_function[flatten_ops]("flatten")
         module.def_function[squeeze_all_ops]("squeeze_all")
         module.def_function[squeeze_axis_ops]("squeeze_axis")
         module.def_function[squeeze_axes_ops]("squeeze_axes")

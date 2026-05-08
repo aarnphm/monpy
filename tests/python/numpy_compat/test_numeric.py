@@ -138,6 +138,37 @@ def test_shape_manipulation_matches_numpy() -> None:
   assert np.broadcast_to(np.asarray([1, 2, 3]), (2, 3)).tolist() == [[1, 2, 3], [1, 2, 3]]
 
 
+def test_ravel_and_flatten_copy_semantics_match_numpy() -> None:
+  base = np.arange(6, dtype=np.float64).reshape(2, 3)
+  oracle = numpy.arange(6, dtype=numpy.float64).reshape(2, 3)
+
+  raveled = np.ravel(base)
+  raveled_expected = numpy.ravel(oracle)
+  raveled[1] = -11.0
+  raveled_expected[1] = -11.0
+
+  assert_same_values(raveled, raveled_expected)
+  assert_same_values(base, oracle)
+
+  copied = np.flatten(base)
+  copied_expected = oracle.flatten()
+  copied[2] = -7.0
+  copied_expected[2] = -7.0
+
+  assert_same_values(copied, copied_expected)
+  assert_same_values(base, oracle)
+
+  transposed = base.T
+  transposed_oracle = oracle.T
+  transposed_ravel = np.ravel(transposed)
+  transposed_expected = numpy.ravel(transposed_oracle)
+  transposed_ravel[0] = -99.0
+  transposed_expected[0] = -99.0
+
+  assert_same_values(transposed_ravel, transposed_expected)
+  assert_same_values(base, oracle)
+
+
 def test_views_remain_safe_across_core_read_paths() -> None:
   base = np.arange(12, dtype=np.float64).reshape(3, 4)
   oracle = numpy.arange(12, dtype=numpy.float64).reshape(3, 4)

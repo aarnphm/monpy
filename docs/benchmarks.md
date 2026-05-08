@@ -688,3 +688,51 @@ Profile artifacts:
 The new focused top deficits are view-wrapper and stride rows:
 `reversed_add_f32`, `flatten_f32`, `ravel_f32`, `moveaxis_f32`, and
 `empty_like_shape_override_f32`. Cholesky is no longer the next broad target.
+
+### 2026-05-08 native ravel and flatten views
+
+`array/views/ravel_f32` and `array/views/flatten_f32` are tiny shape helpers:
+the benchmark input is a `2x3x4` float32 array, so the operation itself touches
+only 24 elements. The old monpy path crossed into native for contiguity checks,
+then crossed again through the generic reshape path. It also accidentally made
+`flatten` a view for already-contiguous arrays, while NumPy documents
+[`flatten`](https://numpy.org/doc/stable/reference/generated/numpy.ndarray.flatten.html)
+as copy-returning and
+[`ravel`](https://numpy.org/doc/stable/reference/generated/numpy.ravel.html)
+as copy-only-when-needed.
+
+`src/create/__init__.mojo` now exposes native `ravel` and `flatten` entrypoints.
+`ravel` returns a one-dimensional view for c-contiguous inputs and materializes
+a contiguous copy otherwise. `flatten` always materializes a contiguous copy,
+then exposes that copy through a one-dimensional view. This preserves the
+existing Python order surface while moving shape/stride construction and copy
+semantics into one native call.
+
+Focused local result:
+
+| row | previous monpy us | new monpy us | previous ratio | new ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `array/views/flatten_f32` | 4.940 | 3.357 | 2.135x | 1.493x |
+| `array/views/ravel_f32` | 4.424 | 2.731 | 1.995x | 1.242x |
+
+Direct microbenchmarks on an existing `2x3x4` array measured
+`mnp.ravel(s_mp)` at about 0.615 us and `mnp.flatten(s_mp)` at about 1.115 us.
+The full benchmark rows are higher because the benchmark includes the facade
+and harness path, which is now the remaining dominant tax.
+
+Profile artifacts:
+
+- `results/profile-20260508-ravel-f32-native/manifest.json` measured the patched
+  monpy row at 2.886 us/call, with 85.6 MB max RSS, no major faults, and a
+  traced Python allocation peak of 1,718 bytes.
+- `results/profile-20260508-flatten-f32-native/manifest.json` measured the
+  patched monpy row at 3.545 us/call, with 85.6 MB max RSS, no major faults,
+  and the same 1,718 byte traced Python allocation peak.
+- The `sample(1)` reports show the new `create::__init__::ravel_ops` and
+  `create::__init__::flatten_ops` frames. The old generic `reshape_ops` path no
+  longer appears in the hot wrapper stack for these cases.
+
+The top rows after this pass are `reversed_add_f32`, `moveaxis_f32`,
+`empty_like_shape_override_f32`, and `transpose_add_f32`. The next high-upside
+view target is therefore negative-stride elementwise dispatch or moveaxis
+permutation metadata, not further `ravel`/`flatten` work.
