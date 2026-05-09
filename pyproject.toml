@@ -13,6 +13,7 @@ kernels = ["max>=26.2.0", "safetensors"]
 
 [project.scripts]
 monpy-bench = "monpy._bench.sweep:main"
+monpy-bench-mojo = "monpy._bench.mojo_sweep:main"
 monpy-profile = "monpy._bench.profile:main"
 
 [tool.mohaus]

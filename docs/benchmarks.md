@@ -14,11 +14,11 @@ After `mohaus develop` or an editable install, use the installed command:
 
 ```bash
 monpy-bench --types all --format csv --no-progress
+monpy-bench-mojo --format csv
 ```
 
-The command is installed from `pyproject.toml` and imports
-`monpy._bench.sweep` from the editable package. No repository-root path
-injection is required.
+The commands are installed from `pyproject.toml` and import their runners from
+the editable package. No repository-root path injection is required.
 
 ## Suites
 
@@ -114,19 +114,67 @@ python .github/scripts/posts.py \
 
 ## Mojo-side head-to-head benches (`benches/`)
 
-These benches sit *next to* the Python sweep above; they answer a different question. The Python sweep asks "is monpy's user-facing API faster than numpy's?" — these ask "is monpy's *kernel* implementation actually competitive with the equivalent primitive in `std.algorithm`?" Pure Mojo, no Python in the inner loop, no FFI overhead. Run them when you suspect a hand-rolled kernel is leaving performance on the table, or before/after touching `src/elementwise/*kernels*.mojo`.
+These benches sit *next to* the Python sweep above; they answer a different question. The Python sweep asks "is monpy's user-facing API faster than numpy's?" — these ask "is monpy's *kernel* implementation actually competitive with the equivalent Mojo stdlib primitive?" Pure Mojo, no Python in the inner loop, no FFI overhead. Run them when you suspect a hand-rolled kernel is leaving performance on the table, or before/after touching `src/elementwise/*kernels*.mojo`.
 
 ### Run
 
 ```bash
-$MODULAR_DERIVED_PATH/build/bin/mojo benches/bench_reduce.mojo
+MOHAUS_MOJO=$MODULAR_DERIVED_PATH/build/bin/mojo monpy-bench-mojo --format table
+$MODULAR_DERIVED_PATH/build/bin/mojo run -I src benches/bench_mojo_sweep.mojo
+$MODULAR_DERIVED_PATH/build/bin/mojo run -I src benches/bench_reduce.mojo
 ```
 
 (`MODULAR_DERIVED_PATH` is set by the modular shell init; it points at the locally-built `mojo` binary that matches `.mojo-version`. The `.venv/bin/mojo` shim works too on darwin but the modular-derived path is the canonical reference.)
 
-The harness uses `std.benchmark.Bench` with significance gating, ~100 iterations per cell, two repetitions by default. Each row prints mean wall-time (ms), data-movement throughput (GB/s), and arithmetic throughput (GFLOPS/s).
+`monpy-bench-mojo` runs the pure Mojo sweep and writes durable artifacts by default:
+
+```text
+results/yyyy-mm-dd/mojo/manifest.json
+results/yyyy-mm-dd/mojo/results.<format>
+```
+
+Use `--no-save` for stdout only:
+
+```bash
+monpy-bench-mojo --format json --sort ratio --no-save
+```
+
+### `bench_mojo_sweep.mojo`
+
+Compares production monpy kernels against stdlib-shaped Mojo baselines on identical native buffers. It emits TSV so the Python runner can render table, csv, json, or markdown artifacts without putting Python in the measured loop.
+
+The sweep covers both f32 and f64:
+
+- elementwise add across 1K, 64K, and 1M elements
+- scalar multiply across 1K and 64K elements
+- unary `sin` across 1K and 64K elements
+- reductions: `sum`, `mean`, `min`, `max`, and `product`
+- small square matmul at 8x8 and 16x16
+
+The stdlib side uses the closest local primitive for each family: `std.algorithm.sum`/`mean`/`min`/`max`/`product` for reductions, `std.math.sin` and `SIMD`/`simd_width_of` loops for elementwise kernels, and a simple stdlib-pointer SIMD loop for small matmul. The comparison is deliberately below array semantics: it tests the cost of the kernel body, not dtype promotion, shape validation, Python object construction, or FFI.
+
+Interpretation rule: rows near `1.0x` mean the monpy kernel and stdlib-shaped loop are effectively at parity for that native operation. A stdlib win here is evidence to replace or simplify the inner Mojo kernel. It is not evidence that the Python-facing monpy runtime can disappear, because shape/stride semantics, dtype dispatch, NumPy-compatible behavior, and Accelerate/vForce routing still live above this layer.
+
+### Optional NuMojo comparison
+
+NuMojo is an external array library, so its bench is separate and opt-in:
+
+```bash
+monpy-bench-mojo --include-numojo --numojo-path ~/workspace/scratchpad/NuMojo
+$MODULAR_DERIVED_PATH/build/bin/mojo run \
+  --ignore-incompatible-package-errors \
+  -I src \
+  -I ~/workspace/scratchpad/NuMojo \
+  benches/bench_numojo_sweep.mojo
+```
+
+`bench_numojo_sweep.mojo` compares NuMojo public NDArray operations against monpy raw kernels for add, `sin`, `sum`, and small matmul. That comparison is intentionally not identical to `bench_mojo_sweep.mojo`: NuMojo includes its array abstraction overhead, while monpy rows are kernel-level. Treat it as an external-library baseline, not as a stdlib replacement proof.
+
+NuMojo main currently tracks the Modular 0.26.x toolchain family. This checkout expects Mojo `1.0.0.dev0`, so the optional bench may fail at import time with stdlib API drift such as `std.os.atomic` moving or disappearing. That is a toolchain compatibility signal, not a monpy performance result.
 
 ### `bench_reduce.mojo`
+
+The reduction harness uses `std.benchmark.Bench` with significance gating, ~100 iterations per cell, two repetitions by default. Each row prints mean wall-time (ms), data-movement throughput (GB/s), and arithmetic throughput (GFLOPS/s).
 
 Compares **five reductions** (`sum`, `mean`, `min`, `max`, `product`) across three implementations on identical buffers in L1/L2/L3/DRAM-resident sizes for both f32 and f64:
 
