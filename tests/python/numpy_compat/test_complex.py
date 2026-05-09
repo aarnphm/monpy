@@ -142,6 +142,29 @@ def test_complex_array_from_numpy_round_trip() -> None:
   numpy.testing.assert_array_equal(numpy.asarray(arr), source)
 
 
+def test_complex_array_from_numpy_copy_false_shares_storage() -> None:
+  source = numpy.asarray([1 + 2j, 3 + 4j], dtype=numpy.complex64)
+  arr = mp.asarray(source, dtype=mp.complex64, copy=False)
+
+  source[0] = 9 + 10j
+  arr[1] = 11 + 12j
+
+  assert arr.dtype == mp.complex64
+  numpy.testing.assert_array_equal(numpy.asarray(arr), source)
+
+
+def test_complex_array_from_numpy_copy_true_detaches_storage() -> None:
+  source = numpy.asarray([1 + 2j, 3 + 4j], dtype=numpy.complex128)
+  arr = mp.asarray(source, copy=True)
+
+  source[0] = 9 + 10j
+  arr[1] = 11 + 12j
+
+  assert arr.dtype == mp.complex128
+  numpy.testing.assert_array_equal(numpy.asarray(arr), [1 + 2j, 11 + 12j])
+  numpy.testing.assert_array_equal(source, [9 + 10j, 3 + 4j])
+
+
 def test_complex_astype_drops_imag_to_real_target() -> None:
   a = mp.asarray([1 + 2j, 3 + 4j], dtype=mp.complex128)
   real = a.astype(mp.float64)

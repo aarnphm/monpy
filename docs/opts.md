@@ -1131,3 +1131,57 @@ kernel:
 Next target should be complex ingress/copy. The likely win is keeping NumPy
 complex buffers on a narrow typed copy path instead of round-tripping through
 generic scalar extraction.
+
+### 2026-05-08 direct NumPy buffer ingress
+
+The typed-buffer hypothesis was tested first and rejected. A native
+`PyBUF_STRIDES` bridge that skipped `PyBUF_FORMAT` made the raw native call a
+little faster, but the Python-side `dtype.str` proof cost more than the native
+PEP-3118 decode it was trying to avoid. The official complex slice moved the
+wrong way, so that path was cut before committing.
+
+The smaller, useful fix is simpler: when `monpy.asarray()` sees a NumPy ndarray,
+it now calls the existing native `asarray_from_buffer` bridge directly instead
+of routing through `runtime.ops_numpy.is_array_input()` and
+`runtime.ops_numpy._from_numpy_unchecked()`. That keeps dtype/copy semantics in
+the same native buffer decoder, avoids a Python module wrapper hop on the hot
+path, and still falls back to `runtime.ops_numpy` for any future exotic NumPy
+case the local probe misses.
+
+Focused verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_array_coercion.py::test_numpy_array_copy_false_shares_storage tests/python/numpy_compat/test_array_coercion.py::test_numpy_array_copy_true_detaches_storage tests/python/numpy_compat/test_array_coercion.py::test_numpy_array_readonly_copy_false_raises_and_copy_none_detaches tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_round_trip tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_copy_false_shares_storage tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_copy_true_detaches_storage -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --repeats 7 --rounds 5 --matrix-sizes 64 --format json --sort ratio --output-dir results/local-sweep-20260509-complex-direct-numpy-buffer --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/interop/asarray_complex64 --types complex --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-asarray-complex64-direct-numpy-buffer --sample --no-perf-stat
+```
+
+Post-fix benchmark results:
+
+| row | before | after | delta |
+| --- | ---: | ---: | ---: |
+| `complex/interop/asarray_complex64` | 3.005 us, 1.549x | 2.882 us, 1.484x | 1.04x faster |
+| `complex/interop/array_copy_complex128` | 3.758 us, 1.535x | 3.647 us, 1.475x | 1.03x faster |
+
+The profile loop for `complex/interop/asarray_complex64` moved from 3.242
+us/call to 2.951 us/call, with max RSS essentially flat at about 49 MB and the
+same 1,590 byte traced allocation peak. The `sample` run measured 3.418 us/call
+before and 3.128 us/call after in the child process. The hot native frame is
+still `buffer::asarray_from_buffer_ops`, which is expected: this patch removes
+Python wrapper overhead, not memory traffic or SIMD work. No hardware PMU
+counters were collected in this run because `--no-perf-stat` was used.
+
+The remaining complex frontier after this slice:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/elementwise/binary_mul_complex64` | 3.455 | 2.538 | 1.364x |
+| `complex/elementwise/binary_add_complex64` | 3.082 | 2.438 | 1.265x |
+| `complex/elementwise/binary_add_complex128` | 3.253 | 2.619 | 1.248x |
+| `complex/matmul_64_complex64` | 7.517 | 7.124 | 1.055x |
+
+Next target should be `complex/elementwise/binary_mul_complex64`. It is no
+longer an ingress problem; the likely work is inside the complex multiply
+kernel, specifically redundant real/imag lane loads, scalar temporary pressure,
+and whether a wider interleaved-lane SIMD path beats the current per-element
+Smith-compatible shape for multiplication.

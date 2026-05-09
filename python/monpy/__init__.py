@@ -1,7 +1,7 @@
 # fmt: off
 # ruff: noqa
 from __future__ import annotations
-import builtins, importlib, itertools, math, typing
+import builtins, importlib, itertools, math, sys, typing
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import IntEnum
@@ -835,6 +835,15 @@ def asarray(obj:object, dtype:object=None, *, copy:builtins.bool|None=None, devi
     if copy is False:raise ValueError(_CFE)
     return arr.astype(tgt, copy=True)
   if isinstance(obj, _DeferredArray):return asarray(obj._materialize(), dtype=dtype, copy=copy, device=device)
+  if _is_numpy_array(obj):
+    tc=-1 if dtype is None else _resolve_dtype(dtype).code
+    cf=-1 if copy is None else (1 if copy else 0)                                                                              # tri-state: -1 default, 0 never, 1 always
+    try:return ndarray(_native.asarray_from_buffer(obj, tc, cf), owner=None if cf==1 else obj)
+    except Exception as exc:
+      message=str(exc)
+      if copy is False and ("copy" in message or "readonly" in message):raise ValueError(message) from exc
+      if "buffer format unsupported" in message:raise NotImplementedError("unsupported dtype") from exc
+      raise
   if runtime.ops_numpy.is_array_input(obj):return runtime.ops_numpy._from_numpy_unchecked(obj, dtype=dtype, copy=copy, device=device)
   tc=-1 if dtype is None else _resolve_dtype(dtype).code
   cf=-1 if copy is None else (1 if copy else 0)                                                                                # tri-state: -1 default, 0 never, 1 always
@@ -2907,6 +2916,18 @@ def _has_ai(o:object)->builtins.bool:                                           
   try:i=getattr(o, "__array_interface__")
   except Exception:return False
   return isinstance(i, dict)
+
+def _is_numpy_array(o:object)->builtins.bool:
+  numpy_module=sys.modules.get("numpy")
+  ndarray_type=getattr(numpy_module, "ndarray", None) if numpy_module is not None else None
+  if ndarray_type is not None:
+    return builtins.bool(isinstance(o, ndarray_type))
+  return builtins.any(
+    isinstance(getattr(base, "__module__", None), str)
+    and typing.cast(str, getattr(base, "__module__", "")).startswith("numpy")
+    and getattr(base, "__name__", None)=="ndarray"
+    for base in type(o).__mro__
+  )
 
 def _ai_asarray(obj:object, *, dtype:object, copy:builtins.bool|None)->ndarray:
   # generic array-interface ingest. Handles dtype conversion, readonly, and copy semantics
