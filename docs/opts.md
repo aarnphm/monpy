@@ -2039,3 +2039,70 @@ Remaining frontier after this slice:
 
 Next target should be the complex128 ADD fused path. The copy bridge has less
 generic machinery left, and the live add row now sits above it.
+
+### 2026-05-09 Float32 softmax row kernel
+
+The first refresh for this heartbeat checked both the public complex frontier
+and the attention slice. The complex rows were still slower than NumPy, led by
+`asarray_complex64` and the complex add/copy cluster:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.653 | 1.945 | 1.363x |
+| `complex/elementwise/binary_add_complex64` | 2.977 | 2.444 | 1.230x |
+| `complex/elementwise/binary_add_complex128` | 3.198 | 2.607 | 1.223x |
+| `complex/elementwise/binary_mul_complex64` | 3.042 | 2.512 | 1.217x |
+| `complex/interop/array_copy_complex128` | 2.952 | 2.443 | 1.216x |
+
+The attention rows, however, were all already ahead of NumPy:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `attention/attention/causal_attention_t32_d32_f32` | 20.681 | 22.056 | 0.931x |
+| `attention/softmax/causal_scores_t32_f32` | 8.506 | 10.500 | 0.807x |
+| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 81.256 | 105.450 | 0.777x |
+
+The useful attention miss was still local: the f32 softmax kernels were doing
+row max, exp, denominator accumulation, and normalization through `Float64`.
+The local Mojo stdlib `std.math.exp` overload returns the same floating type it
+receives, so the float32 row kernel can stay in `Float32` end to end. This
+matches NumPy's f32 softmax path more closely and removes two conversions per
+lane in the hot row loops.
+
+`src/elementwise/kernels/nn.mojo` now has narrow Float32 paths for plain
+last-axis softmax and scaled masked last-axis softmax. Float64 keeps the
+previous accumulation path.
+
+Focused verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/elementwise/kernels/nn.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_numeric.py::test_fused_softmax_matches_numpy_formula tests/python/numpy_compat/test_numeric.py::test_fused_scaled_masked_softmax_matches_numpy_formula tests/python/numpy_compat/test_numeric.py::test_fused_layer_norm_matches_numpy_formula -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types attention --loops 20 --repeats 7 --rounds 5 --vector-size 1024 --matrix-sizes 32 --format json --sort ratio --output-dir results/local-sweep-20260509-attention-f32-softmax --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case attention/softmax/causal_scores_t32_f32 --types attention --candidate monpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-attention-softmax-f32-monpy --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case attention/softmax/causal_scores_t32_f32 --types attention --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-attention-softmax-f32-numpy --sample --no-perf-stat
+```
+
+Post-fix attention result:
+
+| row | before | after | delta |
+| --- | -----: | ----: | ----: |
+| `attention/softmax/causal_scores_t32_f32` | 8.506 us vs 10.500 us, 0.807x | 6.869 us vs 10.052 us, 0.683x | 1.24x faster monpy side |
+| `attention/attention/causal_attention_t32_d32_f32` | 20.681 us vs 22.056 us, 0.931x | 19.256 us vs 22.242 us, 0.864x | 1.07x faster monpy side |
+| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 81.256 us vs 105.450 us, 0.777x | 80.921 us vs 108.756 us, 0.745x | 1.00x wall-clock, better ratio |
+
+The profile manifests reported `attention/softmax/causal_scores_t32_f32` at
+6.978 us/call for monpy and 10.278 us/call for NumPy. Monpy used backend code
+2, the fused native path. Max RSS was about 51.7 MB for monpy and 51.5 MB for
+NumPy. Traced allocation peaks were 1,694 bytes for monpy and 23,400 bytes for
+NumPy. The monpy `sample(1)` call graph put 1,033 of 2,289 samples directly in
+`elementwise::kernels::nn::_softmax_last_axis_f32`, while NumPy's sample showed
+most softmax time in ufunc reduction machinery (`PyUFunc_Reduce`,
+`FLOAT_maximum`, and `FLOAT_pairwise_sum`). No PMU counters were collected
+because the profile command used `--no-perf-stat`; the `sample(1)` captures live
+under `results/local-profile-20260509-attention-softmax-f32-*`.
+
+Next target should return to complex128 add/mul, or add a larger attention
+matrix-size row so the attention benchmark can expose when softmax stops being
+wrapper-sized and starts becoming cache/bandwidth sized.
