@@ -67,10 +67,29 @@ def test_inner_1d() -> None:
   assert float(out) == 32.0
 
 
+def test_dot_vdot_inner_strided_float_vectors_match_numpy() -> None:
+  a_np = numpy.asarray([1.0, -2.0, 3.0, -4.0, 5.0, -6.0], dtype=numpy.float64)[::2]
+  b_np = numpy.asarray([7.0, 8.0, -9.0, 10.0, -11.0, 12.0], dtype=numpy.float64)[::2]
+  a = mp.asarray([1.0, -2.0, 3.0, -4.0, 5.0, -6.0], dtype=mp.float64)[::2]
+  b = mp.asarray([7.0, 8.0, -9.0, 10.0, -11.0, 12.0], dtype=mp.float64)[::2]
+  numpy.testing.assert_allclose(mp.dot(a, b), numpy.dot(a_np, b_np), rtol=1e-12)
+  numpy.testing.assert_allclose(mp.vdot(a, b), numpy.vdot(a_np, b_np), rtol=1e-12)
+  numpy.testing.assert_allclose(mp.inner(a, b), numpy.inner(a_np, b_np), rtol=1e-12)
+
+
 def test_vecdot_axis1_matches_numpy() -> None:
   a_np = numpy.asarray([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=numpy.float64)
   b_np = numpy.asarray([[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]], dtype=numpy.float64)
   out = mp.linalg.vecdot(mp.asarray(a_np, dtype=mp.float64), mp.asarray(b_np, dtype=mp.float64), axis=1)
+  numpy.testing.assert_allclose(numpy.asarray(out), numpy.linalg.vecdot(a_np, b_np, axis=1), rtol=1e-12)
+
+
+def test_vecdot_axis1_strided_matches_numpy() -> None:
+  a_np = numpy.asarray([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]], dtype=numpy.float64)[:, ::2]
+  b_np = numpy.asarray([[8.0, 7.0, 6.0, 5.0], [4.0, 3.0, 2.0, 1.0]], dtype=numpy.float64)[:, ::2]
+  a = mp.asarray([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]], dtype=mp.float64)[:, ::2]
+  b = mp.asarray([[8.0, 7.0, 6.0, 5.0], [4.0, 3.0, 2.0, 1.0]], dtype=mp.float64)[:, ::2]
+  out = mp.linalg.vecdot(a, b, axis=1)
   numpy.testing.assert_allclose(numpy.asarray(out), numpy.linalg.vecdot(a_np, b_np, axis=1), rtol=1e-12)
 
 

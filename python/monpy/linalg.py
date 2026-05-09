@@ -45,6 +45,9 @@ def _matmul(a:ndarray, b:ndarray)->ndarray:
 def _dot_scalar(a:ndarray, b:ndarray)->_Scalar:
   return typing.cast(_Scalar, _native.linalg_dot_scalar(a._native, b._native))
 
+def _dot_scalar_fast(a:ndarray, b:ndarray)->object|None:
+  return _native.linalg_dot_scalar_float_try(a._native, b._native)
+
 def _has_norm2_kernel(x:ndarray)->bool:
   return x.dtype in(float32, float64)
 
@@ -62,6 +65,10 @@ def _norm2_last_axis(x:ndarray)->ndarray:
 
 def _vecdot_last_axis(a:ndarray, b:ndarray)->ndarray:
   return ndarray._wrap(_native.linalg_vecdot_last_axis(a._native, b._native))
+
+def _vecdot_last_axis_fast(a:ndarray, b:ndarray)->ndarray|None:
+  out=_native.linalg_vecdot_last_axis_float_try(a._native, b._native)
+  return None if out is None else ndarray._wrap(out)
 
 def _normalize_axis(axis:int, ndim:int)->int:
   ax=axis+ndim if axis<0 else axis
@@ -101,6 +108,9 @@ def det(a:object)->_Scalar:
 # the algorithm-heavy decomps (qr/svd/eig/cholesky/lstsq/pinv) raise
 # NotImplementedError until the accelerate layer wires them up.
 def dot(a:object, b:object)->object:
+  if type(a) is ndarray and type(b) is ndarray:
+    out=_dot_scalar_fast(a, b)
+    if out is not None:return out
   A=_array(a); B=_array(b)
   if A.ndim==0 or B.ndim==0:return multiply(A, B)
   if A.ndim==1 and B.ndim==1:
@@ -111,6 +121,9 @@ def dot(a:object, b:object)->object:
   raise NotImplementedError("dot: ndim>2 not implemented")
 
 def vdot(a:object, b:object)->object:
+  if type(a) is ndarray and type(b) is ndarray:
+    out=_dot_scalar_fast(a, b)
+    if out is not None:return out
   A=_array(a); B=_array(b)
   if A.ndim==1 and B.ndim==1:
     if A.shape!=B.shape:raise ValueError("vdot: shape mismatch")
@@ -123,6 +136,9 @@ def vdot(a:object, b:object)->object:
   return _matmul(A, B)._scalar()
 
 def inner(a:object, b:object)->object:
+  if type(a) is ndarray and type(b) is ndarray:
+    out=_dot_scalar_fast(a, b)
+    if out is not None:return out
   A=_array(a); B=_array(b)
   if A.ndim==0 or B.ndim==0:return multiply(A, B)
   if A.shape[-1]!=B.shape[-1]:raise ValueError("inner: trailing axis mismatch")
@@ -197,6 +213,9 @@ def vecmat(a:object, b:object)->ndarray:
   return typing.cast(ndarray, matmul(reshape(A, A.shape[:-1]+(1, A.shape[-1])), B)).reshape(A.shape[:-1]+B.shape[-1:])
 
 def vecdot(a:object, b:object, axis:int=-1)->object:
+  if type(a) is ndarray and type(b) is ndarray and (axis==-1 or axis==1):
+    out=_vecdot_last_axis_fast(a, b)
+    if out is not None:return out
   A=_array(a); B=_array(b)
   if A.ndim==2 and B.ndim==2 and A.shape==B.shape and _has_vecdot_kernel(A, B):
     ax=_normalize_axis(axis, A.ndim)

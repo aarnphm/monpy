@@ -27,6 +27,7 @@ from create import (
     copyto_ops,
     det_ops,
     diagonal_ops,
+    dot_scalar_float_try_ops,
     dot_scalar_ops,
     dtype_alignment_py_ops,
     dtype_can_cast_py_ops,
@@ -99,6 +100,7 @@ from create import (
     triu_ops,
     unary_ops,
     unary_preserve_ops,
+    vecdot_last_axis_float_try_ops,
     vecdot_last_axis_ops,
     where_ops,
 )
@@ -213,11 +215,13 @@ def PyInit__native() -> PythonObject:
         module.def_function[dtype_can_cast_py_ops]("_can_cast")
         module.def_function[matmul_ops]("matmul")
         module.def_function[dot_scalar_ops]("linalg_dot_scalar")
+        module.def_function[dot_scalar_float_try_ops]("linalg_dot_scalar_float_try")
         module.def_function[norm1_all_ops]("linalg_norm1_all")
         module.def_function[norm2_all_ops]("linalg_norm2_all")
         module.def_function[norm2_last_axis_ops]("linalg_norm2_last_axis")
         module.def_function[outer_ops]("linalg_outer")
         module.def_function[kron_ops]("linalg_kron")
+        module.def_function[vecdot_last_axis_float_try_ops]("linalg_vecdot_last_axis_float_try")
         module.def_function[vecdot_last_axis_ops]("linalg_vecdot_last_axis")
         module.def_function[solve_ops]("linalg_solve")
         module.def_function[inv_ops]("linalg_inv")

@@ -3822,3 +3822,77 @@ MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarn
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py tests/python/numpy_compat/test_linalg.py -q
 ```
+
+### 2026-05-09 dot-family facade probes
+
+The fresh slowest-sorted array sweep put the scalar dot family back at the top:
+
+| row                                      | monpy us | numpy us | ratio  |
+| ---------------------------------------- | -------: | -------: | -----: |
+| `array/linalg_api/dot_1d_32_f64`         |    5.561 |    2.406 | 2.327x |
+| `array/linalg_api/vecdot_axis1_8x4_f64`  |    6.131 |    2.824 | 2.170x |
+| `array/linalg_api/vdot_32_f64`           |    5.090 |    2.460 | 2.091x |
+| `array/linalg_api/inner_32_f64`          |    5.487 |    2.629 | 2.085x |
+
+Patch:
+
+- Added `_native.linalg_dot_scalar_float_try`.
+- Added `_native.linalg_vecdot_last_axis_float_try`.
+- The Python facade now gives exact `ndarray` float vector cases one native
+  probe before touching `ndim`, `shape`, or `dtype` properties.
+- The probe returns `None` for non-float, wrong-rank, and mismatched-shape
+  cases, so integer promotion and matrix/scalar fallback still stay on the old
+  path.
+- Strided float vectors are covered by the generic logical-index loop in Mojo,
+  which keeps the correctness surface pinned while the contiguous benchmark row
+  uses the SIMD kernel.
+
+Post-patch array rerun:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-array-20260509-dot-family-fast-probes --no-progress --no-stdout
+```
+
+Key movement:
+
+| row                                      | before us | after us | before ratio | after ratio | speedup |
+| ---------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/linalg_api/dot_1d_32_f64`         |     5.561 |    2.646 |       2.327x |      1.079x |  2.10:1 |
+| `array/linalg_api/vdot_32_f64`           |     5.090 |    2.667 |       2.091x |      1.101x |  1.91:1 |
+| `array/linalg_api/inner_32_f64`          |     5.487 |    2.666 |       2.085x |      1.048x |  2.06:1 |
+| `array/linalg_api/vecdot_axis1_8x4_f64`  |     6.131 |    2.959 |       2.170x |      1.054x |  2.07:1 |
+
+Read:
+
+- The dot family left the top cluster. The rows are still a few percent slower
+  than NumPy, but the old 2x facade tax is gone.
+- The SIMD kernel was already fine. The waste was Python asking the same native
+  object for rank, shape, and dtype before calling the native loop.
+- The new slowest rows are mostly wrapper/metadata rows:
+  `asarray_squeeze_axis0_f32` at 1.866x, `empty_like_shape_override_f32` at
+  1.837x, `transpose_add_f32` at 1.811x, and `matrix_power_2_n3_f64` at 1.801x.
+- The next linalg target is `matrix_power_2_n3_f64`. The next overall target is
+  probably the `asarray`/`squeeze`/`empty_like` metadata path.
+
+Pure-Mojo/std/threading check:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo --include-threading --thread-caps auto,1,2,4,8 --format json --sort slowest --output-dir results/local-mojo-20260509-dot-family-fast-probes --no-stdout --timeout 240
+```
+
+- Pure Mojo still reads healthy: elementwise mean ratio 0.894x, reductions
+  0.994x, matmul 1.034x.
+- Threading only pays for large enough cells. `threads1` is a tax at mean
+  1.084x. `threads4` is the best cap in this run at mean 0.603x. `auto` landed
+  at 0.675x.
+- The worst pure-Mojo row was `threading.threads1/neg_f64_1m` at 1.404x. That
+  row says the 1-thread policy is the tax; the serial unary kernel is not the
+  problem.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/create/ops/linalg.mojo src/create/ops/__init__.mojo src/create/__init__.mojo src/lib.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py tests/python/numpy_compat/test_linalg.py -q
+```

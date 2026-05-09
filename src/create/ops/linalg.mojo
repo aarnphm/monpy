@@ -515,6 +515,40 @@ def dot_scalar_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> Pytho
     return PythonObject(acc)
 
 
+def dot_scalar_float_try_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObject:
+    var lhs = lhs_obj.downcast_value_ptr[Array]()
+    var rhs = rhs_obj.downcast_value_ptr[Array]()
+    if len(lhs[].shape) != 1 or len(rhs[].shape) != 1:
+        return PythonObject(None)
+    if lhs[].shape[0] != rhs[].shape[0]:
+        return PythonObject(None)
+    if is_c_contiguous(lhs[]) and is_c_contiguous(rhs[]):
+        if lhs[].dtype_code == ArrayDType.FLOAT32.value and rhs[].dtype_code == ArrayDType.FLOAT32.value:
+            return PythonObject(
+                dot_contiguous_typed[DType.float32](
+                    contiguous_ptr[DType.float32](lhs[]),
+                    contiguous_ptr[DType.float32](rhs[]),
+                    lhs[].size_value,
+                )
+            )
+        if lhs[].dtype_code == ArrayDType.FLOAT64.value and rhs[].dtype_code == ArrayDType.FLOAT64.value:
+            return PythonObject(
+                dot_contiguous_typed[DType.float64](
+                    contiguous_ptr[DType.float64](lhs[]),
+                    contiguous_ptr[DType.float64](rhs[]),
+                    lhs[].size_value,
+                )
+            )
+    if (lhs[].dtype_code == ArrayDType.FLOAT32.value and rhs[].dtype_code == ArrayDType.FLOAT32.value) or (
+        lhs[].dtype_code == ArrayDType.FLOAT64.value and rhs[].dtype_code == ArrayDType.FLOAT64.value
+    ):
+        var acc = 0.0
+        for i in range(lhs[].size_value):
+            acc += get_logical_as_f64(lhs[], i) * get_logical_as_f64(rhs[], i)
+        return PythonObject(acc)
+    return PythonObject(None)
+
+
 def vecdot_last_axis_contiguous_typed[
     dtype: DType
 ](
@@ -563,6 +597,51 @@ def vecdot_last_axis_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises ->
             and rhs[].dtype_code == ArrayDType.FLOAT64.value
             and result.dtype_code == ArrayDType.FLOAT64.value
         ):
+            vecdot_last_axis_contiguous_typed[DType.float64](
+                contiguous_ptr[DType.float64](lhs[]),
+                contiguous_ptr[DType.float64](rhs[]),
+                contiguous_ptr[DType.float64](result),
+                rows,
+                cols,
+            )
+            return PythonObject(alloc=result^)
+    for row in range(rows):
+        var acc = 0.0
+        var base = row * cols
+        for col in range(cols):
+            acc += get_logical_as_f64(lhs[], base + col) * get_logical_as_f64(rhs[], base + col)
+        set_logical_from_f64(result, row, acc)
+    return PythonObject(alloc=result^)
+
+
+def vecdot_last_axis_float_try_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObject:
+    var lhs = lhs_obj.downcast_value_ptr[Array]()
+    var rhs = rhs_obj.downcast_value_ptr[Array]()
+    if len(lhs[].shape) != 2 or len(rhs[].shape) != 2:
+        return PythonObject(None)
+    if lhs[].shape[0] != rhs[].shape[0] or lhs[].shape[1] != rhs[].shape[1]:
+        return PythonObject(None)
+    if not (
+        (lhs[].dtype_code == ArrayDType.FLOAT32.value and rhs[].dtype_code == ArrayDType.FLOAT32.value)
+        or (lhs[].dtype_code == ArrayDType.FLOAT64.value and rhs[].dtype_code == ArrayDType.FLOAT64.value)
+    ):
+        return PythonObject(None)
+    var rows = lhs[].shape[0]
+    var cols = lhs[].shape[1]
+    var shape = List[Int]()
+    shape.append(rows)
+    var result = make_empty_array(lhs[].dtype_code, shape^)
+    if is_c_contiguous(lhs[]) and is_c_contiguous(rhs[]) and is_c_contiguous(result):
+        if lhs[].dtype_code == ArrayDType.FLOAT32.value:
+            vecdot_last_axis_contiguous_typed[DType.float32](
+                contiguous_ptr[DType.float32](lhs[]),
+                contiguous_ptr[DType.float32](rhs[]),
+                contiguous_ptr[DType.float32](result),
+                rows,
+                cols,
+            )
+            return PythonObject(alloc=result^)
+        if lhs[].dtype_code == ArrayDType.FLOAT64.value:
             vecdot_last_axis_contiguous_typed[DType.float64](
                 contiguous_ptr[DType.float64](lhs[]),
                 contiguous_ptr[DType.float64](rhs[]),

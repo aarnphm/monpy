@@ -50,6 +50,7 @@ from .elementwise import (
 from .linalg import (
     cholesky_ops,
     det_ops,
+    dot_scalar_float_try_ops,
     dot_scalar_ops,
     eig_ops,
     eigh_ops,
@@ -67,6 +68,7 @@ from .linalg import (
     svd_ops,
     tensorinv_ops,
     tensorsolve_ops,
+    vecdot_last_axis_float_try_ops,
     vecdot_last_axis_ops,
 )
 from .nn import layer_norm_last_axis_ops, scaled_masked_softmax_last_axis_ops, softmax_last_axis_ops

@@ -184,6 +184,7 @@ from .ops.dtype import (
 from .ops.linalg import (
     cholesky_ops,
     det_ops,
+    dot_scalar_float_try_ops,
     dot_scalar_ops,
     eig_ops,
     eigh_ops,
@@ -202,6 +203,7 @@ from .ops.linalg import (
     svd_ops,
     tensorinv_ops,
     tensorsolve_ops,
+    vecdot_last_axis_float_try_ops,
     vecdot_last_axis_ops,
 )
 from .ops.nn import (
