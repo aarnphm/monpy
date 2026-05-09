@@ -827,7 +827,14 @@ def iinfo(dtype:object)->_IInfo:
   try:return _IINFO[d]
   except KeyError as exc:raise ValueError(f"Invalid integer data type {d.kind!r}.") from exc
 
-def array(obj:object, dtype:object=None, *, copy:builtins.bool|None=True, device:object=None)->ndarray:return asarray(obj, dtype=dtype, copy=copy, device=device)
+def array(obj:object, dtype:object=None, *, copy:builtins.bool|None=True, device:object=None)->ndarray:
+  if device is not None and device!="cpu":raise NotImplementedError("monpy v1 only supports cpu arrays")
+  if dtype is complex128 and copy is True:
+    try:return ndarray(_native.asarray_complex128_copy_from_buffer(obj))
+    except Exception as exc:
+      message=str(exc)
+      if _is_numpy_array(obj) and "buffer format unsupported" in message:raise NotImplementedError("unsupported dtype") from exc
+  return asarray(obj, dtype=dtype, copy=copy, device=device)
 
 def asarray(obj:object, dtype:object=None, *, copy:builtins.bool|None=None, device:object=None)->ndarray:
   if device is not None and device!="cpu":raise NotImplementedError("monpy v1 only supports cpu arrays")

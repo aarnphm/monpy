@@ -1495,3 +1495,82 @@ Next target should move to `complex/interop/array_copy_complex128` or the
 attention rows. For complex reverse views, the easy wrapper win is spent and the
 remaining ratio is mostly Python object overhead around two view creations plus
 one already-fused native add.
+
+### 2026-05-09 direct `array(..., complex128, copy=True)` buffer path
+
+The next live refresh included both complex and attention rows:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.815 | 1.996 | 1.409x |
+| `complex/interop/array_copy_complex128` | 3.271 | 2.478 | 1.324x |
+| `complex/views/reversed_add_complex64` | 4.078 | 3.110 | 1.312x |
+| `attention/attention/causal_attention_t32_d32_f32` | 20.488 | 21.857 | 0.937x |
+| `attention/softmax/causal_scores_t32_f32` | 7.995 | 10.007 | 0.799x |
+| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 78.485 | 107.275 | 0.733x |
+
+The attention rows are already ahead of NumPy in this slice, so this pass stayed
+on `complex/interop/array_copy_complex128`. The raw copy leaf showed a facade
+gap: `_native.asarray_complex128_copy_from_buffer(src)` was about 0.705 us,
+wrapping it as `ndarray(...)` was about 0.801 us, but `monpy.array(src,
+dtype=complex128, copy=True)` was about 1.051 us because it bounced through
+`asarray(...)` before reaching the exact native wrapper.
+
+`python/monpy/__init__.py` now gives `array(..., dtype=complex128, copy=True)`
+a direct native-buffer path. It still falls back to `asarray(...)` for lists,
+non-exact dtype aliases, `copy=None`/`False`, existing monpy arrays, and the
+general object-coercion paths.
+
+Raw post-fix timing:
+
+| path | before | after |
+| --- | ---: | ---: |
+| native complex128 copy wrapper | 0.711 us | 0.705 us |
+| `ndarray(native complex128 copy)` | 0.808 us | 0.801 us |
+| `monpy.asarray(..., complex128, copy=True)` | 1.025 us | 1.029 us |
+| `monpy.array(..., complex128, copy=True)` | 1.051 us | 0.876 us |
+| `numpy.array(..., complex128, copy=True)` | 0.461 us | 0.453 us |
+
+Focused verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_round_trip tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_copy_true_detaches_storage tests/python/numpy_compat/test_array_coercion.py::test_numpy_array_copy_true_detaches_storage tests/python/numpy_compat/test_array_coercion.py::test_array_and_asarray_copy_rules_for_existing_monpy_arrays -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_array_coercion.py::test_explicit_supported_dtype_casts_match_numpy tests/python/numpy_compat/test_array_coercion.py::test_array_and_asarray_copy_rules_for_existing_monpy_arrays tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_round_trip tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_copy_true_detaches_storage -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --repeats 7 --rounds 5 --matrix-sizes 64 --format json --sort ratio --output-dir results/local-sweep-20260509-complex-array-c128-direct-copy --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/interop/array_copy_complex128 --types complex --candidate monpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-array-copy-complex128-direct-array-monpy --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/interop/array_copy_complex128 --types complex --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-array-copy-complex128-direct-array-numpy --sample --no-perf-stat
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/python -m monpy._bench.mojo_sweep --format json --sort ratio --output-dir results/local-sweep-20260509-mojo-stdlib-refresh --no-stdout --timeout 300
+```
+
+Official post-fix benchmark results:
+
+| row | before | after | delta |
+| --- | ---: | ---: | ---: |
+| `complex/interop/array_copy_complex128` | 3.271 us, 1.324x | 3.115 us, 1.268x | 1.05x faster |
+
+The profile manifests reported `complex/interop/array_copy_complex128` at 3.245
+us/call for monpy and 2.647 us/call for NumPy. Monpy used the generic backend
+code 0 copy path, max RSS was about 49.6 MB, and the traced peak was 1,590
+bytes. NumPy's traced peak was 33,992 bytes. No hardware PMU counters were
+collected because `--no-perf-stat` was used; the `sample(1)` captures live under
+`results/local-profile-20260509-array-copy-complex128-direct-array-*`.
+
+The pure-Mojo stdlib sweep also completed. The largest candidate/stdlib ratios
+were small: `small_matmul_f32_8` at 1.078x, `add_f32_1m` at 1.068x,
+`sum_f32_1k` at 1.044x, and `prod_f64_64k` at 1.044x. That says the current
+high-ratio NumPy-facing rows are mostly facade/object-bound, not a clear signal
+that a production kernel should be replaced with a stdlib primitive today.
+
+Remaining frontier after this slice:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.793 | 1.963 | 1.419x |
+| `complex/views/reversed_add_complex64` | 4.086 | 3.072 | 1.329x |
+| `complex/casts/astype_complex64_to_complex128` | 3.323 | 2.588 | 1.286x |
+| `complex/interop/array_copy_complex128` | 3.115 | 2.468 | 1.268x |
+| `complex/elementwise/binary_add_complex128` | 3.253 | 2.658 | 1.224x |
+
+Next target should be `complex/interop/asarray_complex64`. It remains the top
+ratio row, and the stdlib sweep does not point to a lower-level Mojo kernel as
+the immediate blocker.
