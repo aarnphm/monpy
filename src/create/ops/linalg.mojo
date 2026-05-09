@@ -12,10 +12,13 @@ result(s), call into elementwise, return a Python list-or-Array.
 
 from std.math import log as _log, sqrt as _sqrt
 from std.python import Python, PythonObject
+from std.sys import simd_width_of
 
 from array import (
     Array,
+    contiguous_ptr,
     get_logical_as_f64,
+    is_c_contiguous,
     make_empty_array,
     result_dtype_for_binary,
     result_dtype_for_linalg,
@@ -38,6 +41,98 @@ from elementwise import (
 )
 
 from create._complex_helpers import _complex_imag, _complex_real, _complex_store
+
+
+def outer_contiguous_typed[
+    dtype: DType
+](
+    lhs_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    rhs_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    lhs_size: Int,
+    rhs_size: Int,
+) raises where dtype.is_floating_point():
+    comptime width = simd_width_of[dtype]()
+    for i in range(lhs_size):
+        var base = i * rhs_size
+        var lhs_vec = SIMD[dtype, width](lhs_ptr[i])
+        var j = 0
+        while j + width <= rhs_size:
+            out_ptr.store(base + j, lhs_vec * rhs_ptr.load[width=width](j))
+            j += width
+        while j < rhs_size:
+            out_ptr[base + j] = lhs_ptr[i] * rhs_ptr[j]
+            j += 1
+
+
+def maybe_outer_contiguous(lhs: Array, rhs: Array, mut result: Array) raises -> Bool:
+    if not is_c_contiguous(lhs) or not is_c_contiguous(rhs) or not is_c_contiguous(result):
+        return False
+    if (
+        lhs.dtype_code == ArrayDType.FLOAT32.value
+        and rhs.dtype_code == ArrayDType.FLOAT32.value
+        and result.dtype_code == ArrayDType.FLOAT32.value
+    ):
+        outer_contiguous_typed[DType.float32](
+            contiguous_ptr[DType.float32](lhs),
+            contiguous_ptr[DType.float32](rhs),
+            contiguous_ptr[DType.float32](result),
+            lhs.size_value,
+            rhs.size_value,
+        )
+        return True
+    if (
+        lhs.dtype_code == ArrayDType.FLOAT64.value
+        and rhs.dtype_code == ArrayDType.FLOAT64.value
+        and result.dtype_code == ArrayDType.FLOAT64.value
+    ):
+        outer_contiguous_typed[DType.float64](
+            contiguous_ptr[DType.float64](lhs),
+            contiguous_ptr[DType.float64](rhs),
+            contiguous_ptr[DType.float64](result),
+            lhs.size_value,
+            rhs.size_value,
+        )
+        return True
+    return False
+
+
+def outer_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObject:
+    var lhs = lhs_obj.downcast_value_ptr[Array]()
+    var rhs = rhs_obj.downcast_value_ptr[Array]()
+    var out_shape = List[Int]()
+    out_shape.append(lhs[].size_value)
+    out_shape.append(rhs[].size_value)
+    var result = make_empty_array(
+        result_dtype_for_binary(lhs[].dtype_code, rhs[].dtype_code, BinaryOp.MUL.value),
+        out_shape^,
+    )
+    if maybe_outer_contiguous(lhs[], rhs[], result):
+        return PythonObject(alloc=result^)
+    var result_is_complex = (
+        result.dtype_code == ArrayDType.COMPLEX64.value or result.dtype_code == ArrayDType.COMPLEX128.value
+    )
+    for i in range(lhs[].size_value):
+        for j in range(rhs[].size_value):
+            var out_index = i * rhs[].size_value + j
+            if result_is_complex:
+                var lhs_re = _complex_real(lhs[], i)
+                var lhs_im = _complex_imag(lhs[], i)
+                var rhs_re = _complex_real(rhs[], j)
+                var rhs_im = _complex_imag(rhs[], j)
+                _complex_store(
+                    result,
+                    out_index,
+                    lhs_re * rhs_re - lhs_im * rhs_im,
+                    lhs_re * rhs_im + lhs_im * rhs_re,
+                )
+            else:
+                set_logical_from_f64(
+                    result,
+                    out_index,
+                    get_logical_as_f64(lhs[], i) * get_logical_as_f64(rhs[], j),
+                )
+    return PythonObject(alloc=result^)
 
 
 def matmul_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObject:

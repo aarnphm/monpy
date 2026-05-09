@@ -107,9 +107,8 @@ def inner(a:object, b:object)->object:
   raise NotImplementedError("inner: only 1D x 1D / 1D x N / N x 1D supported in v1")
 
 def outer(a:object, b:object)->ndarray:
-  A=ravel(_array(a))
-  B=ravel(_array(b))
-  return matmul(reshape(A, (A.shape[0], 1)), reshape(B, (1, B.shape[0])))
+  A=_array(a); B=_array(b)
+  return ndarray._wrap(_w(_native.linalg_outer, A._native, B._native))
 
 def tensordot(a:object, b:object, axes:int|tuple[object, object]=2)->object:
   A=_array(a)

@@ -188,6 +188,7 @@ from .ops.linalg import (
     inv_ops,
     lstsq_ops,
     matmul_ops,
+    outer_ops,
     pinv_ops,
     qr_ops,
     slogdet_ops,

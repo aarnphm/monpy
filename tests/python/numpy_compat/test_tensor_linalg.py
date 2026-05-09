@@ -36,6 +36,20 @@ def test_outer_basic() -> None:
   numpy.testing.assert_array_equal(numpy.asarray(out), [[4, 5], [8, 10], [12, 15]])
 
 
+def test_outer_strided_inputs_match_numpy() -> None:
+  a_np = numpy.asarray([1.0, 2.0, 3.0, 4.0])[::-1]
+  b_np = numpy.asarray([5.0, 6.0, 7.0, 8.0])[::2]
+  out = mp.outer(mp.asarray(a_np, dtype=mp.float64), mp.asarray(b_np, dtype=mp.float64))
+  numpy.testing.assert_array_equal(numpy.asarray(out), numpy.outer(a_np, b_np))
+
+
+def test_outer_complex_inputs_match_numpy() -> None:
+  a_np = numpy.asarray([1.0 + 2.0j, 3.0 - 1.0j])
+  b_np = numpy.asarray([2.0 - 1.0j, -4.0 + 0.5j])
+  out = mp.outer(mp.asarray(a_np, dtype=mp.complex128), mp.asarray(b_np, dtype=mp.complex128))
+  numpy.testing.assert_allclose(numpy.asarray(out), numpy.outer(a_np, b_np), rtol=1e-12)
+
+
 def test_inner_1d() -> None:
   a = mp.asarray([1.0, 2.0, 3.0], dtype=mp.float64)
   b = mp.asarray([4.0, 5.0, 6.0], dtype=mp.float64)

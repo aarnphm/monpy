@@ -3381,3 +3381,58 @@ Verification:
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py tests/python/numpy_compat/test_einsum.py -q
 git diff --check -- python/monpy/linalg.py docs/opts.md
 ```
+
+### 2026-05-09 native outer product kernel
+
+Fresh array-only rerun before this patch, using the current dirty tree:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-array-20260509-outer-frontier --no-progress --no-stdout
+```
+
+Top row:
+
+| row                             | monpy us | numpy us | ratio  |
+| ------------------------------- | -------: | -------: | -----: |
+| `array/linalg_api/outer_32_f64` |   12.304 |    4.099 | 3.100x |
+
+Patch:
+
+- Added `_native.linalg_outer`, with a typed SIMD fast path for contiguous
+  `float32` / `float64` vectors.
+- Kept a logical-index fallback for strided and complex inputs. No fake speed if
+  the input layout is annoying; we still return the same answer.
+- Routed `mp.outer` through the native op instead of spelling it as
+  `reshape(a, (n, 1)) @ reshape(b, (1, m))`. That old route was paying GEMM
+  dispatch for a rank-1 product, which is the wrong denominator.
+- Added coverage for strided and complex `outer`, because the fast path and
+  fallback path should both have a tripwire.
+
+Post-patch array rerun:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-array-20260509-native-outer --no-progress --no-stdout
+```
+
+Key movement:
+
+| row                             | before us | after us | before ratio | after ratio | speedup |
+| ------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/linalg_api/outer_32_f64` |    12.304 |    3.397 |       3.100x |      0.809x |  3.62:1 |
+
+Read:
+
+- `outer_32_f64` is no longer the top NumPy regression; it now beats NumPy on
+  this row.
+- The new top row is `array/linalg_api/vecdot_axis1_8x4_f64` at 2.665x slower
+  (`7.316 us` vs `2.824 us`).
+- The next linalg cluster is still obvious: `vecdot`, `matrix_norm`, vector
+  `norm`, and `kron` all allocate at least one avoidable temporary or walk
+  through generic reduction.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/create/ops/linalg.mojo src/create/ops/__init__.mojo src/create/__init__.mojo src/lib.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py -q
+```
