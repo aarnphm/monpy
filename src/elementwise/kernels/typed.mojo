@@ -59,6 +59,7 @@ from domain import BinaryOp, UnaryOp
 from elementwise.kernels.parallel import (
     ELEMENTWISE_HEAVY_GRAIN,
     ELEMENTWISE_LIGHT_GRAIN,
+    unary_op_grain,
     worker_count_for_bytes,
 )
 
@@ -707,13 +708,13 @@ def unary_contig_typed[
 ) raises where dtype.is_floating_point():
     if try_unary_contig_typed_static[dtype](src_ptr, out_ptr, size, op):
         return
-    # Per-worker work budget: ELEMENTWISE_HEAVY_GRAIN (256KB). Unary ops
-    # like exp/log/sin/cos do enough per-element work to amortize spawn
-    # cost earlier than binary add/mul. Cheap unary (neg/abs/square)
-    # also fans out at this size — slightly under-utilized but correct;
-    # an op-kind table refinement is a future improvement.
+    # Per-worker work budget switches on op class via `unary_op_grain`:
+    # transcendentals (0..17) get the 256KB heavy budget — libm-class
+    # per-lane work amortises spawn cost early. Cheap arithmetic
+    # (negate/abs/square/floor/...) gets the 2MB light budget; below that
+    # one thread already saturates DRAM and forking is loss.
     var byte_count = size * size_of[Scalar[dtype]]()
-    var nworkers = worker_count_for_bytes(size, byte_count, ELEMENTWISE_HEAVY_GRAIN)
+    var nworkers = worker_count_for_bytes(size, byte_count, unary_op_grain(op))
     if nworkers <= 1:
         _unary_contig_typed_serial[dtype](src_ptr, out_ptr, size, op)
         return

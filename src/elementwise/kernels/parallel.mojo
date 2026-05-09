@@ -193,3 +193,22 @@ def should_parallelize_rows(row_count: Int) -> Bool:
     `worker_count_for_row_elements` so 32x32 attention does not fan out.
     """
     return worker_count_for_rows(row_count) > 1
+
+
+def unary_op_grain(op: Int) -> Int:
+    """Per-worker byte budget for `unary_contig_typed`, branched by op cost.
+
+    UnaryOp values 0..17 are transcendentals (sin/cos/exp/log/tan/asin/acos/
+    atan/sinh/cosh/tanh/log1p/log2/log10/exp2/expm1/sqrt/cbrt). Each lane is
+    a libm-class call — 10-50 cycles — so per-thread spawn amortises at the
+    256KB heavy gate.
+
+    Values 18..40 are cheap (deg2rad/rad2deg, reciprocal, neg/pos/abs/square/
+    sign, floor/ceil/trunc/rint, logical_not, conjugate). One SIMD op per
+    element, ~1 cycle. They need the 2MB light gate or threading is loss.
+
+    Reference: `src/domain.mojo:96-130` (UnaryOp enum).
+    """
+    if op <= 17:
+        return ELEMENTWISE_HEAVY_GRAIN
+    return ELEMENTWISE_LIGHT_GRAIN

@@ -58,6 +58,7 @@ from .parallel import (
     should_parallelize_bytes,
     should_parallelize_rows,
     thread_limit,
+    unary_op_grain,
     worker_count,
     worker_count_for_bytes,
     worker_count_for_row_elements,
