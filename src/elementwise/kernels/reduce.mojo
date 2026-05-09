@@ -330,7 +330,6 @@ def reduce_min_par_typed[
 
     var partials = alloc[Float64](nworkers)
     var chunk = ceildiv(size, nworkers)
-    var live_workers = 0
 
     @parameter
     def worker(i: Int) raises:
@@ -339,16 +338,16 @@ def reduce_min_par_typed[
         if end > size:
             end = size
         if start >= size:
-            # Sentinel: any +inf-ish value the master will skip via live_workers.
+            # Sentinel: master skips entries past live_workers.
             partials[i] = 0.0
             return
         partials[i] = Float64(reduce_min_typed[dtype](src_ptr + start, end - start))
 
     sync_parallelize[worker](nworkers)
 
-    # Count live workers so we know which partials are valid. Equivalent
-    # to ceildiv(size, chunk).
-    live_workers = ceildiv(size, chunk)
+    # Live worker count is ceildiv(size, chunk); partials past this are
+    # the sentinel zeros and must not participate in min/max.
+    var live_workers = ceildiv(size, chunk)
     var acc = partials[0]
     for i in range(1, live_workers):
         var v = partials[i]
@@ -771,9 +770,17 @@ def maybe_reduce_contiguous(src: Array, mut result: Array, op: Int) raises -> Bo
     if op == ReduceOp.PROD.value:
         var acc: Float64
         if src.dtype_code == ArrayDType.FLOAT32.value:
-            acc = Float64(reduce_prod_typed[DType.float32](contiguous_ptr[DType.float32](src), src.size_value))
+            var ptr = contiguous_ptr[DType.float32](src)
+            if should_parallelize_bytes(src.size_value * 4, REDUCE_GRAIN):
+                acc = Float64(reduce_prod_par_typed[DType.float32](ptr, src.size_value))
+            else:
+                acc = Float64(reduce_prod_typed[DType.float32](ptr, src.size_value))
         elif src.dtype_code == ArrayDType.FLOAT64.value:
-            acc = Float64(reduce_prod_typed[DType.float64](contiguous_ptr[DType.float64](src), src.size_value))
+            var ptr = contiguous_ptr[DType.float64](src)
+            if should_parallelize_bytes(src.size_value * 8, REDUCE_GRAIN):
+                acc = Float64(reduce_prod_par_typed[DType.float64](ptr, src.size_value))
+            else:
+                acc = Float64(reduce_prod_typed[DType.float64](ptr, src.size_value))
         else:
             return False
         set_logical_from_f64(result, 0, acc)
@@ -783,15 +790,31 @@ def maybe_reduce_contiguous(src: Array, mut result: Array, op: Int) raises -> Bo
             return False
         var acc: Float64
         if src.dtype_code == ArrayDType.FLOAT32.value:
+            var ptr = contiguous_ptr[DType.float32](src)
+            var go_par = should_parallelize_bytes(src.size_value * 4, REDUCE_GRAIN)
             if op == ReduceOp.MIN.value:
-                acc = Float64(reduce_min_typed[DType.float32](contiguous_ptr[DType.float32](src), src.size_value))
+                if go_par:
+                    acc = Float64(reduce_min_par_typed[DType.float32](ptr, src.size_value))
+                else:
+                    acc = Float64(reduce_min_typed[DType.float32](ptr, src.size_value))
             else:
-                acc = Float64(reduce_max_typed[DType.float32](contiguous_ptr[DType.float32](src), src.size_value))
+                if go_par:
+                    acc = Float64(reduce_max_par_typed[DType.float32](ptr, src.size_value))
+                else:
+                    acc = Float64(reduce_max_typed[DType.float32](ptr, src.size_value))
         elif src.dtype_code == ArrayDType.FLOAT64.value:
+            var ptr = contiguous_ptr[DType.float64](src)
+            var go_par = should_parallelize_bytes(src.size_value * 8, REDUCE_GRAIN)
             if op == ReduceOp.MIN.value:
-                acc = Float64(reduce_min_typed[DType.float64](contiguous_ptr[DType.float64](src), src.size_value))
+                if go_par:
+                    acc = Float64(reduce_min_par_typed[DType.float64](ptr, src.size_value))
+                else:
+                    acc = Float64(reduce_min_typed[DType.float64](ptr, src.size_value))
             else:
-                acc = Float64(reduce_max_typed[DType.float64](contiguous_ptr[DType.float64](src), src.size_value))
+                if go_par:
+                    acc = Float64(reduce_max_par_typed[DType.float64](ptr, src.size_value))
+                else:
+                    acc = Float64(reduce_max_typed[DType.float64](ptr, src.size_value))
         else:
             return False
         set_logical_from_f64(result, 0, acc)
