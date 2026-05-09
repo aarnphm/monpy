@@ -3076,3 +3076,80 @@ for name, fn in cases:
 PY
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-sweep-20260509-view-unchecked --no-progress --no-stdout
 ```
+
+### 2026-05-09 tiny eigh and linalg list construction
+
+Second iteration from the full frontier: tiny linalg fixed costs. The profile
+for `eigh_2_f64` showed two separate problems wearing the same jacket:
+
+- LAPACK setup for a 2x2 symmetric matrix.
+- `Python.evaluate("[]")` for the two-return Python list.
+
+I added a closed-form symmetric 2x2 `eigh` path in the native linalg bridge:
+eigenvalues come from the half-trace plus/minus
+`sqrt(half_diff**2 + lower_offdiag**2)`, and eigenvector columns are normalized
+from `(b, lambda - a)` with diagonal/degenerate fallbacks. The path reads the
+already-UPLO-adjusted lower triangle, so Python's existing `UPLO='U'` transpose
+behavior still works.
+
+The bigger win was killing `Python.evaluate("[]")`. `std.python.Python.list`
+constructs the result list directly through CPython list allocation and
+reference stealing. I switched the linalg multi-return ops to that path:
+`qr`, `eigh`, `eig`, `svd`, and `lstsq`.
+
+Local array sweep:
+
+| row | before us | after us | before ratio | after ratio | speedup |
+| --- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/decomp/eigh_2_f64` | 9.705 | 5.636 | 1.988x | 1.180x | 1.72:1 |
+| `array/decomp/eigh_2_f32` | 9.305 | 5.570 | 1.780x | 1.060x | 1.67:1 |
+| `array/decomp/eigh_4_f64` | 10.014 | 6.847 | 1.835x | 1.285x | 1.46:1 |
+| `array/decomp/eigh_4_f32` | 10.147 | 6.716 | 1.623x | 1.105x | 1.51:1 |
+| `array/decomp/svd_2_f64` | 9.239 | 5.214 | 1.275x | 0.746x | 1.77:1 |
+| `array/decomp/svd_4_f64` | 10.234 | 6.186 | 1.247x | 0.758x | 1.65:1 |
+| `array/decomp/qr_2_f64` | 8.726 | 5.360 | 0.744x | 0.476x | 1.63:1 |
+
+Read:
+
+- The 2x2 closed-form path helped, but list construction was the broad fixed
+  cost. `eigh_4_*` improved even though it still uses LAPACK, which pins the
+  real culprit.
+- `svd_2_f64` and `svd_4_f64` moved from slower than NumPy to roughly 25% faster
+  than NumPy in this local run. Good loot. No new numerical shortcut was needed.
+- The top current macOS slow row is now `empty_like_shape_override_f32` at
+  4.377 us vs 2.268 us, 1.930x. That row is probably Python facade and shape
+  normalization overhead; do not edit it while facade files are dirty unless the
+  worktree has been refreshed and the staged/unstaged state is clear.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/create/ops/linalg.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python - <<'PY'
+import time
+import numpy as np
+import monpy as mp
+
+x64 = np.array([[2.0, 1.0], [1.0, 3.0]], dtype=np.float64)
+x32 = x64.astype(np.float32)
+for name, arr, dtype in [
+  ("eigh2_f64", x64, mp.float64),
+  ("eigvalsh2_f64", x64, mp.float64),
+  ("eigh2_f32", x32, mp.float32),
+]:
+  a = mp.asarray(arr, dtype=dtype)
+  fn = (lambda a=a: mp.linalg.eigh(a)) if name.startswith("eigh") else (lambda a=a: mp.linalg.eigvalsh(a))
+  for _ in range(1000):
+    fn()
+  best = 10**9
+  for _ in range(7):
+    t0 = time.perf_counter_ns()
+    for _ in range(10000):
+      fn()
+    best = min(best, (time.perf_counter_ns() - t0) / 10000)
+  print(f"{name}: {best:.1f} ns")
+PY
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-sweep-20260509-linalg-list-builder --no-progress --no-stdout
+```

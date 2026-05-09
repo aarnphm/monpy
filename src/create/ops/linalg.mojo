@@ -10,6 +10,7 @@ Why grouped: every op shares the same shape — unbox arrays, allocate
 result(s), call into elementwise, return a Python list-or-Array.
 """
 
+from std.math import sqrt as _sqrt
 from std.python import Python, PythonObject
 
 from array import (
@@ -198,10 +199,7 @@ def qr_ops(array_obj: PythonObject, mode_obj: PythonObject) raises -> PythonObje
             lapack_qr_reduced_into[DType.float32](src[], q, r)
         else:
             lapack_qr_reduced_into[DType.float64](src[], q, r)
-        var out = Python.evaluate("[]")
-        _ = out.append(PythonObject(alloc=q^))
-        _ = out.append(PythonObject(alloc=r^))
-        return out
+        return Python.list(PythonObject(alloc=q^), PythonObject(alloc=r^))
     if mode == 1:
         # mode='complete': Q is (m, m), R is (m, n). Numpy uses sgeqrf
         # then sorgqr to build full Q (m × m) — pad with extra columns
@@ -221,10 +219,7 @@ def qr_ops(array_obj: PythonObject, mode_obj: PythonObject) raises -> PythonObje
             lapack_qr_reduced_into[DType.float32](src[], q, r)
         else:
             lapack_qr_reduced_into[DType.float64](src[], q, r)
-        var out = Python.evaluate("[]")
-        _ = out.append(PythonObject(alloc=q^))
-        _ = out.append(PythonObject(alloc=r^))
-        return out
+        return Python.list(PythonObject(alloc=q^), PythonObject(alloc=r^))
     if mode == 2:
         # mode='r': just R, shape (k, n)
         var r_shape = List[Int]()
@@ -256,6 +251,66 @@ def cholesky_ops(array_obj: PythonObject) raises -> PythonObject:
     return PythonObject(alloc=result^)
 
 
+def _abs_f64(value: Float64) -> Float64:
+    if value < 0.0:
+        return -value
+    return value
+
+
+def _write_eigh2_vector(mut out: Array, column: Int, a00: Float64, a10: Float64, a11: Float64, eig: Float64) raises:
+    var x = a10
+    var y = eig - a00
+    var norm = _sqrt(x * x + y * y)
+    if norm == 0.0:
+        x = eig - a11
+        y = a10
+        norm = _sqrt(x * x + y * y)
+    if norm == 0.0:
+        # Degenerate fallback. The diagonal case handles the real branch; this
+        # only protects exact repeated roots from returning NaNs.
+        if column == 0:
+            set_logical_from_f64(out, 0, 1.0)
+            set_logical_from_f64(out, 2, 0.0)
+        else:
+            set_logical_from_f64(out, 1, 0.0)
+            set_logical_from_f64(out, 3, 1.0)
+        return
+    var inv_norm = 1.0 / norm
+    set_logical_from_f64(out, column, x * inv_norm)
+    set_logical_from_f64(out, 2 + column, y * inv_norm)
+
+
+def _eigh2_into(src: Array, mut w: Array, mut v: Array, compute_v: Bool) raises:
+    var a00 = get_logical_as_f64(src, 0)
+    # Native eigh receives the UPLO-adjusted matrix. Read the lower triangle:
+    # [[a00, a10], [a10, a11]].
+    var a10 = get_logical_as_f64(src, 2)
+    var a11 = get_logical_as_f64(src, 3)
+    var half_trace = 0.5 * (a00 + a11)
+    var half_diff = 0.5 * (a00 - a11)
+    var radius = _sqrt(half_diff * half_diff + a10 * a10)
+    var l0 = half_trace - radius
+    var l1 = half_trace + radius
+    set_logical_from_f64(w, 0, l0)
+    set_logical_from_f64(w, 1, l1)
+    if not compute_v:
+        return
+    if _abs_f64(a10) == 0.0:
+        if a00 <= a11:
+            set_logical_from_f64(v, 0, 1.0)
+            set_logical_from_f64(v, 1, 0.0)
+            set_logical_from_f64(v, 2, 0.0)
+            set_logical_from_f64(v, 3, 1.0)
+        else:
+            set_logical_from_f64(v, 0, 0.0)
+            set_logical_from_f64(v, 1, 1.0)
+            set_logical_from_f64(v, 2, 1.0)
+            set_logical_from_f64(v, 3, 0.0)
+        return
+    _write_eigh2_vector(v, 0, a00, a10, a11, l0)
+    _write_eigh2_vector(v, 1, a00, a10, a11, l1)
+
+
 def eigh_ops(array_obj: PythonObject, compute_eigenvectors_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
     if len(src[].shape) != 2 or src[].shape[0] != src[].shape[1]:
@@ -274,14 +329,13 @@ def eigh_ops(array_obj: PythonObject, compute_eigenvectors_obj: PythonObject) ra
         # Allocate a 0-element placeholder — caller ignores it for eigvalsh.
         v_shape.append(0)
     var v = make_empty_array(dtype_code, v_shape^)
-    if dtype_code == ArrayDType.FLOAT32.value:
+    if n == 2:
+        _eigh2_into(src[], w, v, compute_v)
+    elif dtype_code == ArrayDType.FLOAT32.value:
         lapack_eigh_into[DType.float32](src[], w, v, compute_v)
     else:
         lapack_eigh_into[DType.float64](src[], w, v, compute_v)
-    var out = Python.evaluate("[]")
-    _ = out.append(PythonObject(alloc=w^))
-    _ = out.append(PythonObject(alloc=v^))
-    return out
+    return Python.list(PythonObject(alloc=w^), PythonObject(alloc=v^))
 
 
 def eig_ops(array_obj: PythonObject, compute_eigenvectors_obj: PythonObject) raises -> PythonObject:
@@ -309,12 +363,9 @@ def eig_ops(array_obj: PythonObject, compute_eigenvectors_obj: PythonObject) rai
         all_real = lapack_eig_real_into[DType.float32](src[], wr, wi, v, compute_v)
     else:
         all_real = lapack_eig_real_into[DType.float64](src[], wr, wi, v, compute_v)
-    var out = Python.evaluate("[]")
-    _ = out.append(PythonObject(alloc=wr^))
-    _ = out.append(PythonObject(alloc=wi^))
-    _ = out.append(PythonObject(alloc=v^))
-    _ = out.append(PythonObject(all_real))
-    return out
+    return Python.list(
+        PythonObject(alloc=wr^), PythonObject(alloc=wi^), PythonObject(alloc=v^), PythonObject(all_real)
+    )
 
 
 def svd_ops(
@@ -354,11 +405,7 @@ def svd_ops(
         lapack_svd_into[DType.float32](src[], u, s, vt, full_matrices, compute_uv)
     else:
         lapack_svd_into[DType.float64](src[], u, s, vt, full_matrices, compute_uv)
-    var out = Python.evaluate("[]")
-    _ = out.append(PythonObject(alloc=u^))
-    _ = out.append(PythonObject(alloc=s^))
-    _ = out.append(PythonObject(alloc=vt^))
-    return out
+    return Python.list(PythonObject(alloc=u^), PythonObject(alloc=s^), PythonObject(alloc=vt^))
 
 
 def lstsq_ops(a_obj: PythonObject, b_obj: PythonObject, rcond_obj: PythonObject) raises -> PythonObject:
@@ -394,11 +441,7 @@ def lstsq_ops(a_obj: PythonObject, b_obj: PythonObject, rcond_obj: PythonObject)
     else:
         var rcond_f64 = Float64(py=rcond_obj)
         lapack_lstsq_into[DType.float64](a[], b[], x, s, rcond_f64, rank_ptr)
-    var out = Python.evaluate("[]")
-    _ = out.append(PythonObject(alloc=x^))
-    _ = out.append(PythonObject(alloc=s^))
-    _ = out.append(PythonObject(rank_buf))
-    return out
+    return Python.list(PythonObject(alloc=x^), PythonObject(alloc=s^), PythonObject(rank_buf))
 
 
 def pinv_ops(a_obj: PythonObject, rcond_obj: PythonObject) raises -> PythonObject:
