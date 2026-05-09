@@ -57,6 +57,7 @@ from .linalg import (
     inv_ops,
     kron_ops,
     lstsq_ops,
+    matrix_power_float_try_ops,
     matmul_ops,
     norm1_all_ops,
     norm2_all_ops,

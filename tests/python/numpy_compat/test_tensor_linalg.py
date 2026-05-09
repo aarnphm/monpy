@@ -197,10 +197,71 @@ def test_matrix_power_zero_returns_identity() -> None:
   numpy.testing.assert_array_equal(numpy.asarray(out), [[1, 0], [0, 1]])
 
 
+def test_matrix_power_empty_zero_matches_numpy() -> None:
+  a_np = numpy.empty((0, 0), dtype=numpy.float64)
+  out = mp.linalg.matrix_power(mp.asarray(a_np, dtype=mp.float64), 0)
+  numpy.testing.assert_array_equal(numpy.asarray(out), numpy.linalg.matrix_power(a_np, 0))
+
+
 def test_matrix_power_pos() -> None:
   a = mp.asarray([[1, 1], [0, 1]], dtype=mp.float64)
   out = mp.linalg.matrix_power(a, 3)
   numpy.testing.assert_array_equal(numpy.asarray(out), [[1, 3], [0, 1]])
+
+
+@pytest.mark.parametrize("dtype", [numpy.float32, numpy.float64])
+@pytest.mark.parametrize("power", [0, 1, 2, 3, 5, 8])
+def test_matrix_power_float_sweep_matches_numpy(dtype: type[numpy.floating[object]], power: int) -> None:
+  a_np = numpy.asarray([[1.0, 1.0], [0.0, 1.0]], dtype=dtype)
+  out = mp.linalg.matrix_power(mp.asarray(a_np, dtype=dtype), power)
+  numpy.testing.assert_allclose(numpy.asarray(out), numpy.linalg.matrix_power(a_np, power), rtol=1e-6, atol=1e-6)
+  assert numpy.asarray(out).dtype == a_np.dtype
+
+
+def test_matrix_power_index_exponent_matches_numpy() -> None:
+  a_np = numpy.asarray([[1.0, 1.0], [0.0, 1.0]], dtype=numpy.float64)
+  out = mp.linalg.matrix_power(mp.asarray(a_np, dtype=mp.float64), numpy.int64(3))
+  numpy.testing.assert_array_equal(numpy.asarray(out), numpy.linalg.matrix_power(a_np, numpy.int64(3)))
+
+
+def test_matrix_power_rejects_non_integer_exponent() -> None:
+  a = mp.asarray([[1.0, 1.0], [0.0, 1.0]], dtype=mp.float64)
+  with pytest.raises(TypeError, match="exponent must be an integer"):
+    mp.linalg.matrix_power(a, 1.0)
+
+
+def test_matrix_power_rejects_non_square_stack() -> None:
+  with pytest.raises(mp.linalg.LinAlgError):
+    mp.linalg.matrix_power(mp.asarray([1.0, 2.0], dtype=mp.float64), 2)
+  with pytest.raises(mp.linalg.LinAlgError):
+    mp.linalg.matrix_power(mp.asarray([[1.0, 2.0, 3.0]], dtype=mp.float64), 2)
+
+
+def test_matrix_power_stacked_float_matches_numpy() -> None:
+  a_np = numpy.asarray(
+    [
+      [[1.0, 1.0], [0.0, 1.0]],
+      [[2.0, 0.0], [0.0, 2.0]],
+    ],
+    dtype=numpy.float64,
+  )
+  out = mp.linalg.matrix_power(mp.asarray(a_np, dtype=mp.float64), 3)
+  numpy.testing.assert_allclose(numpy.asarray(out), numpy.linalg.matrix_power(a_np, 3), rtol=1e-12, atol=1e-12)
+
+
+def test_matrix_power_strided_float_matches_numpy() -> None:
+  base_np = numpy.asarray(
+    [
+      [1.0, 9.0, 1.0, 9.0],
+      [0.0, 9.0, 1.0, 9.0],
+      [5.0, 5.0, 5.0, 5.0],
+    ],
+    dtype=numpy.float64,
+  )
+  a_np = base_np[:2, ::2]
+  a = mp.asarray(base_np, dtype=mp.float64)[:2, ::2]
+  out = mp.linalg.matrix_power(a, 3)
+  numpy.testing.assert_allclose(numpy.asarray(out), numpy.linalg.matrix_power(a_np, 3), rtol=1e-12, atol=1e-12)
 
 
 def test_multi_dot_chained_matmul() -> None:

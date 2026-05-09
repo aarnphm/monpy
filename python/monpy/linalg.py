@@ -1,7 +1,7 @@
 # fmt: off
 # ruff: noqa
 from __future__ import annotations
-import typing, builtins # used by einsum (zip, etc.)
+import typing, builtins, operator # used by einsum (zip, etc.)
 from . import (
   _native,
   asarray,
@@ -68,6 +68,10 @@ def _vecdot_last_axis(a:ndarray, b:ndarray)->ndarray:
 
 def _vecdot_last_axis_fast(a:ndarray, b:ndarray)->ndarray|None:
   out=_native.linalg_vecdot_last_axis_float_try(a._native, b._native)
+  return None if out is None else ndarray._wrap(out)
+
+def _matrix_power_fast(a:ndarray, n:int)->ndarray|None:
+  out=_w(_native.linalg_matrix_power_float_try, a._native, n)
   return None if out is None else ndarray._wrap(out)
 
 def _normalize_axis(axis:int, ndim:int)->int:
@@ -284,17 +288,25 @@ def matrix_rank(M:object, tol:object=None, hermitian:bool=False)->int:
   threshold=smax*max(X.shape[-2:])*_eps_for(X.dtype) if tol is None else float(typing.cast(typing.Any, tol))
   return sum(1 for i in range(s.size) if float(s._native.get_scalar(i))>threshold)
 
-def matrix_power(a:object, n:int)->ndarray:
+def matrix_power(a:object, n:object)->ndarray:
   A=_array(a)
-  if A.ndim<2 or A.shape[-1]!=A.shape[-2]:raise ValueError("matrix_power: a must be square")
-  if n==0:
+  native=A._native
+  ndim=int(native.ndim())
+  if ndim<2:raise LinAlgError("Last 2 dimensions of the array must be square")
+  matrix_dim=int(native.shape_at(ndim-1))
+  if int(native.shape_at(ndim-2))!=matrix_dim:raise LinAlgError("Last 2 dimensions of the array must be square")
+  try:n_int=operator.index(n)
+  except TypeError as exc:raise TypeError("exponent must be an integer") from exc
+  fast=_matrix_power_fast(A, n_int)
+  if fast is not None:return fast
+  if n_int==0:
     eye_shape=A.shape
     out=zeros(eye_shape, dtype=A.dtype)
     for i in range(A.shape[-1]):out[..., i, i]=1
     return out
-  if n<0:return matrix_power(inv(A), -n)
+  if n_int<0:return matrix_power(inv(A), -n_int)
   result=A
-  for _ in range(n-1):result=typing.cast(ndarray, matmul(result, A))
+  for _ in range(n_int-1):result=typing.cast(ndarray, matmul(result, A))
   return result
 
 def slogdet(a:object)->tuple[_Scalar, _Scalar]:

@@ -749,6 +749,92 @@ def matmul_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObj
     return PythonObject(alloc=result^)
 
 
+def _matrix_power_supported_float_dtype(dtype_code: Int) -> Bool:
+    return dtype_code == ArrayDType.FLOAT32.value or dtype_code == ArrayDType.FLOAT64.value
+
+
+def _matrix_power_identity_like(src: Array) raises -> Array:
+    var matrix_dim = src.shape[len(src.shape) - 1]
+    var matrix_elems = matrix_dim * matrix_dim
+    var batch_count = src.size_value // matrix_elems
+    var result = make_empty_array(src.dtype_code, clone_int_list(src.shape))
+    for i in range(result.size_value):
+        set_logical_from_f64(result, i, 0.0)
+    for batch in range(batch_count):
+        var base = batch * matrix_elems
+        for i in range(matrix_dim):
+            set_logical_from_f64(result, base + i * matrix_dim + i, 1.0)
+    return result^
+
+
+def _matrix_power_matmul_float_stack(lhs: Array, rhs: Array) raises -> Array:
+    var rank = len(lhs.shape)
+    var matrix_dim = lhs.shape[rank - 1]
+    var matrix_elems = matrix_dim * matrix_dim
+    var result = make_empty_array(lhs.dtype_code, clone_int_list(lhs.shape))
+    if rank == 2 and matrix_dim > 16:
+        if maybe_matmul_contiguous(lhs, rhs, result, matrix_dim, matrix_dim, matrix_dim):
+            return result^
+    var batch_count = lhs.size_value // matrix_elems
+    for batch in range(batch_count):
+        var batch_base = batch * matrix_elems
+        for i in range(matrix_dim):
+            var row_base = batch_base + i * matrix_dim
+            for j in range(matrix_dim):
+                var total = 0.0
+                for k in range(matrix_dim):
+                    total += get_logical_as_f64(lhs, row_base + k) * get_logical_as_f64(
+                        rhs, batch_base + k * matrix_dim + j
+                    )
+                set_logical_from_f64(result, row_base + j, total)
+    return result^
+
+
+def matrix_power_float_try_ops(array_obj: PythonObject, n_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var n = Int(py=n_obj)
+    if n < 0:
+        return PythonObject(None)
+    var rank = len(src[].shape)
+    if rank < 2:
+        return PythonObject(None)
+    var matrix_dim = src[].shape[rank - 1]
+    if src[].shape[rank - 2] != matrix_dim:
+        return PythonObject(None)
+    if matrix_dim == 0:
+        return PythonObject(None)
+    if not _matrix_power_supported_float_dtype(src[].dtype_code):
+        return PythonObject(None)
+    if n == 0:
+        var identity = _matrix_power_identity_like(src[])
+        return PythonObject(alloc=identity^)
+    if n == 1:
+        return PythonObject(None)
+    if n == 2:
+        var squared = _matrix_power_matmul_float_stack(src[], src[])
+        return PythonObject(alloc=squared^)
+    if n == 3:
+        var squared = _matrix_power_matmul_float_stack(src[], src[])
+        var cubed = _matrix_power_matmul_float_stack(squared, src[])
+        return PythonObject(alloc=cubed^)
+
+    var exp = n
+    var base = copy_c_contiguous(src[])
+    var result = _matrix_power_identity_like(src[])
+    var have_result = False
+    while exp > 0:
+        if exp % 2 != 0:
+            if have_result:
+                result = _matrix_power_matmul_float_stack(result, base)
+            else:
+                result = copy_c_contiguous(base)
+                have_result = True
+        exp = exp // 2
+        if exp > 0:
+            base = _matrix_power_matmul_float_stack(base, base)
+    return PythonObject(alloc=result^)
+
+
 def solve_ops(a_obj: PythonObject, b_obj: PythonObject) raises -> PythonObject:
     var a = a_obj.downcast_value_ptr[Array]()
     var b = b_obj.downcast_value_ptr[Array]()

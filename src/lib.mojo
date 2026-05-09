@@ -59,6 +59,7 @@ from create import (
     logical_ops,
     lstsq_ops,
     materialize_c_contiguous_ops,
+    matrix_power_float_try_ops,
     matmul_ops,
     moveaxis_single_ops,
     norm1_all_ops,
@@ -223,6 +224,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[kron_ops]("linalg_kron")
         module.def_function[vecdot_last_axis_float_try_ops]("linalg_vecdot_last_axis_float_try")
         module.def_function[vecdot_last_axis_ops]("linalg_vecdot_last_axis")
+        module.def_function[matrix_power_float_try_ops]("linalg_matrix_power_float_try")
         module.def_function[solve_ops]("linalg_solve")
         module.def_function[inv_ops]("linalg_inv")
         module.def_function[tensorinv_ops]("linalg_tensorinv")

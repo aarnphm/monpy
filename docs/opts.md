@@ -3714,6 +3714,130 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py tests/python/numpy_compat/test_linalg.py -q
 ```
 
+### 2026-05-09 matrix-power native float path
+
+Fresh baseline, same runner shape as the prior dot-family pass:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array,attention --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-20260509-2135-python-frontier --no-progress --no-stdout
+```
+
+The target was `array/linalg_api/matrix_power_2_n3_f64`:
+
+| row                                      | monpy us | numpy us | ratio  |
+| ---------------------------------------- | -------: | -------: | -----: |
+| `array/linalg_api/matrix_power_2_n3_f64` |    7.161 |    3.966 | 1.809x |
+
+Profile before patch:
+
+```text
+20,000 calls to mp.linalg.matrix_power(a, 3)
+840,004 Python function calls in 0.465 s
+matrix_power total: 0.450 s
+Python matmul facade: 0.207 s
+shape tuple construction: 0.146 s
+native matmul calls: 0.043 s
+tracemalloc peak: 139,719 B
+```
+
+Read:
+
+- The arithmetic was not the problem. Two native matmuls cost `0.043 s`; the
+  facade/shape path cost about `6.5:1` more.
+- For this row, repeated squaring does not reduce the multiply count. `n == 3`
+  is two multiplies either way. The useful work is deleting crossings and
+  skipping the BLAS frame for a 2x2.
+- Source contract notes live in
+  [docs/research/matrix-power.md](research/matrix-power.md).
+
+Patch:
+
+- Added `_native.linalg_matrix_power_float_try`.
+- The native path covers float32/float64 rank-2 and stacked `(..., M, M)` square
+  arrays for `n == 0`, `n == 2`, `n == 3`, and larger positive powers.
+- `n == 1`, `n < 0`, non-float dtypes, and invalid shapes return `None` and use
+  the Python fallback. That keeps integer overflow, complex multiply, and
+  negative inverse semantics out of this patch until those paths are exact.
+- The Python facade now uses `operator.index`, raises `TypeError("exponent must
+  be an integer")`, raises `LinAlgError` for non-square stacks, and validates the
+  last two dimensions through native `ndim()`/`shape_at()` instead of building a
+  full Python shape tuple.
+- Small float matrices with `N <= 16` use the local logical-index multiply; big
+  rank-2 matrices still delegate to `maybe_matmul_contiguous`.
+
+Post-patch Python-facing rerun:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array,attention --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-20260509-2135-python-frontier-matrix-power-shape-guard --no-progress --no-stdout
+```
+
+Key movement:
+
+| row                                      | before us | after us | before ratio | after ratio | speedup |
+| ---------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/linalg_api/matrix_power_2_n3_f64` |     7.161 |    4.564 |       1.809x |      1.170x |  1.57:1 |
+
+Post-patch profile:
+
+```text
+20,000 calls to mp.linalg.matrix_power(a, 3)
+220,004 Python function calls in 0.117 s
+matrix_power total: 0.104 s
+native matrix_power call: 0.029 s
+shape_at calls: 0.007 s
+tracemalloc peak: 23,012 B
+```
+
+Profiler movement:
+
+| metric           | before   | after    | ratio  |
+| ---------------- | -------: | -------: | -----: |
+| Python calls     |  840,004 |  220,004 | 3.82:1 |
+| cProfile wall    |  0.465 s |  0.117 s | 3.97:1 |
+| tracemalloc peak | 139,719 B | 23,012 B | 6.07:1 |
+
+Current slowest rows after the patch:
+
+| row                                            | monpy us | numpy us | ratio  |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `array/creation/empty_like_shape_override_f32` |    4.180 |    2.218 | 1.903x |
+| `array/interop/asarray_squeeze_axis0_f32`      |    4.181 |    2.229 | 1.858x |
+| `array/views/transpose_add_f32`                |    4.501 |    2.560 | 1.777x |
+| `array/creation/meshgrid_xy_f32`               |   15.016 |    8.539 | 1.762x |
+
+Pure-Mojo/std/NuMojo/threading rerun:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo --include-numojo --include-threading --thread-caps auto,1,2,4,8 --format json --sort slowest --output-dir results/local-20260509-2135-mojo-frontier-matrix-power --no-stdout --timeout 240
+```
+
+- Pure-Mojo/std ratios did not materially move: elementwise mean 0.878x,
+  matmul mean 1.033x, reductions mean 0.996x.
+- NuMojo rows use the same orientation as the rest of `monpy-bench-mojo`:
+  `ratio = monpy_ns / baseline_ns`. In this run monpy beat the measured NuMojo
+  kernel-level rows: elementwise 0.515x (`1.94:1`), reductions 0.166x
+  (`6.02:1`), matmul 0.0017x (`588:1`).
+- Threading is a policy gate: `threads1` mean 1.054x is a `5.4%` tax;
+  `threads4` mean 0.619x is `1.62:1` faster; `threads2` mean 0.705x is
+  `1.42:1` faster on this Mac run.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/create/ops/linalg.mojo src/create/ops/__init__.mojo src/create/__init__.mojo src/lib.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py -q
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_linalg.py tests/python/numpy_compat/test_tensor_linalg.py -q
+```
+
+Next target:
+
+- Overall frontier: `empty_like_shape_override_f32` and
+  `asarray_squeeze_axis0_f32`. These are metadata/shape-wrapper rows, not kernel
+  math rows.
+- Linalg frontier: complex positive `matrix_power`, then complex inverse dtype
+  before negative complex parity.
+
 ### 2026-05-09 native tensor solve/inverse wrappers
 
 After native Kronecker, the next fresh sweep put the tensor linalg wrappers
