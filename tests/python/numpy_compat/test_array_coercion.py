@@ -236,7 +236,7 @@ def test_unsupported_dtype_requests_are_explicit_blockers(dtype: object) -> None
     np.asarray([1], dtype=dtype)
 
 
-def test_phase5d_complex_dtype_allocation_works() -> None:
+def test_complex_dtype_allocation_works() -> None:
   arr = np.asarray([1 + 2j, 3 + 4j], dtype=np.complex128)
   assert arr.dtype == np.complex128
   assert arr.tolist() == [1 + 2j, 3 + 4j]
@@ -247,8 +247,8 @@ def test_phase5d_complex_dtype_allocation_works() -> None:
 
 
 @pytest.mark.parametrize("dtype_name", ["uint64", "uint32", "uint16", "uint8"])
-def test_phase5b_unsigned_int_dtype_allocation_works(dtype_name: str) -> None:
-  # Phase-5b unsigned ints land allocation + arithmetic via the f64 round-trip;
+def test_unsigned_int_dtype_allocation_works(dtype_name: str) -> None:
+  # Unsigned ints use allocation + arithmetic via the f64 round-trip;
   # promotion follows numpy 2.x.
   dtype = getattr(np, dtype_name)
   arr = np.asarray([1, 2, 3], dtype=dtype)
@@ -258,7 +258,7 @@ def test_phase5b_unsigned_int_dtype_allocation_works(dtype_name: str) -> None:
   assert doubled.tolist() == [2, 4, 6]
 
 
-def test_phase5c_float16_dtype_allocation_works() -> None:
+def test_float16_dtype_allocation_works() -> None:
   arr = np.asarray([0.5, 1.0, 2.0], dtype=np.float16)
   assert arr.dtype == np.float16
   assert arr.tolist() == [0.5, 1.0, 2.0]
@@ -268,8 +268,8 @@ def test_phase5c_float16_dtype_allocation_works() -> None:
 
 
 @pytest.mark.parametrize("dtype_name", ["int32", "int16", "int8"])
-def test_phase5a_int_dtype_allocation_works(dtype_name: str) -> None:
-  # Phase-5a int kernels landed: int32/16/8 are fully allocatable and arithmetic preserves dtype.
+def test_int_dtype_allocation_works(dtype_name: str) -> None:
+  # int32/16/8 are fully allocatable and arithmetic preserves dtype.
   dtype = getattr(np, dtype_name)
   arr = np.asarray([1, 2, 3], dtype=dtype)
   assert arr.dtype == dtype

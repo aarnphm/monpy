@@ -7,7 +7,7 @@ A leaf carries a single integer; a non-leaf carries a list of child `IntTuple`s.
 Representation: a discriminated union (`_is_leaf`, `_value`, `_children`).
 We skip the comptime/runtime split that Modular's `int_tuple.mojo` uses (`IntTuple` + `RuntimeTuple`):
 - monpy targets CPU and runs Python at the boundary, so the runtime-polymorphic representation is enough.
-- Adding the comptime split is a phase-3 want if profiling shows it helps.
+- Adding the comptime split stays deferred until profiling shows it helps.
 
 Recursive `Copyable` requires a manual `def __init__(out self, *, copy: Self)` because the auto-synthesized constructor cannot resolve `IntTuple: Copyable`
 while `_children: List[IntTuple]` is itself awaiting that resolution. The manual definition breaks the cycle.

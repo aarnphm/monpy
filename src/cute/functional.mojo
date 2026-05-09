@@ -28,7 +28,8 @@ def coalesce(layout: Layout) raises -> Layout:
     `[0, size(L))` and minimal flat rank.
 
     v1 ships flat coalesce only — first flatten, then merge. Nested
-    coalesce that preserves hierarchy where possible is a phase-3 want.
+    coalesce that preserves hierarchy where possible stays deferred
+    until profiling shows it matters.
     """
     var flat_shape = flatten_to_int_list(layout.shape)
     var flat_stride = flatten_to_int_list(layout.stride)

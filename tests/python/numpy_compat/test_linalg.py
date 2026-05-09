@@ -6,7 +6,7 @@ import monpy.array_api as xp
 import monumpy as np
 import numpy
 import pytest
-from _helpers import assert_same_shape_dtype, assert_same_values
+from _helpers import assert_same_result_kind, assert_same_shape_dtype, assert_same_values
 
 
 def test_linalg_matmul_matches_numpy_rank2() -> None:
@@ -50,15 +50,27 @@ def test_diagonal_returns_rank2_view_and_trace_matches_numpy() -> None:
 
   assert diag.tolist() == oracle_diag.tolist()
   assert arr.tolist() == oracle.tolist()
-  assert np.trace(arr) == int(numpy.trace(oracle))
+  trace_out = np.trace(arr)
+  trace_oracle = numpy.trace(oracle)
+  assert_same_result_kind(trace_out, trace_oracle)
+  assert_same_shape_dtype(trace_out, trace_oracle)
+  assert_same_values(trace_out, trace_oracle)
 
 
 def test_trace_dtype_argument_casts_accumulator() -> None:
   arr = np.asarray([[True, False], [True, True]], dtype=np.bool)
+  oracle = numpy.asarray([[True, False], [True, True]], dtype=numpy.bool_)
 
-  assert np.trace(arr) == 2
-  assert isinstance(np.trace(arr, dtype=np.float32), float)
-  assert np.trace(arr, dtype=np.float32) == pytest.approx(2.0)
+  trace_out = np.trace(arr)
+  trace_oracle = numpy.trace(oracle)
+  trace_f32_out = np.trace(arr, dtype=np.float32)
+  trace_f32_oracle = numpy.trace(oracle, dtype=numpy.float32)
+  assert_same_result_kind(trace_out, trace_oracle)
+  assert_same_shape_dtype(trace_out, trace_oracle)
+  assert_same_values(trace_out, trace_oracle)
+  assert_same_result_kind(trace_f32_out, trace_f32_oracle)
+  assert_same_shape_dtype(trace_f32_out, trace_f32_oracle)
+  assert_same_values(trace_f32_out, trace_f32_oracle)
 
 
 def test_linalg_solve_inv_and_det_match_numpy() -> None:
@@ -75,7 +87,8 @@ def test_linalg_solve_inv_and_det_match_numpy() -> None:
   assert_same_values(solve_out, numpy.linalg.solve(oracle_a, oracle_b))
   assert_same_shape_dtype(inv_out, numpy.linalg.inv(oracle_a))
   assert_same_values(inv_out, numpy.linalg.inv(oracle_a))
-  assert det_out == pytest.approx(float(numpy.linalg.det(oracle_a)))
+  assert_same_result_kind(det_out, numpy.linalg.det(oracle_a))
+  assert float(det_out) == pytest.approx(float(numpy.linalg.det(oracle_a)))
   # Both macOS (Accelerate) and Linux (OpenBLAS / netlib LAPACK) take the
   # native lapack path; only platforms without a system BLAS land on the
   # pure-Mojo LU fallback (backend_code == 0).
@@ -137,7 +150,8 @@ def test_linalg_matrix_sweep_matches_numpy(
   assert_same_values(solve_matrix, numpy.linalg.solve(oracle_a, oracle_rhs_matrix), rtol=rtol, atol=atol)
   assert_same_shape_dtype(inv_out, numpy.linalg.inv(oracle_a))
   assert_same_values(inv_out, numpy.linalg.inv(oracle_a), rtol=rtol, atol=atol)
-  assert det_out == pytest.approx(float(numpy.linalg.det(oracle_a)), rel=rtol, abs=atol)
+  assert_same_result_kind(det_out, numpy.linalg.det(oracle_a))
+  assert float(det_out) == pytest.approx(float(numpy.linalg.det(oracle_a)), rel=rtol, abs=atol)
 
 
 @pytest.mark.parametrize("offset", [-2, -1, 0, 1, 2])
@@ -147,7 +161,10 @@ def test_diagonal_and_trace_offset_sweep_matches_numpy(offset: int) -> None:
 
   assert_same_shape_dtype(np.diagonal(arr, offset=offset), numpy.diagonal(oracle, offset=offset))
   assert_same_values(np.diagonal(arr, offset=offset), numpy.diagonal(oracle, offset=offset))
-  assert np.trace(arr, offset=offset) == pytest.approx(float(numpy.trace(oracle, offset=offset)))
+  trace_out = np.trace(arr, offset=offset)
+  trace_oracle = numpy.trace(oracle, offset=offset)
+  assert_same_result_kind(trace_out, trace_oracle)
+  assert float(trace_out) == pytest.approx(float(trace_oracle))
 
 
 def test_linalg_singular_and_invalid_square_conditions_raise_linalg_error() -> None:
@@ -158,6 +175,6 @@ def test_linalg_singular_and_invalid_square_conditions_raise_linalg_error() -> N
     np.linalg.solve(singular, np.asarray([1.0, 2.0], dtype=np.float64))
   with pytest.raises(np.linalg.LinAlgError, match="singular"):
     np.linalg.inv(singular)
-  assert np.linalg.det(singular) == pytest.approx(0.0)
+  assert float(np.linalg.det(singular)) == pytest.approx(0.0)
   with pytest.raises(np.linalg.LinAlgError, match="square"):
     np.linalg.solve(nonsquare, np.asarray([1.0, 2.0], dtype=np.float64))

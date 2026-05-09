@@ -11,7 +11,7 @@ date: 2026-05-06
 - this matches how Modular's `max/kernels/` package works: one `Layout` algebra at the bottom; CPU iterators, GPU thread layouts, TMA descriptors, tensor-core fragments all sit on top as separate layers rather than as a parallel hierarchy.
 - practical implication for kernel authors:
   - **write kernels parametric on `Layout` / `LayoutTensor`-shaped operands**, not on raw `Array` byte offsets. the backend choice becomes a parameter swap, not a rewrite.
-  - the typed strided kernels that should follow phase 2's iter-swap proof of concept are a good test case: they take per-operand `Layout` plus a dtype parameter; the CPU body uses SIMD intrinsics; a future GPU body uses thread layouts and shared- memory tiles, but the operand types are the same.
+  - the typed strided kernels that should follow the iter-swap proof of concept are a good test case: they take per-operand `Layout` plus a dtype parameter; the CPU body uses SIMD intrinsics; a future GPU body uses thread layouts and shared- memory tiles, but the operand types are the same.
 - things deferred from CUTLASS that come back when we add GPU: `RuntimeLayout` (comptime shape skeleton + dynamic int storage). needed once we want shape erasure across thousands of compile- time-known GPU kernels.
   - `Swizzle<B, M, S>` for shared-memory bank conflict avoidance.
   - `tiled_mma`, `tiled_copy`, `copy_dram_to_sram`, `cp_async_*`, TMA primitives.
@@ -157,7 +157,7 @@ date: 2026-05-06
 - post-condition: `coalesce(L)` represents the same function over
   `[0, size(L))` and has minimal flat rank.
 - v1 ships flat coalesce only. nested coalesce that preserves
-  hierarchy where possible is a phase-3 want.
+  hierarchy where possible stays deferred until profiling justifies it.
 
 ### `select(layout, indices: List[Int])` and `transpose(layout, perm)`
 
@@ -210,8 +210,8 @@ date: 2026-05-06
   - `inter = composition(a[i], complement(tiler[i], size(a[i])))`
     — across-tile layout.
   - packed as a nested mode `(intra, inter)`.
-- the only tile op needed for v1; tiled reductions (phase 4) and
-  tiled matmul (phase 6) both want "give me a layout whose leading
+- the only tile op needed for v1; tiled reductions and batched matmul
+  both want "give me a layout whose leading
   mode walks within a tile, then through tiles."
 - reference: CUTLASS `cute/algorithm/functional.hpp::logical_divide`.
 
@@ -298,7 +298,7 @@ date: 2026-05-06
 
 - `logical_product`, `blocked_product`, `zipped_divide`,
   `tiled_divide` — none needed for numpy parity v1; some come back
-  in phase 4 (blocked reductions) and phase 6 (batched matmul).
+  with blocked reductions and batched matmul.
 - swizzles — XOR-based bank-conflict avoidance. CPU has no shared
   memory banks.
 - `ScaledBasis` / `E<I...>` — these encode "stride is the i-th basis
@@ -347,7 +347,7 @@ date: 2026-05-06
   meshgrid).
 - `monpy._bench.types.array` — main contiguous bench, run through
   `monpy-bench`.
-  extended with `views` and `creation` cases for the phase-6 work
+  extended with `views` and `creation` cases
   (squeeze, moveaxis, swapaxes, ravel, flatten, concatenate, stack,
   hstack, vstack, eye, identity, tri, logspace, geomspace,
   meshgrid, atleast_2d, indices, plus the flip / rot90 family).

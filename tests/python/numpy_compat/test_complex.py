@@ -9,7 +9,7 @@ from monpy.runtime import ops_numpy
 
 
 # ---------------------------------------------------------------------------
-# Phase-5d complex dtype: registration, allocation, basic arithmetic.
+# Complex dtype: registration, allocation, basic arithmetic.
 # ---------------------------------------------------------------------------
 
 

@@ -1,4 +1,4 @@
-"""Phase-6b creation helper coverage. Most are pure python compositions
+"""Creation helper coverage. Most are pure python compositions
 on top of existing primitives, so the tests just check parity with numpy."""
 
 from __future__ import annotations

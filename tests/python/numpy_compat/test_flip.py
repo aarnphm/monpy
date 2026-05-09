@@ -1,4 +1,4 @@
-"""Phase-6a: flip / fliplr / flipud / rot90 parity vs numpy."""
+"""flip / fliplr / flipud / rot90 parity vs numpy."""
 
 from __future__ import annotations
 

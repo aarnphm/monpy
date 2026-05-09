@@ -235,8 +235,8 @@ comptime lapack_dgetrf_type = def(
 ) thin -> None
 
 
-# Phase-6d LAPACK additions: QR, Cholesky, eigendecompositions, SVD,
-# least-squares. F77 ABI is column-major; everything goes by pointer.
+# LAPACK additions: QR, Cholesky, eigendecompositions, SVD, least-squares.
+# F77 ABI is column-major; everything goes by pointer.
 # Character params (JOBZ, UPLO etc.) are single ASCII bytes passed via
 # UnsafePointer[Int8].
 
@@ -1245,7 +1245,7 @@ def cblas_zgemm_row_major(
 
 
 # ============================================================
-# Phase-6d LAPACK call wrappers.
+# LAPACK call wrappers.
 #
 # Each wrapper handles the F77 ABI ceremony (every argument by pointer,
 # even scalars), runs LAPACK's workspace query (LWORK = -1 returns the

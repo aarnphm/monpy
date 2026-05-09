@@ -67,10 +67,9 @@ def test_python_scalars_are_weak_for_float32_arrays(
 
 @pytest.mark.parametrize(
   "dtype",
-  # uint / f16 / complex moved to phase-5b/5c/5d — see
-  # test_array_coercion.py::test_phase5b_unsigned_int_dtype_allocation_works,
-  # ::test_phase5c_float16_dtype_allocation_works,
-  # ::test_phase5d_complex_dtype_allocation_works.
+  # uint / f16 / complex have dedicated allocation coverage; see
+  # test_array_coercion.py::test_unsigned_int_dtype_allocation_works,
+  # ::test_float16_dtype_allocation_works, and complex dtype tests.
   ["object", "str"],
 )
 def test_unsupported_promotion_dtype_families_are_explicit_blockers(dtype: object) -> None:
@@ -95,7 +94,7 @@ def test_unsupported_promotion_dtype_families_are_explicit_blockers(dtype: objec
     (np.float16, np.int16, np.float32),
   ],
 )
-def test_phase5b_phase5c_promotion_matches_numpy(lhs: object, rhs: object, expected: object) -> None:
+def test_extended_dtype_promotion_matches_numpy(lhs: object, rhs: object, expected: object) -> None:
   # Mirror numpy's promotion rules at the python boundary; the underlying
   # dispatch falls back to `_native._result_dtype_for_binary` for any pair
   # outside the original 4×4 fast-path table.

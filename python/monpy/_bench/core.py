@@ -206,14 +206,14 @@ def build_cases(
   matmul_probe_size = max(64, max(matrix_sizes))
   matmul_probe_np = scaled_matrix(matmul_probe_size, np.float32)
   matmul_probe_mp = mnp.asarray(matmul_probe_np.tolist(), dtype=mnp.float32)
-  matmul_probe = matmul_probe_mp @ matmul_probe_mp
+  matmul_probe: Any = matmul_probe_mp @ matmul_probe_mp
   if not matmul_probe._native.used_accelerate():
     raise AssertionError("expected contiguous float32 matmul to exercise the Apple Accelerate path")
   verify_same(matmul_probe, matmul_probe_np @ matmul_probe_np, rtol=1e-4, atol=1e-4)
 
   matmul_f64_probe_np = scaled_matrix(matmul_probe_size, np.float64)
   matmul_f64_probe_mp = mnp.asarray(matmul_f64_probe_np.tolist(), dtype=mnp.float64)
-  matmul_f64_probe = matmul_f64_probe_mp @ matmul_f64_probe_mp
+  matmul_f64_probe: Any = matmul_f64_probe_mp @ matmul_f64_probe_mp
   if not matmul_f64_probe._native.used_accelerate():
     raise AssertionError("expected contiguous float64 matmul to exercise the Apple Accelerate dgemm path")
   verify_same(matmul_f64_probe, matmul_f64_probe_np @ matmul_f64_probe_np, rtol=1e-9, atol=1e-9)
@@ -623,7 +623,7 @@ def build_cases(
         ),
       ])
 
-  # Phase-6d LAPACK-backed decompositions. Sizes use a subset of linalg_sizes;
+  # LAPACK-backed decompositions. Sizes use a subset of linalg_sizes;
   # SVD/EIG are quadratic, so cap at 64 to keep runtime reasonable.
   decomp_sizes = tuple(s for s in linalg_sizes if s <= 64) or linalg_sizes[:1]
   for size in decomp_sizes:
@@ -763,7 +763,7 @@ def build_cases(
     BenchCase("linalg_api", "pinv_rect_8x4_f64", lambda: mnp.linalg.pinv(la_rect_mp, rcond=la_rect_rcond), lambda: np.linalg.pinv(la_rect_np, rcond=la_rect_rcond), rtol=1e-10, atol=1e-10),
   ])
 
-  # Phase-5b unsigned int + phase-5c float16 dtype family coverage.
+  # Unsigned-int and float16 dtype family coverage.
   # These are wrapper-bound for now (dispatch goes through the f64 round-trip
   # path); the bench rows surface that and will track typed-kernel work.
   ext_dtype_specs = (
@@ -796,7 +796,7 @@ def build_cases(
       ),
     ])
 
-  # Phase-6 native creation kernels (eye/tril/triu/concatenate/pad).
+  # Native creation kernels (eye/tril/triu/concatenate/pad).
   ec_n = 64
   ec_a_np = np.arange(ec_n * ec_n, dtype=np.float64).reshape(ec_n, ec_n)
   ec_a_mp = mnp.asarray(ec_a_np, dtype=mnp.float64, copy=True)

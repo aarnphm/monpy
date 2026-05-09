@@ -6,7 +6,7 @@ import monpy.array_api as xp
 import monumpy as np
 import numpy
 import pytest
-from _helpers import assert_same_shape_dtype, assert_same_values
+from _helpers import assert_same_result_kind, assert_same_shape_dtype, assert_same_values
 
 
 def test_creation_functions_match_numpy_shape_dtype_and_values() -> None:
@@ -213,7 +213,7 @@ def test_views_remain_safe_across_core_read_paths() -> None:
   for arr, expected in cases:
     assert_same_values(arr + 2.0, expected + 2.0)
     assert_same_values(np.sin(arr), numpy.sin(expected))
-    assert np.sum(arr) == pytest.approx(float(numpy.sum(expected)))
+    assert float(np.sum(arr)) == pytest.approx(float(numpy.sum(expected)))
 
 
 def test_array_namespace_info_reports_v1_surface() -> None:
@@ -231,11 +231,11 @@ def test_reductions_match_numpy_for_axis_none() -> None:
   arr = np.asarray([[1, 2, 3], [4, 5, 6]], dtype=np.int64)
   oracle = numpy.asarray([[1, 2, 3], [4, 5, 6]], dtype=numpy.int64)
 
-  assert np.sum(arr) == int(numpy.sum(oracle))
-  assert np.min(arr) == int(numpy.min(oracle))
-  assert np.max(arr) == int(numpy.max(oracle))
-  assert np.argmax(arr) == int(numpy.argmax(oracle))
-  assert np.mean(arr) == pytest.approx(float(numpy.mean(oracle)))
+  assert int(np.sum(arr)) == int(numpy.sum(oracle))
+  assert int(np.min(arr)) == int(numpy.min(oracle))
+  assert int(np.max(arr)) == int(numpy.max(oracle))
+  assert int(np.argmax(arr)) == int(numpy.argmax(oracle))
+  assert float(np.mean(arr)) == pytest.approx(float(numpy.mean(oracle)))
 
 
 def test_axis_reductions_match_numpy() -> None:
@@ -292,7 +292,10 @@ def test_matmul_matches_numpy_for_1d_and_2d() -> None:
 
   assert_same_values(mat @ rhs, oracle_mat @ oracle_rhs)
   assert_same_values(mat @ vec, oracle_mat @ oracle_vec)
-  assert float(vec @ vec) == pytest.approx(float(oracle_vec @ oracle_vec))
+  vec_dot = vec @ vec
+  oracle_vec_dot = oracle_vec @ oracle_vec
+  assert_same_result_kind(vec_dot, oracle_vec_dot)
+  assert float(vec_dot) == pytest.approx(float(oracle_vec_dot))
 
 
 def test_matmul_dense_transpose_rhs_matches_numpy_and_uses_fast_path_on_macos() -> None:

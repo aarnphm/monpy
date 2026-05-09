@@ -4,6 +4,8 @@ import monpy as mp
 import numpy
 import pytest
 
+from _helpers import assert_same_result_kind
+
 
 # ---------------------------------------------------------------------------
 # einsum: parsing + correctness on common patterns.
@@ -20,7 +22,10 @@ def test_einsum_matmul_2d() -> None:
 def test_einsum_dot_product() -> None:
   v1 = numpy.asarray([1.0, 2.0, 3.0])
   v2 = numpy.asarray([4.0, 5.0, 6.0])
-  assert float(mp.einsum("i,i", mp.asarray(v1), mp.asarray(v2))) == float(numpy.einsum("i,i", v1, v2))
+  out = mp.einsum("i,i", mp.asarray(v1), mp.asarray(v2))
+  oracle = numpy.einsum("i,i", v1, v2)
+  assert_same_result_kind(out, oracle)
+  assert float(out) == float(oracle)
 
 
 def test_einsum_outer_product() -> None:
@@ -33,7 +38,9 @@ def test_einsum_outer_product() -> None:
 def test_einsum_trace_via_diagonal() -> None:
   a = numpy.asarray([[1.0, 2.0], [3.0, 4.0]])
   out = mp.einsum("ii", mp.asarray(a))
-  assert float(out) == float(numpy.einsum("ii", a))
+  oracle = numpy.einsum("ii", a)
+  assert_same_result_kind(out, oracle)
+  assert float(out) == float(oracle)
 
 
 def test_einsum_transpose() -> None:

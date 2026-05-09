@@ -4,6 +4,8 @@ import monpy as mp
 import numpy
 import pytest
 
+from _helpers import assert_same_result_kind
+
 
 # ---------------------------------------------------------------------------
 # dot / vdot / inner / outer
@@ -13,7 +15,10 @@ import pytest
 def test_dot_1d_1d() -> None:
   a = mp.asarray([1.0, 2.0, 3.0], dtype=mp.float64)
   b = mp.asarray([4.0, 5.0, 6.0], dtype=mp.float64)
-  assert float(mp.dot(a, b)) == 32.0
+  out = mp.dot(a, b)
+  oracle = numpy.dot(numpy.asarray(a), numpy.asarray(b))
+  assert_same_result_kind(out, oracle)
+  assert float(out) == 32.0
 
 
 def test_dot_2d_2d_routes_through_matmul() -> None:
@@ -26,7 +31,10 @@ def test_dot_2d_2d_routes_through_matmul() -> None:
 def test_vdot_flattens_first() -> None:
   a = mp.asarray([[1, 2], [3, 4]], dtype=mp.float64)
   b = mp.asarray([[5, 6], [7, 8]], dtype=mp.float64)
-  assert float(mp.vdot(a, b)) == 1 * 5 + 2 * 6 + 3 * 7 + 4 * 8
+  out = mp.vdot(a, b)
+  oracle = numpy.vdot(numpy.asarray(a), numpy.asarray(b))
+  assert_same_result_kind(out, oracle)
+  assert float(out) == 1 * 5 + 2 * 6 + 3 * 7 + 4 * 8
 
 
 def test_outer_basic() -> None:
@@ -53,7 +61,10 @@ def test_outer_complex_inputs_match_numpy() -> None:
 def test_inner_1d() -> None:
   a = mp.asarray([1.0, 2.0, 3.0], dtype=mp.float64)
   b = mp.asarray([4.0, 5.0, 6.0], dtype=mp.float64)
-  assert float(mp.inner(a, b)) == 32.0
+  out = mp.inner(a, b)
+  oracle = numpy.inner(numpy.asarray(a), numpy.asarray(b))
+  assert_same_result_kind(out, oracle)
+  assert float(out) == 32.0
 
 
 def test_vecdot_axis1_matches_numpy() -> None:
@@ -79,6 +90,8 @@ def test_tensordot_axes_full() -> None:
   a = mp.asarray([[1, 2], [3, 4]], dtype=mp.float64)
   b = mp.asarray([[5, 6], [7, 8]], dtype=mp.float64)
   out = mp.tensordot(a, b, axes=2)
+  oracle = numpy.tensordot(numpy.asarray(a), numpy.asarray(b), axes=2)
+  assert_same_result_kind(out, oracle)
   # Full contraction: 1*5 + 2*6 + 3*7 + 4*8 = 70.
   assert float(out) == 70.0
 
@@ -268,7 +281,8 @@ def test_lstsq_overdetermined_matches_numpy() -> None:
   )
   x_np, res_np, rank_np, _ = numpy.linalg.lstsq(A, B, rcond=None)
   numpy.testing.assert_allclose(numpy.asarray(x_mp), x_np, rtol=1e-12)
-  assert rank_mp == rank_np
+  assert_same_result_kind(rank_mp, rank_np)
+  assert int(rank_mp) == int(rank_np)
   numpy.testing.assert_allclose(numpy.asarray(res_mp), res_np, rtol=1e-12)
 
 
@@ -295,7 +309,8 @@ def test_matrix_rank_matches_numpy() -> None:
   a = numpy.asarray([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [1.0, 0.0, 1.0]])
   rk_mp = mp.linalg.matrix_rank(mp.asarray(a, dtype=mp.float64))
   rk_np = numpy.linalg.matrix_rank(a)
-  assert rk_mp == rk_np
+  assert_same_result_kind(rk_mp, rk_np)
+  assert int(rk_mp) == int(rk_np)
 
 
 def test_slogdet_matches_numpy_for_positive_negative_and_singular() -> None:
@@ -307,5 +322,7 @@ def test_slogdet_matches_numpy_for_positive_negative_and_singular() -> None:
   for a in cases:
     sign_mp, logdet_mp = mp.linalg.slogdet(mp.asarray(a, dtype=mp.float64))
     sign_np, logdet_np = numpy.linalg.slogdet(a)
-    assert sign_mp == sign_np
+    assert_same_result_kind(sign_mp, sign_np)
+    assert_same_result_kind(logdet_mp, logdet_np)
+    assert float(sign_mp) == float(sign_np)
     numpy.testing.assert_allclose(logdet_mp, logdet_np, rtol=1e-10, atol=1e-10)

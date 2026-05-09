@@ -4,7 +4,7 @@ produce correct results when given non-contiguous (e.g. F-order) arrays,
 and that core getters/setters honour the `offset` field on views.
 
 This covers [Issue 309](https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo/issues/309)
-Phase 1, 3 & 4 — contiguous guards and offset-aware accessors across the codebase.
+contiguous guards and offset-aware accessors across the codebase.
 """
 
 import numojo as nm
@@ -626,7 +626,7 @@ def test_ndarray_solve_view() raises:
 
 
 # ===-----------------------------------------------------------------------===#
-# Phase 3: Math backend functions on F-order arrays
+# Math backend functions on F-order arrays
 # ===-----------------------------------------------------------------------===#
 
 
@@ -827,7 +827,7 @@ def test_ndarray_copysign_view() raises:
 
 
 # ===-----------------------------------------------------------------------===#
-# Phase 3: Differences on F-order arrays
+# Differences on F-order arrays
 # ===-----------------------------------------------------------------------===#
 
 
@@ -853,7 +853,7 @@ def test_ndarray_differences_view() raises:
 
 
 # ===-----------------------------------------------------------------------===#
-# Phase 3: Manipulation on F-order arrays
+# Manipulation on F-order arrays
 # ===-----------------------------------------------------------------------===#
 
 
@@ -951,7 +951,7 @@ def test_ndarray_broadcast_to_view() raises:
 
 
 # ===-----------------------------------------------------------------------===#
-# Phase 3: Sliced views (non-contiguous due to slicing, not just F-order)
+# Sliced views (non-contiguous due to slicing, not just F-order)
 # ===-----------------------------------------------------------------------===#
 
 
@@ -1041,7 +1041,7 @@ def test_ndarray_sliced_view_manipulation() raises:
 
 
 # ===-----------------------------------------------------------------------===#
-# Phase 4 — Offset-aware core getters / setters
+# Offset-aware core getters / setters
 # ===-----------------------------------------------------------------------===#
 
 
@@ -1333,7 +1333,7 @@ def test_offset_view_slice_setitem() raises:
 
 
 # ===-----------------------------------------------------------------------===#
-# Phase 4+ tests: In-place operators, Matrix view safety, where, ravel
+# In-place operators, Matrix view safety, where, ravel
 # ===-----------------------------------------------------------------------===#
 
 

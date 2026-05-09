@@ -93,43 +93,40 @@ def inv(a:object)->ndarray:
   return ndarray(_w(_native.linalg_inv, x._native))
 def det(a:object)->_Scalar:
   x=_array(a)
-  return typing.cast(_Scalar, ndarray(_w(_native.linalg_det, x._native))._scalar())
+  return ndarray(_w(_native.linalg_det, x._native))._scalar()
 
-# Phase 6d additions on top of matmul + reductions. No LAPACK bindings yet;
+# Expanded linalg surface on top of matmul + reductions. No LAPACK bindings yet;
 # the algorithm-heavy decomps (qr/svd/eig/cholesky/lstsq/pinv) raise
 # NotImplementedError until the accelerate layer wires them up.
 def dot(a:object, b:object)->object:
-  A=_array(a)
-  B=_array(b)
+  A=_array(a); B=_array(b)
   if A.ndim==0 or B.ndim==0:return multiply(A, B)
   if A.ndim==1 and B.ndim==1:
     if A.shape[0]!=B.shape[0]:raise ValueError("dot: shape mismatch")
     if _has_vecdot_kernel(A, B):return _dot_scalar(A, B)
-    return _matmul(A, B)
+    return _matmul(A, B)._scalar()
   if A.ndim<=2 and B.ndim<=2:return matmul(A, B)
   raise NotImplementedError("dot: ndim>2 not implemented")
 
 def vdot(a:object, b:object)->object:
-  A=_array(a)
-  B=_array(b)
+  A=_array(a); B=_array(b)
   if A.ndim==1 and B.ndim==1:
     if A.shape!=B.shape:raise ValueError("vdot: shape mismatch")
     if _has_vecdot_kernel(A, B):return _dot_scalar(A, B)
-    return _matmul(A, B)
+    return _matmul(A, B)._scalar()
   A=ravel(A)
   B=ravel(B)
   if A.shape!=B.shape:raise ValueError("vdot: shape mismatch")
   if _has_vecdot_kernel(A, B):return _dot_scalar(A, B)
-  return _matmul(A, B)
+  return _matmul(A, B)._scalar()
 
 def inner(a:object, b:object)->object:
-  A=_array(a)
-  B=_array(b)
+  A=_array(a); B=_array(b)
   if A.ndim==0 or B.ndim==0:return multiply(A, B)
   if A.shape[-1]!=B.shape[-1]:raise ValueError("inner: trailing axis mismatch")
   if A.ndim==1 and B.ndim==1:
     if _has_vecdot_kernel(A, B):return _dot_scalar(A, B)
-    return _matmul(A, B)
+    return _matmul(A, B)._scalar()
   if A.ndim==1:return _sum(multiply(A, B), axis=-1)
   if B.ndim==1:return _sum(multiply(A, B), axis=-1)
   raise NotImplementedError("inner: only 1D x 1D / 1D x N / N x 1D supported in v1")
@@ -143,10 +140,8 @@ def tensordot(a:object, b:object, axes:int|tuple[object, object]=2)->object:
   B=_array(b)
   if isinstance(axes, int):
     n=axes
-    if n==1 and A.ndim==2 and B.ndim==2:
-      return _matmul(A, B)
-    if n==2 and A.ndim==2 and B.ndim==2 and A.shape==B.shape:
-      return _matmul(ravel(A), ravel(B))
+    if n==1 and A.ndim==2 and B.ndim==2:                      return _matmul(A, B)
+    if n==2 and A.ndim==2 and B.ndim==2 and A.shape==B.shape: return _matmul(ravel(A), ravel(B))
     a_axes=tuple(range(A.ndim-n, A.ndim))
     b_axes=tuple(range(n))
   else:
@@ -164,13 +159,12 @@ def tensordot(a:object, b:object, axes:int|tuple[object, object]=2)->object:
   b_kept_size=_prod(B.shape[d] for d in b_kept)
   A_mat=ascontiguousarray(A_perm).reshape((a_kept_size, contract_size))
   B_mat=ascontiguousarray(B_perm).reshape((contract_size, b_kept_size))
-  out=matmul(A_mat, B_mat)
+  out=_matmul(A_mat, B_mat)
   out_shape=tuple(A.shape[d] for d in a_kept)+tuple(B.shape[d] for d in b_kept)
-  return reshape(out, out_shape) if out_shape else _sum(out)
+  return reshape(out, out_shape) if out_shape else out.reshape(())
 
 def kron(a:object, b:object)->ndarray:
-  A=_array(a)
-  B=_array(b)
+  A=_array(a); B=_array(b)
   while A.ndim<B.ndim:A=expand_dims(A, 0)
   while B.ndim<A.ndim:B=expand_dims(B, 0)
   out_shape=tuple(s_a*s_b for s_a, s_b in zip(A.shape, B.shape, strict=True))
@@ -183,8 +177,7 @@ def kron(a:object, b:object)->ndarray:
 
 def cross(a:object, b:object, axisa:int=-1, axisb:int=-1, axisc:int=-1, axis:int|None=None)->ndarray:
   if axis is not None:axisa=axisb=axisc=axis
-  A=_array(a)
-  B=_array(b)
+  A=_array(a); B=_array(b)
   if A.shape[axisa]!=3 or B.shape[axisb]!=3:raise ValueError("cross: only 3D vectors supported")
   if A.ndim!=1 or B.ndim!=1:raise NotImplementedError("cross: ndim>1 not implemented in v1")
   ax, ay, az=A._native.get_scalar(0), A._native.get_scalar(1), A._native.get_scalar(2)
@@ -196,21 +189,18 @@ def cross(a:object, b:object, axisa:int=-1, axisb:int=-1, axisc:int=-1, axis:int
   return ndarray(_native.from_flat([cx, cy, cz], (3,), t.code))
 
 def matvec(a:object, b:object)->ndarray:
-  A=_array(a)
-  B=_array(b)
+  A=_array(a); B=_array(b)
   if A.ndim<2 or B.ndim<1:raise ValueError("matvec: a must be (...,M,N), b must be (...,N)")
   if A.ndim==2 and B.ndim==1:return _matmul(A, B)
-  return matmul(A, reshape(B, B.shape+(1,))).reshape(A.shape[:-1])
+  return typing.cast(ndarray, matmul(A, reshape(B, B.shape+(1,)))).reshape(A.shape[:-1])
 
 def vecmat(a:object, b:object)->ndarray:
-  A=_array(a)
-  B=_array(b)
+  A=_array(a); B=_array(b)
   if A.ndim==1 and B.ndim==2:return _matmul(A, B)
-  return matmul(reshape(A, A.shape[:-1]+(1, A.shape[-1])), B).reshape(A.shape[:-1]+B.shape[-1:])
+  return typing.cast(ndarray, matmul(reshape(A, A.shape[:-1]+(1, A.shape[-1])), B)).reshape(A.shape[:-1]+B.shape[-1:])
 
 def vecdot(a:object, b:object, axis:int=-1)->object:
-  A=_array(a)
-  B=_array(b)
+  A=_array(a); B=_array(b)
   if A.ndim==2 and B.ndim==2 and A.shape==B.shape and _has_vecdot_kernel(A, B):
     ax=_normalize_axis(axis, A.ndim)
     if ax==1:return _vecdot_last_axis(A, B)
@@ -238,10 +228,12 @@ def norm(x:object, ord:object=None, axis:object=None, keepdims:bool=False)->obje
       return _sum(_abs(X), axis=axis, keepdims=keepdims)
     if ord==_INF:
       from . import absolute as _abs
-      return _abs(X).max(axis=axis) if not keepdims else _abs(X).max(axis=axis)
+      abs_x=typing.cast(ndarray, _abs(X))
+      return abs_x.max(axis=axis) if not keepdims else abs_x.max(axis=axis)
     if ord==_NEG_INF:
       from . import absolute as _abs
-      return _abs(X).min(axis=axis) if not keepdims else _abs(X).min(axis=axis)
+      abs_x=typing.cast(ndarray, _abs(X))
+      return abs_x.min(axis=axis) if not keepdims else abs_x.min(axis=axis)
     if ord==0:
       from . import not_equal, sum as ne_sum
       return ne_sum(not_equal(X, 0), axis=axis, keepdims=keepdims)
@@ -281,18 +273,18 @@ def matrix_power(a:object, n:int)->ndarray:
     return out
   if n<0:return matrix_power(inv(A), -n)
   result=A
-  for _ in range(n-1):result=matmul(result, A)
+  for _ in range(n-1):result=typing.cast(ndarray, matmul(result, A))
   return result
 
-def slogdet(a:object)->tuple[float, float]:
+def slogdet(a:object)->tuple[_Scalar, _Scalar]:
   A=_array(a)
   sign, logdet=_w(_native.linalg_slogdet, A._native)
-  return sign, logdet
+  return typing.cast(_Scalar, sign), typing.cast(_Scalar, logdet)
 
-def multi_dot(arrays:typing.Sequence[object])->ndarray:
+def multi_dot(arrays:typing.Sequence[object])->object:
   arrs=[_array(a) for a in arrays]
   if len(arrs)<2:raise ValueError("multi_dot: need at least two arrays")
-  out=arrs[0]
+  out:object=arrs[0]
   for a in arrs[1:]:out=matmul(out, a)
   return out
 
@@ -409,7 +401,8 @@ def _einsum_finalise(sub:str, arr:object, out_sub:str)->object:
   for ax in sorted(to_sum, reverse=True):
     arr=_sum(arr, axis=ax)
     sub=sub[:ax]+sub[ax+1:]
-  if not sub and not out_sub:return arr
+  if not sub and not out_sub:
+    return arr._scalar() if isinstance(arr, ndarray) and arr.ndim==0 else arr
   perm=[sub.index(ch) for ch in out_sub]
   if perm!=list(range(len(perm))):arr=transpose(arr, tuple(perm))
   return arr
@@ -539,10 +532,10 @@ def lstsq(a:object, b:object, rcond:object=None)->tuple[ndarray, ndarray, int, n
   # python side from x and the original A,B.
   m, n=A.shape
   if rank==n and m>n and B.ndim==1:
-    diff=matmul(A, x)-B
+    diff=typing.cast(ndarray, matmul(A, x))-B
     residuals=typing.cast(ndarray, _sum(square(diff), keepdims=True))
   elif rank==n and m>n and B.ndim==2:
-    diff=matmul(A, x)-B
+    diff=typing.cast(ndarray, matmul(A, x))-B
     residuals=typing.cast(ndarray, _sum(square(diff), axis=0))
   else:
     from . import empty as _empty

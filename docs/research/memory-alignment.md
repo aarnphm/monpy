@@ -7,7 +7,7 @@ date: 2026-05-07
 
 _the cache hierarchy is the true bottleneck, and alignment is the cheapest way to stop fighting it._
 
-monpy currently leans on whatever Mojo's default allocator hands back (`alignof(T)` on a 64-bit target, so 8 B for `f64`, 4 B for `f32`), and our SIMD fast paths uniformly emit unaligned loads. that works correctly. it also leaves on the table somewhere between five and twenty percent on memory-bound elementwise kernels and a much larger margin on the awkward shapes — tall-thin matrices, complex arithmetic on AoS layouts, anything with row sizes that aren't a SIMD-multiple. the rest of this document is the gears: why the gap exists, how big it is on the hardware we actually run on, what allocator strategy we should adopt, and a phased rollout that doesn't blow up the codebase.
+monpy currently leans on whatever Mojo's default allocator hands back (`alignof(T)` on a 64-bit target, so 8 B for `f64`, 4 B for `f32`), and our SIMD fast paths uniformly emit unaligned loads. that works correctly. it also leaves on the table somewhere between five and twenty percent on memory-bound elementwise kernels and a much larger margin on the awkward shapes — tall-thin matrices, complex arithmetic on AoS layouts, anything with row sizes that aren't a SIMD-multiple. the rest of this document is the gears: why the gap exists, how big it is on the hardware we actually run on, what allocator strategy we should adopt, and a staged rollout that doesn't blow up the codebase.
 
 the audience is someone who has read Drepper end to end, knows what MESI is, and has spent a Tuesday afternoon staring at `perf stat`. we do not redefine cache coherence here. we do reproduce the actual cycle costs because the literature is full of folk wisdom that hasn't been true since Haswell.
 
@@ -202,7 +202,7 @@ the estimated end-to-end cost of staying AoS, for the _complex multiply_ kernel 
 
 ## 5. false sharing and the multi-thread alignment trap
 
-monpy is currently single-threaded at the Python frontier. we release the GIL during BLAS calls, but our own kernels don't spawn threads. that's about to change — see Phase 4 below — and when it does, false sharing becomes a first-order concern.
+monpy is currently single-threaded at the Python frontier. we release the GIL during BLAS calls, but our own kernels don't spawn threads. that's about to change when threaded scratch lands, and when it does, false sharing becomes a first-order concern.
 
 ### 5.1 the mechanics
 
@@ -477,7 +477,7 @@ struct Array[T: DType]:
 
 set at array creation time (cheap GCD over the strides). the SIMD dispatcher reads it: if `stride_alignment >= 64` and base address is aligned, the inner loop can elide per-iteration alignment checks entirely.
 
-this is the bookkeeping that enables Phase 2's static aligned dispatch. without it we're back to runtime checks.
+this is the bookkeeping that enables static aligned dispatch. without it we're back to runtime checks.
 
 ### 9.3 quantitative estimates
 
@@ -510,18 +510,18 @@ AoS, currently unaligned, see §4.1. with base alignment guaranteed, we shave th
 
 #### aggregated rollup
 
-Phase-1+2 (aligned alloc, aligned-load fast path):
+Aligned allocation plus aligned-load fast path:
 
 - f32 elementwise: +8–12%
 - f64 elementwise: +5–8%
 - complex elementwise: +5–7%
 - AVX-512 paths (when we add them): +25–35%
 
-Phase-3 (stride padding):
+Stride padding:
 
 - tall-thin matrix kernels: +4–6× speedup on the worst shapes, no impact on aligned-natural shapes.
 
-Phase-4–5 (workspace arenas, threaded scratch):
+Workspace arenas and threaded scratch:
 
 - LAPACK-heavy code paths: +10–20% on average, dominated by the workspace alloc cost going to zero on subsequent calls.
 - threaded reductions: cleared the false-share footgun, no positive perf number to attribute (the wins are in _not_ having a 10× regression).
@@ -555,11 +555,11 @@ the flip side: if we hand NumPy a buffer with **stride padding** (§9.2.3), NumP
 
 ---
 
-## 12. phased rollout
+## 12. staged rollout
 
 a concrete plan with believable timelines and exit criteria.
 
-### Phase 1 — aligned base allocator (1–2 days)
+### Step 1: aligned base allocator (1–2 days)
 
 **land**:
 
@@ -569,7 +569,7 @@ a concrete plan with believable timelines and exit criteria.
 
 **exit**: all `PhysicalStorage` allocations on the default path produce `(addr & 63) == 0` for sizes ≥ 64 B. no measurable regression on existing benchmarks; expect +0–5% from the L1 throughput improvement on incidentally-aligned code.
 
-### Phase 2 — aligned-load fast path (1 week)
+### Step 2: aligned-load fast path (1 week)
 
 **land**:
 
@@ -580,7 +580,7 @@ a concrete plan with believable timelines and exit criteria.
 
 **exit**: aligned variant fires on ≥ 95% of dispatches against monpy-allocated arrays. +5–15% on memory-bound elementwise across f32, f64. AVX-512 path (when introduced) shows the bigger lift.
 
-### Phase 3 — stride padding (3–5 days)
+### Step 3: stride padding (3–5 days)
 
 **land**:
 
@@ -591,7 +591,7 @@ a concrete plan with believable timelines and exit criteria.
 
 **exit**: tall-thin elementwise kernels run on the SIMD path (currently fall to scalar). 4–6× speedup on those shapes, ~10% memory overhead acceptable.
 
-### Phase 4 — threaded scratch + false-share avoidance (concurrent with parallelization landing)
+### Step 4: threaded scratch + false-share avoidance (concurrent with parallelization landing)
 
 **land**:
 
@@ -601,7 +601,7 @@ a concrete plan with believable timelines and exit criteria.
 
 **exit**: multi-threaded reductions and elementwise kernels scale linearly with worker count up to physical-core count. no false-share regressions in microbenchmarks.
 
-### Phase 5 — workspace arenas (1 week)
+### Step 5: workspace arenas (1 week)
 
 **land**:
 
@@ -648,7 +648,7 @@ cited and worth reading in full:
 
 ## 15. closing read
 
-the alignment work for monpy is shaped like a hill, not a cliff. Phase 1 lands in a day and gets us a few percent. Phase 2 is the big monomorphization payoff and lands in a week. Phase 3 unlocks the tall-thin shapes that are silently scalar today. Phase 4–5 are downstream of the threading work and should not be done before it.
+the alignment work for monpy is shaped like a hill, not a cliff. the aligned allocator lands in a day and gets us a few percent. the aligned-load fast path is the big monomorphization payoff and lands in a week. stride padding unlocks the tall-thin shapes that are silently scalar today. workspace arenas and threaded scratch are downstream of the threading work and should not be done before it.
 
 the single thing to internalize: **alignment is a geometric property as much as a microarchitectural one**. modern hardware has narrowed the cycle penalty of misaligned-mode loads to near zero, and this fact has propagated through the literature as "alignment doesn't matter anymore". it does. the penalty just moved: it's no longer in the load decode, it's in the line crossings and the throughput-port accounting. a 64-byte-aligned base address forecloses on a whole class of split-line losses without any extra bookkeeping at runtime.
 

@@ -43,4 +43,10 @@ def assert_same_shape_dtype(monpy_value: object, numpy_value: object) -> None:
   numpy_array = numpy.asarray(numpy_value)
 
   assert monpy_array.shape == tuple(numpy_array.shape)
+  if not isinstance(monpy_value, np.ndarray) and not isinstance(numpy_value, numpy.ndarray):
+    return
   assert numpy_dtype_for(monpy_array.dtype) == numpy_array.dtype
+
+
+def assert_same_result_kind(monpy_value: object, numpy_value: object) -> None:
+  assert isinstance(monpy_value, np.ndarray) is isinstance(numpy_value, numpy.ndarray)

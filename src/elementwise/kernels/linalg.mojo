@@ -480,7 +480,7 @@ def lu_det_into(a: Array, mut result: Array) raises:
 
 
 # ============================================================
-# Phase-6d LAPACK-backed decompositions.
+# LAPACK-backed decompositions.
 #
 # Pattern: load row-major Array → column-major scratch (transpose during
 # copy), call LAPACK, transpose result back to row-major Array. Each

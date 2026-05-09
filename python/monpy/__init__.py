@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import IntEnum
 from types import ModuleType, SimpleNamespace
 from . import _native
-_Scalar:typing.TypeAlias=builtins.bool|builtins.int|builtins.float
+_Scalar:typing.TypeAlias=builtins.bool|builtins.int|builtins.float|builtins.complex
 _NativeArray:typing.TypeAlias=_native.Array
 
 class _ArrayInterfaceLike(typing.Protocol):
@@ -238,7 +238,7 @@ class Ufunc:
   def types(self)->tuple[str, ...]:return ()
   @property
   def identity(self)->object:return self._identity
-  def __call__(self, *args:object, out:ndarray|None=None, where:object=True, casting:typing.Literal["no", "equiv", "safe", "same_kind", "unsafe"]="same_kind", dtype:object=None)->ndarray:
+  def __call__(self, *args:object, out:ndarray|None=None, where:object=True, casting:typing.Literal["no", "equiv", "safe", "same_kind", "unsafe"]="same_kind", dtype:object=None)->object:
     if (self.nin==2 and out is not None and dtype is None and where is True and casting=="same_kind" and len(args)==2
         and type(args[0]) is ndarray and type(args[1]) is ndarray and type(out) is ndarray and self._kind=="binary"):
       _native.binary_into(out._native, args[0]._native, args[1]._native, self._op)
@@ -253,7 +253,8 @@ class Ufunc:
     if self.nin==1:return self._call_unary(args[0], out=out, dtype=dtype)
     if self.nin==2:return self._call_binary(args[0], args[1], out=out, dtype=dtype)
     raise NotImplementedError(f"{self.__name__}: nin={self.nin} not implemented")
-  def _call_unary(self, x:object, *, out:ndarray|None, dtype:object)->ndarray:
+  def _call_unary(self, x:object, *, out:ndarray|None, dtype:object)->object:
+    scalar_input=_is_scalar_value(x)
     av=_av(x)
     # Defer sin/cos/exp/log on floats so `sin(x) + scalar*y` can fuse into the sin_add_mul kernel via _match_sam.
     # Skip when out=/dtype= force eager materialisation.
@@ -274,8 +275,9 @@ class Ufunc:
     if out is not None:
       out[...]=res
       return out
-    return res
-  def _call_binary(self, x1:object, x2:object, *, out:ndarray|None, dtype:object)->ndarray:
+    return _scalarize_zero_dim(res) if scalar_input else res
+  def _call_binary(self, x1:object, x2:object, *, out:ndarray|None, dtype:object)->object:
+    scalar_inputs=_is_scalar_value(x1) and _is_scalar_value(x2)
     if self._kind=="logical":
       l=asarray(x1, dtype=bool) if not isinstance(x1, ndarray) or x1.dtype!=bool else x1
       r=asarray(x2, dtype=bool) if not isinstance(x2, ndarray) or x2.dtype!=bool else x2
@@ -328,7 +330,7 @@ class Ufunc:
     if out is not None:
       out[...]=res
       return out
-    return res
+    return _scalarize_zero_dim(res) if scalar_inputs else res
   def reduce(self, a:object, axis:object=0, dtype:object=None, out:ndarray|None=None, keepdims:builtins.bool=False, initial:object=None, where:object=True)->object:
     if where is not True:raise NotImplementedError(f"{self.__name__}.reduce: where= not implemented")
     if initial is not None:raise NotImplementedError(f"{self.__name__}.reduce: initial= not implemented")
@@ -345,14 +347,14 @@ class Ufunc:
       if out is not None:
         out[...]=v
         return out
-      return v
+      return _scalarize_zero_dim(v) if not keepdims else v
     # axis=int or tuple.
     axes=_axis_tuple(axis)
     res=ndarray(_native.reduce_axis(arr._native, rop, tuple(builtins.int(a) for a in axes), builtins.bool(keepdims)))
     if out is not None:
       out[...]=res
       return out
-    return res
+    return _scalarize_zero_dim(res) if not keepdims else res
   def accumulate(self, a:object, axis:int=0, dtype:object=None, out:ndarray|None=None)->ndarray:
     arr=_mat(_av(a))
     if dtype is not None:
@@ -376,7 +378,7 @@ class Ufunc:
       out_flat[i, 0]=acc
       for j in range(1, axis_size):
         v=flat[i, j]
-        acc=self.__call__(acc, v) if isinstance(acc, (builtins.int, builtins.float, builtins.bool)) else self.__call__(asarray(acc), asarray(v))._scalar()
+        acc=self.__call__(acc, v) if isinstance(acc, (builtins.int, builtins.float, builtins.bool, builtins.complex)) else typing.cast(ndarray, self.__call__(asarray(acc), asarray(v)))._scalar()
         out_flat[i, j]=acc
     res=out_flat.reshape(cont.shape).transpose(_inverse_moveaxis_perm(ax, -1, n)) if n>1 else out_flat.reshape(cont.shape)
     if n==1:res=out_flat.reshape(cont.shape)
@@ -389,7 +391,7 @@ class Ufunc:
     B=_mat(_av(b))
     A_b=A.reshape(A.shape+(1,)*B.ndim)
     B_b=B.reshape((1,)*A.ndim+B.shape)
-    return self.__call__(A_b, B_b, out=out, dtype=dtype)
+    return typing.cast(ndarray, self.__call__(A_b, B_b, out=out, dtype=dtype))
   def at(self, a:ndarray, indices:object, b:object=None)->None:
     # Minimal `at`: indices must be integer array; b broadcasts onto indices.
     arr=asarray(a)
@@ -578,17 +580,17 @@ class ndarray:
     if type(o) is ndarray:return ndarray._wrap(self._native.div(o._native))
     return _binary_from_array(self, o, OP_DIV, scalar_on_left=False)
   def __rtruediv__(self, o:object)->object:return _binary_from_array(self, o, OP_DIV, scalar_on_left=True)
-  def __matmul__(self, o:object)->ndarray:
-    if type(o) is ndarray:return ndarray._wrap(self._native.matmul(o._native))
+  def __matmul__(self, o:object)->object:
+    if type(o) is ndarray:return _matmul_result(self, o)
     if isinstance(o, ndarray):
       l, r=_coerce(self, o, OP_MUL)
-      return ndarray._wrap(_native.matmul(l._native, r._native))
+      return _matmul_result(l, r)
     return matmul(self, o)
-  def __rmatmul__(self, o:object)->ndarray:
-    if type(o) is ndarray:return ndarray._wrap(o._native.matmul(self._native))
+  def __rmatmul__(self, o:object)->object:
+    if type(o) is ndarray:return _matmul_result(o, self)
     if isinstance(o, ndarray):
       l, r=_coerce(o, self, OP_MUL)
-      return ndarray._wrap(_native.matmul(l._native, r._native))
+      return _matmul_result(l, r)
     return matmul(o, self)
   def __neg__(self)->object:return multiply(self, -1)
   def __pos__(self)->ndarray:return self
@@ -723,8 +725,8 @@ class _DeferredArray:
   def __rmul__(self, o:object)->object:return _binary(o, self, OP_MUL)
   def __truediv__(self, o:object)->object:return _binary(self, o, OP_DIV)
   def __rtruediv__(self, o:object)->object:return _binary(o, self, OP_DIV)
-  def __matmul__(self, o:object)->ndarray:return matmul(self, o)
-  def __rmatmul__(self, o:object)->ndarray:return matmul(o, self)
+  def __matmul__(self, o:object)->object:return matmul(self, o)
+  def __rmatmul__(self, o:object)->object:return matmul(o, self)
   def __neg__(self)->object:return multiply(self, -1)
   def __pos__(self)->object:return self
   def reshape(self, *shape:int|Sequence[int])->ndarray:return self._materialize().reshape(*shape)
@@ -1498,6 +1500,9 @@ def where(condition:object, x1:object, x2:object)->ndarray:
   l, r=_coerce(l, r, OP_ADD)                                         # use OP_ADD's promotion table — same numeric rules
   return ndarray(_native.where(c._native, l._native, r._native))
 
+def _scalarize_zero_dim(value:object)->object:
+  return value._scalar() if isinstance(value, ndarray) and value.ndim==0 else value
+
 def sum(x:object, axis:object=None, *, dtype:object=None, out:ndarray|None=None, keepdims:builtins.bool=False)->object:return _reduce_dispatch(x, axis, REDUCE_SUM, dtype=dtype, out=out, keepdims=keepdims)
 def mean(x:object, axis:object=None, *, dtype:object=None, out:ndarray|None=None, keepdims:builtins.bool=False)->object:return _reduce_dispatch(x, axis, REDUCE_MEAN, dtype=dtype, out=out, keepdims=keepdims)
 def min(x:object, axis:object=None, *, out:ndarray|None=None, keepdims:builtins.bool=False)->object:return _reduce_dispatch(x, axis, REDUCE_MIN, dtype=None, out=out, keepdims=keepdims)
@@ -1531,13 +1536,13 @@ def _reduce_dispatch(x:object, axis:object, op:int, *, dtype:object, out:ndarray
     if out is not None:
       out[...]=v
       return out
-    return v
+    return _scalarize_zero_dim(v) if not keepdims else v
   axes=_axis_tuple(axis)
   res=ndarray(_native.reduce_axis(arr._native, op, tuple(builtins.int(a) for a in axes), builtins.bool(keepdims)))
   if out is not None:
     out[...]=res
     return out
-  return res
+  return _scalarize_zero_dim(res) if not keepdims else res
 
 def std(x:object, axis:object=None, *, ddof:int=0, dtype:object=None, out:ndarray|None=None, keepdims:builtins.bool=False)->object:
   arr=_mat(_av(x))
@@ -1614,7 +1619,7 @@ def quantile(x:object, q:object, axis:object=None, *, keepdims:builtins.bool=Fal
       flat_out.append(_py_float(_quantile_from_sorted(vals, k_q, keepdims_axes=None, orig_shape=())))
   if not isinstance(q, (list, tuple)):
     if keepdims:return ndarray(_native.from_flat(flat_out, out_shape, float64.code))
-    return ndarray(_native.from_flat(flat_out, pref, float64.code))
+    return _scalarize_zero_dim(ndarray(_native.from_flat(flat_out, pref, float64.code)))
   if keepdims:return ndarray(_native.from_flat(flat_out, out_shape, float64.code))
   return ndarray(_native.from_flat(flat_out, out_shape, float64.code))
 
@@ -1628,7 +1633,8 @@ def _quantile_from_sorted(sorted_vals:Sequence[float], q:object, *, keepdims_axe
   frac=pos-lo
   v=sorted_vals[lo]*(1-frac)+sorted_vals[hi]*frac
   shape=() if keepdims_axes is None else tuple(1 for _ in orig_shape)
-  return ndarray(_native.from_flat([v], shape, float64.code))
+  res=ndarray(_native.from_flat([v], shape, float64.code))
+  return _scalarize_zero_dim(res) if keepdims_axes is None else res
 
 def percentile(x:object, q:object, axis:object=None, *, keepdims:builtins.bool=False, method:str="linear")->object:
   if isinstance(q, (list, tuple)):qf=[_py_float(v)/100.0 for v in q]
@@ -1925,7 +1931,7 @@ def searchsorted(a:object, v:object, side:str="left", sorter:object=None)->objec
   for x in needles:
     if side=="left":out.append(bisect.bisect_left(haystack, x))
     else:out.append(bisect.bisect_right(haystack, x))
-  if is_scalar:return ndarray(_native.from_flat(out, (), int64.code))
+  if is_scalar:return ndarray(_native.from_flat(out, (), int64.code))._scalar()
   shape=asarray(v).shape
   return ndarray(_native.from_flat(out, shape, int64.code))
 
@@ -2669,16 +2675,19 @@ def _advanced_setitem(self:ndarray, k:object, v:object)->None:
 def _advanced_setitem_tuple(self:ndarray, k:tuple, v:object)->None:
   raise NotImplementedError("setitem with tuple of fancy indices not implemented in v1")
 
-def matmul(x1:object, x2:object)->ndarray:
+def _matmul_result(l:ndarray, r:ndarray)->object:
+  out=ndarray._wrap(_native.matmul(l._native, r._native))
+  return out._scalar() if l.ndim==1 and r.ndim==1 else out
+
+def matmul(x1:object, x2:object)->object:
   if _is_kernel_value(x1) or _is_kernel_value(x2):
     from .kernels import dsl as _kernel_dsl
-    return typing.cast(ndarray, _kernel_dsl.matmul(x1, x2))
-  if type(x1) is ndarray and type(x2) is ndarray:                                                                             # ndarray×ndarray fast path; mojo handles promotion
-    return ndarray._wrap(_native.matmul(x1._native, x2._native))
+    return _kernel_dsl.matmul(x1, x2)
+  if type(x1) is ndarray and type(x2) is ndarray: return _matmul_result(x1, x2)  # ndarray x ndarray fast path; mojo handles promotion
   l=_mat(_av(x1))
   r=_mat(_av(x2))
   l, r=_coerce(l, r, OP_MUL)
-  return ndarray._wrap(_native.matmul(l._native, r._native))
+  return _matmul_result(l, r)
 
 def diagonal(a:object, offset:int=0, axis1:int=0, axis2:int=1)->ndarray:
   arr=asarray(a)
@@ -2691,7 +2700,7 @@ def trace(a:object, offset:int=0, axis1:int=0, axis2:int=1, dtype:object=None, o
   if tr is not None:
     dc=-1 if dtype is None else _resolve_dtype(dtype).code
     r=ndarray(tr(arr._native, int(offset), int(axis1), int(axis2), dc))
-    v=r
+    v=r._scalar() if r.ndim==0 else r
   else:
     v=_trace_fallback(arr, int(offset), int(axis1), int(axis2), dtype)
   if out is not None:
@@ -2859,12 +2868,13 @@ def _trace_fallback(arr:ndarray, offset:int, axis1:int, axis2:int, dt:object)->o
   out_shape=d.shape[:-1]
   flat:list[object]=[]
   for prefix in _iter_idx(out_shape):
-    total:builtins.float|builtins.int=0.0 if t in(float32, float64) else 0
+    total:_Scalar=0.0 if t in(float32, float64) else 0
     for di in range(d.shape[-1]):total+=typing.cast(_Scalar, d[prefix+(di,)])
     flat.append(total)
   return ndarray(_native.from_flat(flat, out_shape, t.code))
 
-def _is_scalar(v:object)->builtins.bool:return isinstance(v, (builtins.bool, builtins.int, builtins.float))                      # python scalar (bool/int/float)
+def _is_scalar_value(v:object)->builtins.bool:return isinstance(v, (builtins.bool, builtins.int, builtins.float, builtins.complex))
+def _is_scalar(v:object)->builtins.bool:return isinstance(v, (builtins.bool, builtins.int, builtins.float))                      # python real scalar (bool/int/float)
 
 def _isd(v:object)->DType:                                                                                                    # infer scalar dtype from a python scalar alone
   if isinstance(v, builtins.bool):return bool

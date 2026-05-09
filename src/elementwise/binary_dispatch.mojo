@@ -215,7 +215,7 @@ def maybe_binary_scalar_contiguous(
             scalar_on_left,
         )
         return True
-    # Phase 5b typed int paths: int32/int64/uint32/uint64.
+    # Typed int paths: int32/int64/uint32/uint64.
     if array.dtype_code == ArrayDType.INT64.value and result.dtype_code == ArrayDType.INT64.value:
         binary_scalar_contig_typed[DType.int64](
             contiguous_ptr[DType.int64](array),
@@ -495,7 +495,7 @@ def maybe_binary_row_broadcast_contiguous(
             row_on_left,
         )
         return True
-    # Phase 5b typed int paths.
+    # Typed int paths.
     if (
         matrix.dtype_code == ArrayDType.INT64.value
         and row.dtype_code == ArrayDType.INT64.value

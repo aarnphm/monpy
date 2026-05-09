@@ -363,7 +363,7 @@ class Generator:
   def normal(self, loc:object=0.0, scale:object=1.0, size:int|Sequence[int]=...)->ndarray:...
   def normal(self, loc:object=0.0, scale:object=1.0, size:object=None)->_FloatOrArray:
     result=_scaled(_normal_array(self._draw_key(), size, float64), loc, scale)
-    return result if size is not None else result._scalar()
+    return cast(_FloatOrArray, _as_scalar_if(result, size is None))
 
   @overload
   def integers(self, low:object, high:object|None=None, size:None=None, dtype:object=int64, endpoint:bool=False)->builtins.int:...

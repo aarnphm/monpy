@@ -96,6 +96,26 @@ covered or partially covered today:
   `LayoutIter`, `MultiLayoutIter`. used by the proof-of-concept
   unary-strided migration; available for future kernel rewrites.
 
+### return-type policy
+
+NumPy scalar-producing array APIs return NumPy scalar objects with shape-like
+metadata through `numpy.asarray(value).shape == ()`. JAX returns array objects
+directly for the same cases. MonPy does not yet have a NumPy scalar hierarchy,
+so implemented computed array APIs return zero-dimensional `monpy.ndarray`
+values instead of Python `int`/`float`/`bool` values.
+
+The audited scalar-producing surface includes reductions (`sum`, `mean`, `prod`,
+`min`, `max`, `all`, `any`, `argmin`, `argmax`, `count_nonzero`, `std`, `var`,
+`average`, `median`, `quantile`, `percentile`, `ptp`), `trace`,
+`searchsorted` with scalar needles, scalar tensor contractions (`dot`, `vdot`,
+`inner`, `tensordot`, `einsum`), and scalar linalg results (`det`, `slogdet`
+parts, `norm`, `matrix_rank`, and the `lstsq` rank field).
+
+Explicit extraction protocols remain scalar-producing: integer indexing,
+`tolist()`, and Python conversions such as `int(x)`, `float(x)`, and `bool(x)`
+produce Python values. This keeps ergonomic scalar escape hatches without
+leaking Python builtins from computed array APIs.
+
 major local blockers already called out in compatibility coverage:
 
 - unsupported dtype families: object, string, structured, datetime, and
@@ -283,7 +303,7 @@ monpy implementation note:
 many missing functions can become python-level wrappers after core view and
 iterator semantics are correct.
 
-shipped (phase 6a / 6b plus the 2026-05-07 tail):
+shipped (shape-manipulation and creation-helper work plus the 2026-05-07 tail):
 
 - creation helpers: `eye`, `identity`, `tri`, `meshgrid`, `logspace`,
   `geomspace`, `atleast_1d`, `atleast_2d`, `atleast_3d`, `indices`, `ix_`.
