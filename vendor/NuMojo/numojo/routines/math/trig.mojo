@@ -401,7 +401,9 @@ def tan[dtype: DType](A: Matrix[dtype]) -> Matrix[dtype]:
 
 def hypot[
     dtype: DType
-](array1: NDArray[dtype], array2: NDArray[dtype]) raises -> NDArray[dtype]:
+](array1: NDArray[dtype], array2: NDArray[dtype]) raises -> NDArray[
+    dtype
+] where dtype.is_floating_point():
     """
     Apply hypotenuse calculation to two arrays.
 
@@ -423,7 +425,9 @@ def hypot[
 
 def hypot_fma[
     dtype: DType
-](array1: NDArray[dtype], array2: NDArray[dtype]) raises -> NDArray[dtype]:
+](array1: NDArray[dtype], array2: NDArray[dtype]) raises -> NDArray[
+    dtype
+] where dtype.is_floating_point():
     """
     Apply hypotenuse calculation using fused multiply-add.
 

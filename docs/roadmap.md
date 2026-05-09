@@ -1,6 +1,7 @@
 # monpy roadmap
 
-see [[numpy-port-gaps]] for the missing numpy library map:
+see [[numpy-port-gaps]] for the missing numpy library map, and
+[[scipy-jax-port-gaps]] for the scipy array-api and jax transform pressure map:
 dtype/scalar machinery, coercion, strided iteration, ufunc dispatch, indexing,
 reductions, linalg/tensor operations, random, fft, strings, masked arrays, io,
 and compatibility modules.
@@ -30,6 +31,9 @@ and compatibility modules.
 - `linalg` import smoke coverage exists for `monpy`, `monumpy`, and
   `monpy.array_api`, with local tests for matmul, matrix transpose, `solve`,
   `inv`, `det`, singular matrices, dtype policy, and backend markers.
+- `vmap` exists as a jax-shaped eager batching wrapper for flat positional axes,
+  axis-0 keyword mapping, tuple/list/mapping outputs, and `out_axes` placement.
+  graph-level primitive batching remains the performance path.
 
 ## design decisions
 
@@ -62,5 +66,10 @@ and compatibility modules.
 - non-cpu devices, including metal-backed arrays.
 - object, string, structured, datetime, and timedelta dtype families.
 - higher-rank matmul.
+- graph-level `vmap`, autodiff transforms, named collectives, pmap/sharding, and
+  full jax pytree semantics.
+- scipy subsystems beyond the current planning map: sparse storage, fft-backed
+  signal processing, optimize/integrate/interpolate/ndimage/io, and the full
+  special/stats distribution surface.
 - the deep ufunc tail: `where=` keyword support, `reduceat`, and numpy's full floating-point error-state machinery.
 - mojo concurrent build is still subpar

@@ -34,10 +34,12 @@ observed upstream tree shape:
 
 the top-level public namespace is a poor implementation guide by itself. in the
 local numpy `2.4.4` install, numpy exposes 495 public top-level names; monpy
-currently exports 259 public names, with 251 overlapping numpy names. that means
-the raw namespace gap is 244 names, roughly 49 percent of numpy's public
-top-level namespace. the real gap is larger than that, because numpy's internals
-also define behavior behind those names.
+currently exports 396 public names, with 252 overlapping numpy names. that means
+the raw namespace gap is 243 names, roughly 49 percent of numpy's public
+top-level namespace. the public-name count now includes monpy-native dtype,
+kernel, and neural-network helpers, so overlap is the useful compatibility
+number. the real gap is larger than the raw missing-name set, because numpy's
+internals also define behavior behind those names.
 
 ## current monpy surface
 
@@ -73,11 +75,21 @@ covered or partially covered today:
 - reductions and statistics: `sum`, `mean`, `min`, `max`, `prod`, `all`, `any`,
   `argmin`, `argmax`, cumulative variants, nan-aware variants, `std`, `var`,
   `median`, `quantile`, `percentile`, `average`, and `count_nonzero`.
-- matmul for 1-d and 2-d operands, including several dense and strided layout
-  cases.
+- matmul for 1-d and 2-d operands, including dense, transposed,
+  f-contiguous, offset, negative-stride, matrix-vector, vector-matrix, and
+  complex `cgemm`/`zgemm` cases.
+- tensor operations: `dot`, `vdot`, `inner`, `outer`, `tensordot`, `einsum`,
+  `kron`, `cross`, `matvec`, `vecmat`, and `vecdot` for the adapted v1
+  behavior.
 - linalg namespace: `matmul`, `matrix_transpose`, `solve`, `inv`, `det`, `qr`,
-  `cholesky`, `eig`, `eigh`, `svd`, `lstsq`, `pinv`, `matrix_rank`, norm
-  helpers, tensor helpers, and `LinAlgError`.
+  `cholesky`, `eig`, `eigh`, `eigvals`, `eigvalsh`, `svd`, `svdvals`, `lstsq`,
+  `pinv`, `matrix_rank`, `matrix_power`, `slogdet`, `multi_dot`, norm helpers,
+  `tensorinv`, `tensorsolve`, and `LinAlgError`.
+- sorting, searching, indexing, and set-operation helpers: `sort`, `argsort`,
+  `partition`, `searchsorted`, `digitize`, `unique`, `bincount`, `isin`,
+  `intersect1d`, `union1d`, `setdiff1d`, `setxor1d`, `nonzero`, `argwhere`,
+  `flatnonzero`, `ravel_multi_index`, `unravel_index`, `tril`, `triu`,
+  `tril_indices`, and `triu_indices`.
 - internal infrastructure (no public surface): vendored CuTe-style
   layout algebra at `src/cute/` — `IntTuple`, `Layout`, `composition`,
   `coalesce`, `complement`, `select`/`transpose`, `logical_divide`,
@@ -88,12 +100,16 @@ major local blockers already called out in compatibility coverage:
 
 - unsupported dtype families: object, string, structured, datetime, and
   timedelta.
-- higher-rank matmul.
+- higher-rank / batched matmul and stacked linalg semantics.
 - full numpy random, fft, masked-array, string, polynomial, io, testing, and
   f2py subsystems.
-- deep ufunc/reduction tail: `where=` keyword support on ufuncs, `reduceat`,
-  complete floating-point error-state behavior, and the c-api-level machinery
-  behind numpy's extension ecosystem.
+- deep ufunc/reduction tail: `where=` keyword support on ufuncs,
+  `reduce(initial=...)`, `reduceat`, complete floating-point error-state
+  behavior, bitwise integer ufuncs, and the c-api-level machinery behind
+  numpy's extension ecosystem.
+- memory aliasing and formatting helpers: `shares_memory`, `may_share_memory`,
+  `array2string`, `array_repr`, print options, and the wider family of
+  convenience wrappers that do not belong in core kernels.
 
 ## missing core library
 
@@ -106,14 +122,17 @@ missing pieces:
 
 - dtype registry for the full numpy dtype universe. the supported v1 dtypes now
   have native registry-backed metadata and cast/promotion query helpers.
-- scalar aliases and scalar classes for signed integers, unsigned integers,
-  floating types, complex types, strings, object, datetime, timedelta, and void.
+- numpy scalar class hierarchy and abstract scalar aliases: `generic`,
+  `number`, `integer`, `signedinteger`, `unsignedinteger`, `floating`,
+  `complexfloating`, `flexible`, and friends. monpy has `DType` descriptors and
+  dtype aliases, not numpy-compatible scalar classes.
 - dtype metadata for later families: native-endian checks, field descriptors,
   subarray descriptors, canonical names beyond the v1 set, and format strings.
 - scalar extraction and python scalar conversion per dtype.
 - cast safety, cast loops, and astype behavior across every supported dtype pair.
-  the current four-dtype surface has a native cast-copy path and an adapted
-  numpy cast-matrix test; the wider dtype families are still missing.
+  the current numeric surface has native cast-copy paths and adapted numpy
+  cast-matrix tests; object, string, datetime, timedelta, structured, and record
+  families are still missing.
 - promotion and type discovery beyond the supported v1 set:
   `min_scalar_type`, `common_type`, and wider-family behavior for
   `result_type`, `promote_types`, `can_cast`, `issubdtype`, `isdtype`, `finfo`,
@@ -124,10 +143,11 @@ monpy implementation note:
 - add a native dtype layer, likely `src/dtype.mojo`, and make python's dtype
   registry a mirror of that table.
 - keep dtype ids compact, but stop treating them as the whole dtype model.
-- widen dtype support in batches. signed integers first, then unsigned integers,
-  then smaller floats if the mojo/runtime support is sane, then complex. string,
-  object, datetime, and structured dtypes should wait until the core loop and
-  casting contracts are stable.
+- keep widening dtype support in batches. signed integers, unsigned integers,
+  float16, complex64, and complex128 are already in the public surface. the
+  low-precision native storage dtypes need explicit interchange semantics, while
+  string, object, datetime, timedelta, and structured dtypes should wait until
+  the core loop, ownership, and casting contracts are stable.
 
 ### coercion and construction
 
@@ -144,8 +164,9 @@ missing pieces:
 - dtype discovery and requested-dtype resolution in the same pass.
 - copy policy that is shared by `array`, `asarray`, `copy`, `astype`, dlpack,
   buffer protocol, and numpy interop.
-- buffer-protocol ingestion as the fast portable path. the current supported
-  dtypes use the native dtype format decoder shared with the registry helpers.
+- buffer-protocol ingestion as the fast portable path. `frombuffer` exists and
+  the current supported dtypes use the native dtype format decoder shared with
+  the registry helpers, but this is not yet one unified coercion planner.
 - optional numpy c-api ingestion as the fastest numpy-specific path if abi
   coupling is worth it.
 
@@ -165,14 +186,17 @@ public api can grow cleanly.
 
 missing pieces:
 
-- n-dimensional broadcast iterator for arbitrary operand counts.
-- output allocation and `out=` validation against shape, dtype, and writeability.
-- inner-loop selection by dtype, contiguity, alignment, and stride pattern.
-- negative-stride and zero-stride correctness.
-- axis iteration for reductions and cumulative operations.
-- boolean mask iteration and indexed gathers/scatters.
-- a shared executor for unary, binary, ternary, reduction, copy, cast, and
-  assignment loops.
+- n-dimensional broadcast iterator for arbitrary operand counts that every
+  operation can share. today some families have their own walkers or
+  python-level coordinate loops.
+- output allocation and `out=` validation against shape, dtype, casting, and
+  writeability across all elementwise, reduction, copy, cast, and assignment
+  paths.
+- masked loop execution for `where=` and scatter/gather operations.
+- native join/split/copy kernels for paths that currently flatten and rewrite
+  element by element in python.
+- one shared executor for unary, binary, ternary, reduction, copy, cast, and
+  assignment loops instead of family-specific dispatch code.
 
 monpy implementation note:
 
@@ -181,54 +205,52 @@ monpy implementation note:
 
 ### ufunc machinery
 
-today monpy has plain python functions for a small set of elementwise operations.
-numpy has `ufunc` objects with methods and dispatch rules.
+monpy now has `Ufunc` objects for the core elementwise surface, but numpy's
+ufunc contract is still wider than the current wrapper.
 
 missing pieces:
 
-- ufunc-like objects with call semantics.
-- dtype resolution and loop selection per ufunc.
-- `out=`, `where=`, `casting=`, `order=`, `dtype=`, and `subok=` handling where
-  relevant.
-- methods: `reduce`, `accumulate`, `reduceat`, `outer`, and `at`.
-- identities and reduction dtype policy.
+- complete dtype resolution and loop selection per ufunc for every supported
+  dtype family.
+- `where=`, `order=`, and `subok=` handling where relevant, plus stricter
+  `out=`, `casting=`, and `dtype=` validation.
+- method tail: `reduce(initial=...)`, `reduceat`, and more exhaustive `at`
+  semantics. `reduce`, `accumulate`, `outer`, and a minimal `at` exist.
+- identities and reduction dtype policy across the wider dtype set.
 - floating-point error handling for divide/invalid/overflow/underflow.
-- broad math, comparison, logical, and bitwise function families.
+- bitwise integer ufunc families and the remaining floating-point helper tail.
 
 high-priority ufunc families:
 
-- arithmetic: `negative`, `positive`, `absolute`, `power`, `floor_divide`,
-  `remainder`, `mod`, `fmod`, `divmod`, `reciprocal`, `square`, `sqrt`.
-- comparisons: `equal`, `not_equal`, `less`, `less_equal`, `greater`,
-  `greater_equal`.
-- logical: `logical_and`, `logical_or`, `logical_xor`, `logical_not`.
+- arithmetic tail: `fmod`, `divmod`, `float_power`, `ldexp`, `frexp`,
+  `nextafter`, `spacing`, and `heaviside`.
 - bitwise integer ops: `bitwise_and`, `bitwise_or`, `bitwise_xor`,
   `bitwise_not`, shifts, and bit counts.
-- floating tests: `isnan`, `isinf`, `isfinite`, `isclose`, `signbit`.
-- min/max: `minimum`, `maximum`, `fmin`, `fmax`.
-- transcendental: `sqrt`, `tan`, inverse trig, hyperbolic functions, `log1p`,
-  `log2`, `log10`, `exp2`, `expm1`.
+- floating tests and comparisons: `isclose`, `allclose`, `array_equal`,
+  `array_equiv`, and tolerance helpers.
+- clipping/convolution/difference helpers: `clip`, `convolve`, `correlate`,
+  `diff`, `ediff1d`, and gradient-style wrappers.
 
 monpy implementation note:
 
-- make existing `add`, `subtract`, `multiply`, `divide`, `sin`, `cos`, `exp`,
-  and `log` ufunc-like before adding the long tail.
-- keep the `log(-inf)` parity fix pinned while building this layer; full ufunc
-  objects are still missing.
+- keep the `log(-inf)` parity fix pinned while filling this layer. do not grow
+  the long tail by adding private one-off walkers where the shared ufunc
+  executor should own the behavior.
 
 ### reductions and statistics
 
-axis-none scalar reductions are only the first case.
+axis-none scalar reductions, axis reductions, keepdims, dtype controls, and many
+statistics helpers exist for the adapted v1 surface.
 
 missing pieces:
 
-- `axis` as an int, negative int, tuple of ints, and `None`.
-- `keepdims`, `out`, `where`, `initial`, and dtype controls.
-- result-shape calculation for reductions.
-- cumulative reductions over axes.
-- `prod`, `all`, `any`, `argmin`, `nan*` reductions, `std`, `var`, `median`,
-  `quantile`, `percentile`, `average`, `count_nonzero`, histograms, and
-  correlation/covariance helpers.
+- `where` and `initial` support across reductions and ufunc reductions.
+- fuller `out=` validation and dtype policy for mixed integer/float/complex
+  reductions.
+- axis-aware `quantile` / `nanquantile` tails and more exact numpy method
+  coverage.
+- histograms, correlation/covariance helpers, and window/statistics utilities
+  outside the current ndarray core.
 
 monpy implementation note:
 
@@ -275,6 +297,11 @@ shipped (phase 6a / 6b plus the 2026-05-07 tail):
 still missing:
 
 - memory checks: `shares_memory`, `may_share_memory`, contiguity helpers.
+- convenience helpers: `broadcast_shapes`, `diag`, `diagflat`,
+  `diag_indices_from`, `fill_diagonal`, `fromfunction`, `choose`, `compress`,
+  `select`, `piecewise`, `place`, `apply_along_axis`, and `apply_over_axes`.
+- keyword tails such as `concatenate(out=...)`, `stack(out=...)`, sparse
+  `meshgrid`, sparse `indices`, and non-default order modes.
 
 implementation notes:
 
@@ -296,18 +323,22 @@ monpy implementation note:
 
 ### linear algebra and tensor operations
 
-monpy has a useful base, but numpy's linear algebra and tensor operation surface
-is much wider.
+monpy has a useful base, including LAPACK-backed decompositions and tensor
+wrappers, but numpy's stacked/batched semantics and parser tails are still much
+wider.
 
 missing pieces:
 
-- tensor ops: `dot`, `vdot`, `vecdot`, `inner`, `outer`, `tensordot`, `einsum`,
-  `einsum_path`, `kron`, `cross`, batched `matmul`, `matvec`, `vecmat`.
-- linalg: `norm`, `vector_norm`, `matrix_norm`, `matrix_rank`, `matrix_power`,
-  `slogdet`, `qr`, `cholesky`, `eig`, `eigh`, `eigvals`, `eigvalsh`, `svd`,
-  `svdvals`, `pinv`, `lstsq`, `multi_dot`, `tensorinv`, `tensorsolve`.
-- broadcasting and stacked-matrix semantics for linalg functions.
-- hermitian/symmetric-specialized paths where numpy exposes them.
+- higher-rank / batched `matmul`, `dot`, `inner`, `cross`, `matvec`, and
+  `vecmat` semantics.
+- stacked-matrix semantics for `solve`, `inv`, decompositions, rank, norms,
+  tensor helpers, and error cases.
+- full `einsum`: ellipsis, output arrays, optimize planning, path reporting,
+  and `einsum_path`.
+- matrix norm `ord` variants, `multi_dot` cost optimization, and full
+  hermitian/symmetric-specialized behavior where numpy exposes it.
+- dtype/backend widening for every linalg routine, including complex and
+  lower-precision paths where LAPACK or Mojo fallbacks differ.
 
 monpy implementation note:
 
@@ -318,12 +349,18 @@ monpy implementation note:
 
 ### sorting, searching, and set operations
 
+the first slice exists: `sort`, `argsort`, `partition`, `searchsorted`,
+`digitize`, `unique`, `bincount`, `isin`, `intersect1d`, `union1d`,
+`setdiff1d`, and `setxor1d` are covered for adapted v1 behavior.
+
 missing pieces:
 
-- `sort`, `argsort`, `partition`, `argpartition`, `lexsort`,
-  `searchsorted`, `unique`, `unique_all`, `unique_counts`, `unique_inverse`,
-  `unique_values`, `isin`, `intersect1d`, `union1d`, `setdiff1d`, `setxor1d`,
-  `bincount`, `digitize`.
+- `argpartition` and `lexsort` coverage for the implemented subset.
+- axis/order/stability variants across sort-like routines.
+- numpy 2 unique-family helpers: `unique_all`, `unique_counts`,
+  `unique_inverse`, and `unique_values`.
+- structured dtype sorting/searching behavior, object/string comparisons, and
+  performance work beyond python-level loops.
 
 monpy implementation note:
 
@@ -412,19 +449,19 @@ monpy implementation note:
 the fastest route to meaningful numpy parity is not to add public names first.
 it is to add the machinery that makes new names cheap and correct.
 
-1. fix current editable/import stability before expanding the surface.
-2. introduce a first-class dtype registry and casting table.
-3. build a shared strided-loop executor with broadcast, output, and axis
-   planning.
-4. turn existing elementwise functions into ufunc-like objects.
-5. implement axis-aware reductions on the shared executor.
-6. add advanced indexing using shared gather/scatter machinery.
-7. add cheap creation and shape-manipulation wrappers once copy/view semantics
-   are enforceable.
-8. widen dtypes in batches and update promotion/casting tests each time.
-9. add tensor/linalg functions once batched shape semantics exist.
-10. treat `random`, `fft`, `ma`, `strings`, `records`, `polynomial`, and io as
-    later subsystems, not prerequisites for ndarray core parity.
+1. keep the coverage and gap ledgers synchronized with runtime behavior.
+2. finish the shared strided-loop executor: broadcast, output, axis, mask,
+   casting, and gather/scatter planning.
+3. close ufunc and reduction keyword tails: `where=`, `initial=`, `reduceat`,
+   stricter `out=`, and floating-point error-state behavior.
+4. add higher-rank / batched matmul and stacked linalg semantics.
+5. move python-level join/split/sort/index loops into native kernels where they
+   are now correctness-only and visibly slow.
+6. fill the numpy scalar hierarchy and later dtype families only when ownership,
+   casting, and scalar extraction contracts are explicit.
+7. add cheap convenience wrappers once copy/view/error semantics are enforceable.
+8. treat `random`, `fft`, `ma`, `strings`, `records`, `polynomial`, and io as
+   later subsystems, not prerequisites for ndarray core parity.
 
 ## tracking rule
 

@@ -100,9 +100,8 @@ monpy-profile \
 I use this for a hardware-counter pass that can distinguish a Python wrapper
 regression from a cache-miss, instruction-count, or branch-miss regression.
 
-I run the same case with `--candidate numpy` when the question is whether monpy is
-losing to NumPy wrapper overhead, iterator behavior, or a lower-level library
-call:
+I run the same case with `--candidate numpy` when the question is whether monpy
+trails on wrapper overhead, iterator behavior, or a lower-level library call:
 
 ```bash
 monpy-profile \
@@ -242,8 +241,8 @@ Local result:
 | `array/creation/atleast_2d_f32` |             6.087 |        3.526 |         2.664x |    1.519x |
 
 The direct microbench moved `mnp.atleast_2d(existing_vector)` from about 4.1 us
-to about 1.4 us. The remaining gap is the generic Python facade and one native
-call, not data movement.
+to about 1.4 us. The remaining gap is the generic Python facade plus one native
+call; data movement has left the crime scene.
 
 ### 2026-05-08 exact middle-newaxis view
 
@@ -264,8 +263,8 @@ Local result:
 | `array/views/newaxis_middle_f32` |             5.743 |        3.138 |         2.734x |    1.535x |
 
 The direct microbench moved the exact `helper[:, None, :]` view from about 3.6
-us to about 1.1 us. The row is still trails NumPy, and it has shed the
-full generic slice tax for a fixed full-slice newaxis.
+us to about 1.1 us. The row still trails NumPy, and the fixed full-slice
+newaxis path has shed the generic slice tax.
 
 ### 2026-05-08 native swapaxes view
 
@@ -282,8 +281,8 @@ Local result:
 | `array/views/swapaxes_f32` |             5.534 |        3.072 |         2.550x |    1.379x |
 
 The direct microbench moved `mnp.swapaxes(existing_rank3, 0, 2)` from about 3.3
-us to about 0.87 us. The residual benchmark time is mostly the Python facade and
-benchmark harness overhead, not data movement.
+us to about 0.87 us. The residual benchmark time is mostly Python facade and
+benchmark harness overhead; data movement is already tiny.
 
 ### 2026-05-08 direct NumPy ndarray ingest
 
@@ -627,8 +626,9 @@ Profile artifacts:
   longer appears in the hot wrapper stack for these cases.
 
 The top rows after this pass are `reversed_add_f32`, `moveaxis_f32`,
-`empty_like_shape_override_f32`, and `transpose_add_f32`. Next high-upside view target: negative-stride elementwise dispatch or moveaxis
-permutation metadata, not further `ravel`/`flatten` work.
+`empty_like_shape_override_f32`, and `transpose_add_f32`. Next high-upside view
+target: negative-stride elementwise dispatch or moveaxis permutation metadata.
+Leave `ravel`/`flatten` alone for now.
 
 ### 2026-05-08 F-order transposed binary output
 
@@ -708,7 +708,7 @@ Profile artifacts:
   major faults, 8 minor faults, 2.925 s user CPU, and 0.029 s system CPU in the
   3 s child loop.
 - The allocation pass traced a 131,312 byte Python peak and reported 52.9 MB
-  max RSS. I changed native layout work, not Python allocation shape.
+  max RSS. Native layout work changed; Python allocation shape stayed fixed.
 - The `sample(1)` report still puts the native time in
   `maybe_binary_rank3_axis0_tile`, now the linear F-order branch. It also shows
   allocator frames under `tc_memalign`, so the next stride-kernel pass should
@@ -742,8 +742,8 @@ of `(start, stop, step)`.
 `src/create/shape_ops.mojo` now exposes `reverse_1d_ops`, and
 `ndarray.__getitem__` dispatches exact rank-1 `[::-1]` to the new no-argument
 native method before the generic 1-D slice path. The generic path also reads the
-rank-1 length through `shape_at(0)` via a one-element Python
-shape tuple.
+rank-1 length through `shape_at(0)`, which saves the one-element Python shape
+tuple.
 
 Local result:
 
@@ -778,8 +778,8 @@ tax.
 
 ### 2026-05-08 attention scalar and row-kernel recovery
 
-The linked reference commit, `e2ed21d`, only added `pyyaml`; it was only a PyYAML commit. A detached baseline at that commit measured the
-attention rows as:
+The linked reference commit, `e2ed21d`, only added `pyyaml`. A detached
+baseline at that commit measured the attention rows as:
 
 | row                                                | `e2ed21d` monpy us | current-start monpy us | post-fix monpy us | post-fix ratio |
 | -------------------------------------------------- | -----------------: | ---------------------: | ----------------: | -------------: |
@@ -787,8 +787,8 @@ attention rows as:
 | `attention/attention/causal_attention_t32_d32_f32` |            133.539 |                121.953 |            43.121 |         1.907x |
 | `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32`   |           1606.192 |               1534.498 |           165.275 |         1.569x |
 
-The bad current-start profile was still real. It just came from the attention
-stack's generic paths, the attention stack itself:
+The bad current-start profile was still real. The regression came from the
+attention stack's generic paths:
 
 - `reduce_axis_ops` used the coordinate-list f64 walker for every
   `axis=-1, keepdims=True` row reduction. Direct softmax decomposition showed
@@ -810,7 +810,7 @@ I added three general fast paths with benchmark rows as witnesses:
   float64. This covers softmax row shifts/divides and layer-norm centering.
 - Same-shape bool-mask `where` for contiguous float32/float64 arrays, plus weak
   Python-scalar ufunc dispatch so `mnp.power(float32_array, 3.0)` stays float32.
-  Scalar power `x**2` and `x**3` now lower to multiplication through multiplication.
+  Scalar power `x**2` and `x**3` now lower to multiplication.
 
 Direct microbenchmarks for the attention shapes moved as follows:
 
@@ -824,7 +824,7 @@ Direct microbenchmarks for the attention shapes moved as follows:
 | `_gelu_monpy(32x128)`                                | about 61.4 after mask work |   37.245 |
 
 After the patch, decomposition has the GPT row dominated by compositional layer
-norm and attention overhead, not BLAS misses:
+norm and attention overhead. BLAS misses are gone:
 
 | operation                            | monpy us | numpy us |
 | ------------------------------------ | -------: | -------: |
@@ -868,9 +868,9 @@ src/lib.mojo:84:16: error: package 'nn' does not contain 'layer_norm_last_axis_o
 ```
 
 The source file was present, but the name `nn` is already claimed by Modular/MAX
-kernel packages in the compiler search path. Importing `from nn import ...` did
-not resolve to monpy's local directory. A second attempt to import `nn.kernels`
-hit the same owner. The working shape is:
+kernel packages in the compiler search path. Importing `from nn import ...`
+resolved to that owner. A second attempt to import `nn.kernels` hit the same
+place. The working shape is:
 
 - keep the Mojo loop bodies in `src/elementwise/kernels/nn.mojo`
 - keep the PythonObject bridge functions in `src/create/ops/nn.mojo`
@@ -972,7 +972,7 @@ The same run left `complex/matmul_64_complex64` as the largest direct blocker:
 16.257 us for monpy vs 7.221 us for NumPy, a 2.318x ratio. `used_accelerate()`
 was already true, so BLAS dispatch was already active.
 
-The useful profiler fact I cared about was the symbol, not just the wall clock:
+The useful profiler fact was the symbol more than the wall clock:
 
 - pre-fix monpy sample:
   `maybe_matmul_contiguous -> cblas_sgemm` inside `libBLAS.dylib`
@@ -1077,8 +1077,8 @@ The pre-fix backend probe reported `used_accelerate=True`; the sample made the
 problem concrete. For a 1024-element `complex64[::-1] + complex64[::-1]`, monpy
 was issuing two small strided `vDSP_vadd` calls, one for real lanes and one for
 imaginary lanes. At this size the library-call and strided-dispatch overhead
-beat the useful arithmetic. The scalar generic fallback kept the wrong cost model
-either, because it pays `physical_offset` per complex element.
+beat the useful arithmetic. The scalar generic fallback also carried the wrong
+cost model because it paid `physical_offset` per complex element.
 
 `src/elementwise/kernels/complex.mojo` now has a rank-1 strided complex kernel
 that walks physical indexes incrementally. For the hot `complex64` reversed
@@ -1086,7 +1086,7 @@ ADD/SUB case it uses a small SIMD pair-reversal path: load two adjacent complex
 values from the reversed physical span, reverse pair order in-register, then
 store four float lanes to the contiguous result. MUL/DIV also use the
 incremental-index rank-1 path, with the existing Smith division logic, so
-negative-stride complex arithmetic uses an incremental-index path instead of falling back to `physical_offset`.
+negative-stride complex arithmetic stays on incremental physical indexes.
 
 `python/monpy/__init__.py` also trims the exact one-dimensional `[::-1]` path:
 it calls the native `reverse_1d_method()` directly before the extra `ndim()`
@@ -1127,17 +1127,16 @@ kernel:
 | `complex/elementwise/binary_mul_complex64` |    3.577 |    2.615 | 1.368x |
 | `complex/views/reversed_add_complex64`     |    4.387 |    3.224 | 1.361x |
 
-Next target: complex ingress/copy. The likely win is keeping NumPy
-complex buffers on a narrow typed copy path directly instead of
-generic scalar extraction.
+Next target: complex ingress/copy. The likely win is keeping NumPy complex
+buffers on a narrow typed copy path that bypasses generic scalar extraction.
 
 ### 2026-05-08 direct NumPy buffer ingress
 
 The typed-buffer hypothesis was tested first and rejected. A native
 `PyBUF_STRIDES` bridge that skipped `PyBUF_FORMAT` made the raw native call a
 little faster, but the Python-side `dtype.str` proof cost more than the native
-PEP-3118 decode it was trying to avoid. The official complex slice moved the
-wrong way, so that path was cut before committing.
+PEP-3118 decode it was trying to avoid. The official complex slice regressed,
+so I cut that path before committing.
 
 The smaller, useful fix is simpler: when `monpy.asarray()` sees a NumPy ndarray,
 it now calls the existing native `asarray_from_buffer` bridge directly instead
@@ -1167,8 +1166,8 @@ us/call to 2.951 us/call, with max RSS essentially flat at about 49 MB and the
 same 1,590 byte traced allocation peak. The `sample` run measured 3.418 us/call
 before and 3.128 us/call after in the child process. The hot native frame is
 still `buffer::asarray_from_buffer_ops`, which is expected: this patch removes
-Python wrapper overhead, not memory traffic or SIMD work. No hardware PMU
-counters were collected in this run because `--no-perf-stat` was used.
+Python wrapper overhead while memory traffic and SIMD work stayed flat. This run
+used `--no-perf-stat`, so hardware PMU counters are absent.
 
 Remaining complex frontier:
 
@@ -1231,8 +1230,8 @@ After the patch:
 The post-fix profile manifest reports `used_fused=True`, `backend_code=2`, no
 major faults, a 1,590 byte traced allocation peak, and max RSS around 49.6 MB.
 The profile loop moved from 3.593 us/call to 3.275 us/call; the `sample` child
-loop moved from 3.745 us/call to 3.424 us/call. Hardware PMU counters were not
-collected in this run because `--no-perf-stat` was used.
+loop moved from 3.745 us/call to 3.424 us/call. This run used
+`--no-perf-stat`, so hardware PMU counters are absent.
 
 Remaining complex frontier:
 
@@ -1312,12 +1311,12 @@ The profile comparison for `complex/elementwise/binary_add_complex64` reports:
 | monpy     |   3.200 | 49.7 MB |     1,590 B | fused Mojo, no Accelerate |
 | numpy     |   2.643 | 49.5 MB |    17,608 B | n/a                       |
 
-No PMU counters were collected in this run because `--no-perf-stat` was used.
+This run used `--no-perf-stat`, so PMU counters are absent.
 The macOS `sample(1)` stacks were written under
 `results/local-profile-20260509-binary-add-complex64-*`; they mostly show the
-benchmark harness and Python call/attribute machinery, so the next useful
-I would use Instruments CPU Counters or a Linux `perf stat` run
-when we want instruction/cache ratios rather than wall-clock deltas.
+benchmark harness and Python call/attribute machinery. The next useful profile
+pass should use Instruments CPU Counters or a Linux `perf stat` run when we
+want instruction/cache ratios alongside wall-clock deltas.
 
 Remaining frontier:
 
@@ -1401,8 +1400,8 @@ Official result after the patch:
 The profile manifests reported `complex/interop/asarray_complex64` at 2.996
 us/call and `complex/interop/array_copy_complex128` at 3.470 us/call, both with
 max RSS around 49-50 MB, 1,590 byte traced allocation peaks, no major faults,
-and default backend metadata. No hardware PMU counters were collected because
-`--no-perf-stat` was used; the `sample(1)` stacks were captured under the two
+and default backend metadata. This run used `--no-perf-stat`; the `sample(1)`
+stacks were captured under the two
 `results/local-profile-20260509-*-specialized-buffer` directories.
 
 Remaining frontier:
@@ -1549,14 +1548,14 @@ Official result after the patch:
 The profile manifests reported `complex/interop/array_copy_complex128` at 3.245
 us/call for monpy and 2.647 us/call for NumPy. Monpy used the generic backend
 code 0 copy path, max RSS was about 49.6 MB, and the traced peak was 1,590
-bytes. NumPy's traced peak was 33,992 bytes. No hardware PMU counters were
-collected because `--no-perf-stat` was used; the `sample(1)` captures live under
+bytes. NumPy's traced peak was 33,992 bytes. This run used `--no-perf-stat`;
+the `sample(1)` captures live under
 `results/local-profile-20260509-array-copy-complex128-direct-array-*`.
 
 The pure-Mojo stdlib sweep also completed. The largest candidate/stdlib ratios
 were small: `small_matmul_f32_8` at 1.078x, `add_f32_1m` at 1.068x,
 `sum_f32_1k` at 1.044x, and `prod_f64_64k` at 1.044x. That says the current
-high-ratio NumPy-facing rows are mostly facade/object-bound, a sign that the public ratios are facade-bound.
+high-ratio NumPy-facing rows are mostly facade/object-bound.
 
 Remaining frontier:
 
@@ -1636,8 +1635,8 @@ Official result after the patch:
 The profile manifests reported `complex/interop/asarray_complex64` at 2.797
 us/call for monpy and 2.085 us/call for NumPy. Monpy used backend code 0, max
 RSS was about 49.0 MB, and the traced peak was 1,590 bytes. NumPy's traced peak
-was 1,406 bytes. No hardware PMU counters were collected because
-`--no-perf-stat` was used; the `sample(1)` captures live under
+was 1,406 bytes. This run used `--no-perf-stat`;
+the `sample(1)` captures live under
 `results/local-profile-20260509-asarray-complex64-direct-buffer-*`.
 
 The pure-Mojo stdlib sweep still points away from a production kernel. Its top
@@ -1706,8 +1705,8 @@ Official result after the patch:
 The profile manifests reported `complex/views/reversed_add_complex64` at 3.728
 us/call for monpy and 3.208 us/call for NumPy. Monpy stayed on backend code 2,
 the fused Mojo path, with max RSS about 49.5 MB and a 1,598 byte traced peak.
-NumPy's traced peak was 17,760 bytes. No hardware PMU counters were collected
-because `--no-perf-stat` was used; the `sample(1)` captures live under
+NumPy's traced peak was 17,760 bytes. This run used `--no-perf-stat`;
+the `sample(1)` captures live under
 `results/local-profile-20260509-reversed-add-native-cache-*`.
 
 The pure-Mojo stdlib sweep stayed quiet. The largest candidate/stdlib ratios
@@ -1783,14 +1782,14 @@ Official result after the patch:
 The profile manifests reported `complex/casts/astype_complex64_to_complex128`
 at 3.253 us/call for monpy and 2.774 us/call for NumPy. Monpy used backend code
 0, max RSS was about 49.5 MB, and the traced peak was 1,598 bytes. NumPy's
-traced peak was 33,992 bytes. No hardware PMU counters were collected because
-`--no-perf-stat` was used; the `sample(1)` captures live under
+traced peak was 33,992 bytes. This run used `--no-perf-stat`;
+the `sample(1)` captures live under
 `results/local-profile-20260509-astype-complex64-to-complex128-dtype-fastpath-*`.
 
 The pure-Mojo stdlib sweep's largest candidate/stdlib ratio this pass was
 `scalar_mul_f64_64k` at 1.149x, followed by `small_matmul_f32_8` at 1.080x.
-That is worth a later kernel pass, but the complex cast row moved through facade work: the cast row moved by removing Python facade work while the native
-interleaved-lane cast stayed effectively flat.
+That deserves a later kernel pass. The complex cast row, though, moved through
+facade work while the native interleaved-lane cast stayed effectively flat.
 
 Remaining frontier:
 
@@ -1878,9 +1877,8 @@ than this SIMD loop.
 The `complex/elementwise/binary_add_complex64` profiles reported 3.146 us/call
 for monpy and 2.616 us/call for NumPy. Monpy used backend code 2, the fused
 native path, with max RSS about 49.3 MB and a traced allocation peak of 1,598
-bytes. NumPy's traced allocation peak was 17,608 bytes. No PMU counters were
-collected because the profile command used `--no-perf-stat`; the `sample(1)`
-captures live under
+bytes. NumPy's traced allocation peak was 17,608 bytes. The profile command
+used `--no-perf-stat`; the `sample(1)` captures live under
 `results/local-profile-20260509-binary-add-complex64-static-direct-*`.
 
 Remaining frontier:
@@ -1952,8 +1950,7 @@ The final profiles reported `asarray_complex64` at 2.742 us/call for monpy and
 2.062 us/call for NumPy. Monpy used backend code 0, as expected for a zero-copy
 external view. Max RSS was about 49.2 MB for monpy and 49.3 MB for NumPy.
 Traced allocation peaks were 1,598 bytes for monpy and 1,406 bytes for NumPy.
-No hardware PMU counters were collected because the profile command used
-`--no-perf-stat`; the `sample(1)` captures live under
+The profile command used `--no-perf-stat`; the `sample(1)` captures live under
 `results/local-profile-20260509-asarray-complex64-format-fastcheck-*`.
 
 Remaining frontier:
@@ -2017,8 +2014,7 @@ After the patch:
 The final profiles reported `array_copy_complex128` at 3.140 us/call for monpy
 and 2.627 us/call for NumPy. Monpy used backend code 0, as expected for a copy
 bridge. Max RSS was about 49.3 MB for both candidates. Traced allocation peaks
-were 1,598 bytes for monpy and 33,992 bytes for NumPy. No hardware PMU counters
-were collected because the profile command used `--no-perf-stat`; the
+were 1,598 bytes for monpy and 33,992 bytes for NumPy. The profile command used `--no-perf-stat`; the
 `sample(1)` captures live under
 `results/local-profile-20260509-array-copy-complex128-specialized-final-*`.
 
@@ -2094,9 +2090,9 @@ NumPy. Traced allocation peaks were 1,694 bytes for monpy and 23,400 bytes for
 NumPy. The monpy `sample(1)` call graph put 1,033 of 2,289 samples directly in
 `elementwise::kernels::nn::_softmax_last_axis_f32`, while NumPy's sample showed
 most softmax time in ufunc reduction machinery (`PyUFunc_Reduce`,
-`FLOAT_maximum`, and `FLOAT_pairwise_sum`). No PMU counters were collected
-because the profile command used `--no-perf-stat`; the `sample(1)` captures live
-under `results/local-profile-20260509-attention-softmax-f32-*`.
+`FLOAT_maximum`, and `FLOAT_pairwise_sum`). The profile command used
+`--no-perf-stat`; the `sample(1)` captures live under
+`results/local-profile-20260509-attention-softmax-f32-*`.
 
 Next target: complex128 add/mul, or add a larger attention
 matrix-size row so the attention benchmark can expose when softmax stops being
@@ -2179,8 +2175,7 @@ The sample profile for `array/bandwidth/unary_sin_65536_f32` reported monpy at
 Accelerate path, with a 1,656 byte traced allocation peak; NumPy peaked at
 525,512 bytes. The sample call graph showed monpy spending the hot loop in
 `VVSINF` through `create::ops::elementwise::unary_ops`, while NumPy spent the
-hot path in `_multiarray_umath`'s `simd_sincos_f32` ufunc loop. No PMU counters
-were collected because the profile command used `--no-perf-stat`; captures live
+hot path in `_multiarray_umath`'s `simd_sincos_f32` ufunc loop. The profile command used `--no-perf-stat`; captures live
 under `results/local-profile-20260509-unary-sin-static-*`.
 
 Next target: the new pure-Mojo `scalar_mul_f64_64k` stdlib gap or the
@@ -2247,8 +2242,7 @@ inside `libvDSP`, while NumPy spent the hot loop in `_multiarray_umath`
 `FLOAT_add` plus allocation and ufunc dispatch. Wall-clock profile measurement
 was 7.932 us/call for monpy versus 11.433 us/call for NumPy. Tracemalloc peaks
 were 1,598 bytes for monpy and 525,512 bytes for NumPy, a 329:1 peak-allocation
-ratio. No PMU counters were collected on macOS because this run used
-`--no-perf-stat`; the stack samples and manifests live under
+ratio. This macOS run used `--no-perf-stat`; the stack samples and manifests live under
 `results/local-profile-20260509-binary-add-static-*`.
 
 Next target: either the pure-Mojo `add_f32_64k`/`add_f32_1m` variance
@@ -2259,10 +2253,10 @@ NumPy-facing ratios are still 1.7x-1.9x.
 ### 2026-05-09 parallel worker policy split
 
 The "8-way" reduction note was easy to misread as "use 8 workers because this
-Mac has 8 performance cores." That is not the contract. The reduction kernels
-now name it explicitly as `REDUCE_SIMD_ACCUMULATORS = 8`: eight independent SIMD
-accumulator chains inside one worker, chosen for instruction-level parallelism
-on 2-IPC floating-point pipelines. Core fanout is a separate policy owned by
+Mac has 8 performance cores." The actual contract is
+`REDUCE_SIMD_ACCUMULATORS = 8`: eight independent SIMD accumulator chains inside
+one worker, chosen for instruction-level parallelism on 2-IPC floating-point
+pipelines. Core fanout is a separate policy owned by
 `elementwise/kernels/parallel.mojo`.
 
 The parallel policy is now split into three layers:
@@ -2279,7 +2273,7 @@ The parallel policy is now split into three layers:
    is insufficient: a 32x32 attention softmax should stay serial, while a
    32x4096 softmax has enough work inside each row to justify fanout.
 
-That third split was not cosmetic. The first implementation used only
+That third split mattered. The first implementation used only
 `worker_count_for_rows(rows)`, which let the 32-row attention benchmark spawn
 two workers. The smoke result immediately regressed:
 
@@ -2314,8 +2308,9 @@ The pure-Mojo sweep had visible system noise in unrelated raw-kernel rows. One
 run reported `reductions/sum_f64_1m` at 2.197x against `std.algorithm.sum`, but
 the forced-serial pass put the same raw `reduce_sum_typed` row at 1.057x and an
 immediate normal rerun put it at 1.006x. Since `bench_mojo_sweep.mojo` calls
-`reduce_sum_typed` directly, not the new worker policy, I would treat that spike as noise for reduction grain. It needs a longer minimum-runtime
-harness before we treat it as a kernel signal.
+`reduce_sum_typed` directly, that spike belongs outside the new worker policy.
+I would treat it as reduction-grain noise until a longer minimum-runtime harness
+reproduces it.
 
 Next target: add a larger attention-size sweep so the row-element policy can be
 calibrated beyond the 32x32 smoke. The intended curve is serial for tiny
@@ -2398,8 +2393,8 @@ uses the older generic Python path.
 
 After the patch:
 
-| row                  | monpy us       | NumPy us       | ratio range     |
-| -------------------- | -------------: | -------------: | --------------: |
+| row                  |       monpy us |       NumPy us |      ratio range |
+| -------------------- | -------------: | -------------: | ---------------: |
 | `views/moveaxis_f32` | 4.591 .. 4.611 | 3.828 .. 3.847 | 1.196x .. 1.205x |
 
 Clean inner-loop timing moved `mnp.moveaxis(s_mp, 0, -1)` to about 2.38 us, with

@@ -66,6 +66,7 @@ from numojo.core.error import NumojoError
 # === numojo routines (creation / io / logic) ===
 # ===----------------------------------------------------------------------===#
 import numojo.routines.creation as creation
+import numojo.routines.manipulation as manipulation
 from numojo.routines.io.formatting import (
     format_value,
     PrintOptions,
@@ -2163,7 +2164,9 @@ struct ComplexNDArray[cdtype: ComplexDType = ComplexDType.float64](
                 "can be converted to scalars."
             )
 
-    def __abs__(self) raises -> NDArray[Self.dtype]:
+    def __abs__(
+        self
+    ) raises -> NDArray[Self.dtype] where Self.dtype.is_floating_point():
         """
         Compute the magnitude (absolute value) of each complex element.
 
@@ -2227,7 +2230,9 @@ struct ComplexNDArray[cdtype: ComplexDType = ComplexDType.float64](
                 result = temp^
             return result^
 
-    def __pow__(self, rhs: Scalar[Self.dtype]) raises -> Self:
+    def __pow__(
+        self, rhs: Scalar[Self.dtype]
+    ) raises -> Self where Self.dtype.is_floating_point():
         """
         Raise complex array to real scalar power element-wise.
 
@@ -3165,7 +3170,7 @@ struct ComplexNDArray[cdtype: ComplexDType = ComplexDType.float64](
                 out += padding + "]"
 
             # Greedy line wrapping
-            if len(out) > options.line_width:
+            if out.count_codepoints() > options.line_width:
                 var wrapped: String = String("")
                 var line_len: Int = 0
                 for c in out.codepoint_slices():
@@ -3304,8 +3309,8 @@ struct ComplexNDArray[cdtype: ComplexDType = ComplexDType.float64](
             Array of the same data with a new shape.
         """
         var result: Self = ComplexNDArray[Self.cdtype](
-            re=numojo.reshape(self._re.copy(), shape=shape, order=order),
-            im=numojo.reshape(self._im.copy(), shape=shape, order=order),
+            re=manipulation.reshape(self._re.copy(), shape=shape, order=order),
+            im=manipulation.reshape(self._im.copy(), shape=shape, order=order),
         )
         result._re.flags = self._re.flags
         result._im.flags = self._im.flags
@@ -4366,7 +4371,7 @@ struct _ComplexNDArrayIter[
             return result^
 
         else:  # 0-D array
-            var result = numojo.creation._0darray[Self.cdtype](
+            var result = creation._0darray[Self.cdtype](
                 ComplexSIMD[Self.cdtype](self.re_ptr[index], self.im_ptr[index])
             )
             return result^
