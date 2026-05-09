@@ -3542,3 +3542,65 @@ MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarn
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py -q
 ```
+
+### 2026-05-09 native scalar dot return
+
+The row-wise vecdot patch left a scalar-dot cluster at the top of the array
+sweep. Baseline:
+
+| row                              | monpy us | numpy us | ratio  |
+| -------------------------------- | -------: | -------: | -----: |
+| `array/linalg_api/dot_1d_32_f64` |    5.921 |    2.454 | 2.418x |
+| `array/linalg_api/inner_32_f64`  |    5.747 |    2.516 | 2.319x |
+| `array/linalg_api/vdot_32_f64`   |    5.619 |    2.466 | 2.295x |
+
+Patch:
+
+- Added `_native.linalg_dot_scalar` for rank-1 float32/float64 vectors.
+- Factored the SIMD multiply-reduce body into one `dot_contiguous_typed`
+  helper, so scalar dot and row-wise vecdot share the same accumulator.
+- Routed `dot`, `inner`, and `vdot` through the scalar-returning native leaf.
+  That skips the old rank-0 array allocation plus `get_scalar(0)` round trip.
+
+Post-patch array rerun:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-array-20260509-native-dot-scalar-direct --no-progress --no-stdout
+```
+
+Key movement:
+
+| row                              | before us | after us | before ratio | after ratio | speedup |
+| -------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/linalg_api/dot_1d_32_f64` |     5.921 |    5.709 |       2.418x |      2.369x |  1.04:1 |
+| `array/linalg_api/inner_32_f64`  |     5.747 |    5.479 |       2.319x |      2.200x |  1.05:1 |
+| `array/linalg_api/vdot_32_f64`   |     5.619 |    5.199 |       2.295x |      2.067x |  1.08:1 |
+
+I also ran a focused 7-round check over the four dot rows with 1000 loops and
+7 repeats per round:
+
+| row                                     | monpy us | numpy us | ratio  |
+| --------------------------------------- | -------: | -------: | -----: |
+| `array/linalg_api/dot_1d_32_f64`        |    5.590 |    2.531 | 2.207x |
+| `array/linalg_api/inner_32_f64`         |    5.567 |    2.627 | 2.119x |
+| `array/linalg_api/vdot_32_f64`          |    5.216 |    2.515 | 2.047x |
+| `array/linalg_api/vecdot_axis1_8x4_f64` |    6.204 |    2.919 | 2.124x |
+
+Read:
+
+- This is a real cleanup, but not a kill shot. The native kernel work is now
+  too small for this row; Python facade cost and NumPy's scalar return path are
+  the wall.
+- The new top full-sweep row is `matrix_transpose_16_f64` at 2.360x slower
+  (`5.805 us` vs `2.459 us`).
+- `kron_2x2_f64`, `tensorinv_2x2x2x2_f64`, and `tensorsolve_2x3x2x3_f64`
+  remain worse absolute rows, but transpose is the cleanest next target: one
+  small view constructor, no LAPACK, no algorithmic ambiguity.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/create/ops/linalg.mojo src/create/ops/__init__.mojo src/create/__init__.mojo src/lib.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py -q
+```

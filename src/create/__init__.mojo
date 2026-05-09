@@ -183,6 +183,7 @@ from .ops.dtype import (
 from .ops.linalg import (
     cholesky_ops,
     det_ops,
+    dot_scalar_ops,
     eig_ops,
     eigh_ops,
     inv_ops,

@@ -249,6 +249,67 @@ def norm2_last_axis_ops(array_obj: PythonObject) raises -> PythonObject:
     return PythonObject(alloc=result^)
 
 
+def dot_contiguous_typed[
+    dtype: DType
+](
+    lhs_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    rhs_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    size: Int,
+) raises -> Scalar[dtype] where dtype.is_floating_point():
+    comptime width = simd_width_of[dtype]()
+    comptime block = width * 4
+    var a0 = SIMD[dtype, width](0)
+    var a1 = SIMD[dtype, width](0)
+    var a2 = SIMD[dtype, width](0)
+    var a3 = SIMD[dtype, width](0)
+    var i = 0
+    while i + block <= size:
+        a0 += lhs_ptr.load[width=width](i) * rhs_ptr.load[width=width](i)
+        a1 += lhs_ptr.load[width=width](i + width) * rhs_ptr.load[width=width](i + width)
+        a2 += lhs_ptr.load[width=width](i + 2 * width) * rhs_ptr.load[width=width](i + 2 * width)
+        a3 += lhs_ptr.load[width=width](i + 3 * width) * rhs_ptr.load[width=width](i + 3 * width)
+        i += block
+    var acc_vec = (a0 + a1) + (a2 + a3)
+    while i + width <= size:
+        acc_vec += lhs_ptr.load[width=width](i) * rhs_ptr.load[width=width](i)
+        i += width
+    var acc = acc_vec.reduce_add()[0]
+    while i < size:
+        acc += lhs_ptr[i] * rhs_ptr[i]
+        i += 1
+    return acc
+
+
+def dot_scalar_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObject:
+    var lhs = lhs_obj.downcast_value_ptr[Array]()
+    var rhs = rhs_obj.downcast_value_ptr[Array]()
+    if len(lhs[].shape) != 1 or len(rhs[].shape) != 1:
+        raise Error("linalg_dot_scalar requires rank-1 inputs")
+    if lhs[].shape[0] != rhs[].shape[0]:
+        raise Error("linalg_dot_scalar requires matching shapes")
+    if is_c_contiguous(lhs[]) and is_c_contiguous(rhs[]):
+        if lhs[].dtype_code == ArrayDType.FLOAT32.value and rhs[].dtype_code == ArrayDType.FLOAT32.value:
+            return PythonObject(
+                dot_contiguous_typed[DType.float32](
+                    contiguous_ptr[DType.float32](lhs[]),
+                    contiguous_ptr[DType.float32](rhs[]),
+                    lhs[].size_value,
+                )
+            )
+        if lhs[].dtype_code == ArrayDType.FLOAT64.value and rhs[].dtype_code == ArrayDType.FLOAT64.value:
+            return PythonObject(
+                dot_contiguous_typed[DType.float64](
+                    contiguous_ptr[DType.float64](lhs[]),
+                    contiguous_ptr[DType.float64](rhs[]),
+                    lhs[].size_value,
+                )
+            )
+    var acc = 0.0
+    for i in range(lhs[].size_value):
+        acc += get_logical_as_f64(lhs[], i) * get_logical_as_f64(rhs[], i)
+    return PythonObject(acc)
+
+
 def vecdot_last_axis_contiguous_typed[
     dtype: DType
 ](
@@ -258,30 +319,9 @@ def vecdot_last_axis_contiguous_typed[
     rows: Int,
     cols: Int,
 ) raises where dtype.is_floating_point():
-    comptime width = simd_width_of[dtype]()
-    comptime block = width * 4
     for row in range(rows):
         var base = row * cols
-        var a0 = SIMD[dtype, width](0)
-        var a1 = SIMD[dtype, width](0)
-        var a2 = SIMD[dtype, width](0)
-        var a3 = SIMD[dtype, width](0)
-        var col = 0
-        while col + block <= cols:
-            a0 += lhs_ptr.load[width=width](base + col) * rhs_ptr.load[width=width](base + col)
-            a1 += lhs_ptr.load[width=width](base + col + width) * rhs_ptr.load[width=width](base + col + width)
-            a2 += lhs_ptr.load[width=width](base + col + 2 * width) * rhs_ptr.load[width=width](base + col + 2 * width)
-            a3 += lhs_ptr.load[width=width](base + col + 3 * width) * rhs_ptr.load[width=width](base + col + 3 * width)
-            col += block
-        var acc_vec = (a0 + a1) + (a2 + a3)
-        while col + width <= cols:
-            acc_vec += lhs_ptr.load[width=width](base + col) * rhs_ptr.load[width=width](base + col)
-            col += width
-        var acc = acc_vec.reduce_add()[0]
-        while col < cols:
-            acc += lhs_ptr[base + col] * rhs_ptr[base + col]
-            col += 1
-        out_ptr[row] = acc
+        out_ptr[row] = dot_contiguous_typed[dtype](lhs_ptr + base, rhs_ptr + base, cols)
 
 
 def vecdot_last_axis_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObject:

@@ -43,6 +43,9 @@ def _array(value:object)->ndarray:
 def _matmul(a:ndarray, b:ndarray)->ndarray:
   return ndarray._wrap(_native.matmul(a._native, b._native))
 
+def _dot_scalar(a:ndarray, b:ndarray)->_Scalar:
+  return typing.cast(_Scalar, _native.linalg_dot_scalar(a._native, b._native))
+
 def _has_norm2_kernel(x:ndarray)->bool:
   return x.dtype in(float32, float64)
 
@@ -56,7 +59,7 @@ def _norm2_last_axis(x:ndarray)->ndarray:
   return ndarray._wrap(_w(_native.linalg_norm2_last_axis, x._native))
 
 def _vecdot_last_axis(a:ndarray, b:ndarray)->ndarray:
-  return ndarray._wrap(_w(_native.linalg_vecdot_last_axis, a._native, b._native))
+  return ndarray._wrap(_native.linalg_vecdot_last_axis(a._native, b._native))
 
 def _normalize_axis(axis:int, ndim:int)->int:
   ax=axis+ndim if axis<0 else axis
@@ -101,6 +104,7 @@ def dot(a:object, b:object)->object:
   if A.ndim==0 or B.ndim==0:return multiply(A, B)
   if A.ndim==1 and B.ndim==1:
     if A.shape[0]!=B.shape[0]:raise ValueError("dot: shape mismatch")
+    if _has_vecdot_kernel(A, B):return _dot_scalar(A, B)
     return _matmul(A, B)
   if A.ndim<=2 and B.ndim<=2:return matmul(A, B)
   raise NotImplementedError("dot: ndim>2 not implemented")
@@ -110,10 +114,12 @@ def vdot(a:object, b:object)->object:
   B=_array(b)
   if A.ndim==1 and B.ndim==1:
     if A.shape!=B.shape:raise ValueError("vdot: shape mismatch")
+    if _has_vecdot_kernel(A, B):return _dot_scalar(A, B)
     return _matmul(A, B)
   A=ravel(A)
   B=ravel(B)
   if A.shape!=B.shape:raise ValueError("vdot: shape mismatch")
+  if _has_vecdot_kernel(A, B):return _dot_scalar(A, B)
   return _matmul(A, B)
 
 def inner(a:object, b:object)->object:
@@ -121,7 +127,9 @@ def inner(a:object, b:object)->object:
   B=_array(b)
   if A.ndim==0 or B.ndim==0:return multiply(A, B)
   if A.shape[-1]!=B.shape[-1]:raise ValueError("inner: trailing axis mismatch")
-  if A.ndim==1 and B.ndim==1:return _matmul(A, B)
+  if A.ndim==1 and B.ndim==1:
+    if _has_vecdot_kernel(A, B):return _dot_scalar(A, B)
+    return _matmul(A, B)
   if A.ndim==1:return _sum(multiply(A, B), axis=-1)
   if B.ndim==1:return _sum(multiply(A, B), axis=-1)
   raise NotImplementedError("inner: only 1D x 1D / 1D x N / N x 1D supported in v1")

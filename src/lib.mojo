@@ -27,6 +27,7 @@ from create import (
     copyto_ops,
     det_ops,
     diagonal_ops,
+    dot_scalar_ops,
     dtype_alignment_py_ops,
     dtype_can_cast_py_ops,
     dtype_item_size_py_ops,
@@ -205,6 +206,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[dtype_promote_types_py_ops]("_promote_types")
         module.def_function[dtype_can_cast_py_ops]("_can_cast")
         module.def_function[matmul_ops]("matmul")
+        module.def_function[dot_scalar_ops]("linalg_dot_scalar")
         module.def_function[norm2_all_ops]("linalg_norm2_all")
         module.def_function[norm2_last_axis_ops]("linalg_norm2_last_axis")
         module.def_function[outer_ops]("linalg_outer")
