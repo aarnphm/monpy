@@ -3308,3 +3308,76 @@ case = next(c for c in cases if c.group == 'linalg_api' and c.name == 'slogdet_1
 print(run_case(case, loops=200, repeats=5, round_index=1))
 PY
 ```
+
+### 2026-05-09 full rerun and linalg facade fastpaths
+
+Fresh full Python-vs-NumPy sweep after the random and `slogdet` commits:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types all --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-full-20260509-rerun-numpy-frontier --no-progress --no-stdout
+```
+
+Run shape:
+
+| artifact | cases | duration | slow rows | >1.25x | >1.5x | >2x | median |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `results/local-full-20260509-rerun-numpy-frontier` | 275 | 40.1s | 167 | 67 | 38 | 14 | 1.083x |
+
+The bad rows were concentrated in `array/linalg_api`, mostly because the facade
+was routing tiny linalg calls through multiple Python-level helpers before
+reaching the native layer.
+
+Patch:
+
+- `dot`, `vdot`, and 1D `inner` now route directly to native matmul instead of
+  multiply-plus-reduce.
+- `tensordot(..., axes=1)` for 2D x 2D now routes directly to native matmul.
+- `matvec` and `vecmat` now use the native 2D x 1D and 1D x 2D matmul paths
+  instead of reshaping through a column/row matrix first.
+- `kron` no longer loops through Python scalar getters. It uses reshape plus
+  broadcasted multiply, then reshapes to the Kronecker output shape.
+- Replaced the lingering `math.prod` shape products in `linalg.py` with a local
+  integer helper. This keeps metadata on the Python side without importing
+  Python `math` into the linalg module.
+
+Post-patch full sweep:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types all --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-full-20260509-linalg-api-fastpaths --no-progress --no-stdout
+```
+
+| artifact | cases | duration | slow rows | >1.25x | >1.5x | >2x | median |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `results/local-full-20260509-linalg-api-fastpaths` | 275 | 40.4s | 170 | 72 | 32 | 11 | 1.096x |
+
+Key moved rows:
+
+| row | before us | after us | before ratio | after ratio | speedup |
+| --- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/linalg_api/kron_2x2_f64` | 72.896 | 22.901 | 6.975x | 2.337x | 3.18:1 |
+| `array/linalg_api/tensordot_axes1_4x5_5x3_f64` | 27.552 | 3.746 | 4.837x | 0.669x | 7.36:1 |
+| `array/linalg_api/vecmat_16_f64` | 11.312 | 3.487 | 4.289x | 1.335x | 3.24:1 |
+| `array/linalg_api/matvec_16_f64` | 10.608 | 3.826 | 3.882x | 1.453x | 2.77:1 |
+| `array/linalg_api/vdot_32_f64` | 10.146 | 4.913 | 4.229x | 2.082x | 2.07:1 |
+| `array/linalg_api/inner_32_f64` | 9.456 | 5.259 | 3.731x | 2.081x | 1.80:1 |
+| `array/linalg_api/dot_1d_32_f64` | 9.152 | 5.186 | 3.794x | 2.209x | 1.76:1 |
+
+Read:
+
+- The top ratio fell from `kron` at 6.98x to `outer` at 3.15x. Good, not done.
+- `tensordot_axes1` is now faster than NumPy on this small row; the old path was
+  doing transpose/contiguous/reshape work before landing on the same matmul
+  shape.
+- `kron` is still 2.34x slower after dropping the scalar-getter loop. The next
+  step is a native Kronecker kernel, because the broadcast route still allocates
+  view metadata and pays generic multiply dispatch.
+- Remaining `>2x` linalg rows after the patch: `outer`, `vecdot`,
+  `tensorsolve`, `tensorinv`, `matrix_norm`, `kron`, `norm`, `dot`,
+  `matrix_transpose`, `vdot`, and `inner`.
+
+Verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py tests/python/numpy_compat/test_einsum.py -q
+git diff --check -- python/monpy/linalg.py docs/opts.md
+```
