@@ -102,7 +102,10 @@ python .github/scripts/posts.py \
   --post
 ```
 
-The comment includes a `winner` column. `monpy` means the median ratio was below `0.995x`; `numpy` means it was above `1.005x`; values inside that band are reported as `tie`.
+The comment includes an overall case-outcome summary and a `winner` column.
+`monpy` means the median ratio was below `0.995x`; `numpy` means it was above
+`1.005x`; values inside that band are reported as `tie`. The faster median
+timing cell is bolded for non-tie rows.
 
 The post helper also accepts `manifest.json` when the manifest points at json results:
 

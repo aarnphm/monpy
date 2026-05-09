@@ -46,6 +46,10 @@ def format_range(min_value: object, max_value: object, *, ratio: bool = False) -
   return f"{formatter(min_value)}..{formatter(max_value)}"
 
 
+def markdown_bold(value: str) -> str:
+  return f"**{value}**"
+
+
 def winner(value: object) -> str:
   ratio = finite_float(value)
   if math.isinf(ratio):
@@ -63,6 +67,19 @@ def string_value(value: object) -> str:
   if isinstance(value, int | float):
     return str(value)
   raise TypeError(f"expected scalar string-ish value, got {type(value).__name__}")
+
+
+def benchmark_results(payload: Mapping[str, object]) -> list[Mapping[str, object]]:
+  raw_results = payload["results"]
+  if not isinstance(raw_results, Sequence):
+    raise TypeError("benchmark json results must be a list")
+
+  results: list[Mapping[str, object]] = []
+  for index, result in enumerate(raw_results):
+    if not isinstance(result, Mapping):
+      raise TypeError(f"benchmark result {index} must be an object")
+    results.append(cast(Mapping[str, object], result))
+  return results
 
 
 def comment_marker(comment_key: str | None) -> str:
@@ -93,13 +110,21 @@ def result_rows(results: Sequence[Mapping[str, object]]) -> list[tuple[str, ...]
     )
   ]
   for result in results:
+    result_winner = winner(result["ratio_median"])
+    monpy_us = format_us(result["monpy_median_us"])
+    numpy_us = format_us(result["numpy_median_us"])
+    if result_winner == "monpy":
+      monpy_us = markdown_bold(monpy_us)
+    elif result_winner == "numpy":
+      numpy_us = markdown_bold(numpy_us)
+
     rows.append((
       string_value(result["group"]),
       string_value(result["name"]),
-      format_us(result["monpy_median_us"]),
-      format_us(result["numpy_median_us"]),
+      monpy_us,
+      numpy_us,
       format_ratio(result["ratio_median"]),
-      winner(result["ratio_median"]),
+      result_winner,
       format_range(result["monpy_min_us"], result["monpy_max_us"]),
       format_range(result["numpy_min_us"], result["numpy_max_us"]),
       format_range(result["ratio_min"], result["ratio_max"], ratio=True),
@@ -108,21 +133,72 @@ def result_rows(results: Sequence[Mapping[str, object]]) -> list[tuple[str, ...]
   return rows
 
 
-def render_markdown_table(payload: Mapping[str, object]) -> str:
+def winner_counts(results: Sequence[Mapping[str, object]]) -> tuple[int, int, int]:
+  monpy_wins = 0
+  numpy_wins = 0
+  ties = 0
+  for result in results:
+    result_winner = winner(result["ratio_median"])
+    if result_winner == "monpy":
+      monpy_wins += 1
+    elif result_winner == "numpy":
+      numpy_wins += 1
+    else:
+      ties += 1
+  return monpy_wins, numpy_wins, ties
+
+
+def top_outcome_labels(monpy_wins: int, numpy_wins: int, ties: int) -> set[str]:
+  counts = {
+    "monpy": monpy_wins,
+    "numpy": numpy_wins,
+    "tie": ties,
+  }
+  top_count = max(counts.values(), default=0)
+  if top_count == 0:
+    return set()
+  return {label for label, count in counts.items() if count == top_count}
+
+
+def overall_winner(top_labels: set[str]) -> str:
+  if not top_labels:
+    return "none"
+  if len(top_labels) != 1:
+    return "tie"
+  return next(iter(top_labels))
+
+
+def format_outcome_count(label: str, count: int, top_labels: set[str]) -> str:
+  outcome = f"{label}={count}"
+  if label in top_labels:
+    return markdown_bold(outcome)
+  return outcome
+
+
+def render_overall_summary(results: Sequence[Mapping[str, object]]) -> str:
+  monpy_wins, numpy_wins, ties = winner_counts(results)
+  top_labels = top_outcome_labels(monpy_wins, numpy_wins, ties)
+  overall = overall_winner(top_labels)
+  outcomes = ", ".join([
+    format_outcome_count("monpy", monpy_wins, top_labels),
+    format_outcome_count("numpy", numpy_wins, top_labels),
+    format_outcome_count("tie", ties, top_labels),
+  ])
+  return f"overall result: {markdown_bold(overall)} (case outcomes: {outcomes})"
+
+
+def render_markdown_table(
+  payload: Mapping[str, object],
+  *,
+  results: Sequence[Mapping[str, object]] | None = None,
+) -> str:
   config = payload["config"]
   if not isinstance(config, Mapping):
     raise TypeError("benchmark json config must be an object")
   config = cast(Mapping[str, object], config)
 
-  raw_results = payload["results"]
-  if not isinstance(raw_results, Sequence):
-    raise TypeError("benchmark json results must be a list")
-
-  results: list[Mapping[str, object]] = []
-  for index, result in enumerate(raw_results):
-    if not isinstance(result, Mapping):
-      raise TypeError(f"benchmark result {index} must be an object")
-    results.append(cast(Mapping[str, object], result))
+  if results is None:
+    results = benchmark_results(payload)
 
   rows = result_rows(results)
   header = "| " + " | ".join(rows[0]) + " |"
@@ -212,6 +288,7 @@ def render_comment(
   marker: str = MARKER,
   title: str = "monpy benchmark sweep",
 ) -> str:
+  results = benchmark_results(payload)
   return "\n\n".join([
     marker,
     f"### {title}",
@@ -220,7 +297,8 @@ def render_comment(
       "lower `monpy/numpy` is better for monpy; values below `1.000x` mean "
       "monpy beat numpy for that case."
     ),
-    render_markdown_table(payload),
+    render_overall_summary(results),
+    render_markdown_table(payload, results=results),
   ])
 
 

@@ -8,6 +8,29 @@ from types import ModuleType
 import pytest
 
 
+def benchmark_result(
+  *,
+  name: str,
+  monpy_median_us: float,
+  numpy_median_us: float,
+  ratio_median: float,
+) -> dict[str, object]:
+  return {
+    "group": "elementwise",
+    "name": name,
+    "monpy_median_us": monpy_median_us,
+    "numpy_median_us": numpy_median_us,
+    "ratio_median": ratio_median,
+    "monpy_min_us": monpy_median_us,
+    "monpy_max_us": monpy_median_us,
+    "numpy_min_us": numpy_median_us,
+    "numpy_max_us": numpy_median_us,
+    "ratio_min": ratio_median,
+    "ratio_max": ratio_median,
+    "rounds": 1,
+  }
+
+
 def load_posts_module() -> ModuleType:
   path = Path(__file__).parents[2] / ".github" / "scripts" / "posts.py"
   spec = importlib.util.spec_from_file_location("monpy_benchmark_posts", path)
@@ -29,20 +52,12 @@ def benchmark_payload() -> dict[str, object]:
       "types": ["array"],
     },
     "results": [
-      {
-        "group": "elementwise",
-        "name": "binary_add_f32",
-        "monpy_median_us": 2.0,
-        "numpy_median_us": 4.0,
-        "ratio_median": 0.5,
-        "monpy_min_us": 2.0,
-        "monpy_max_us": 2.0,
-        "numpy_min_us": 4.0,
-        "numpy_max_us": 4.0,
-        "ratio_min": 0.5,
-        "ratio_max": 0.5,
-        "rounds": 1,
-      }
+      benchmark_result(
+        name="binary_add_f32",
+        monpy_median_us=2.0,
+        numpy_median_us=4.0,
+        ratio_median=0.5,
+      )
     ],
   }
 
@@ -94,3 +109,70 @@ def test_existing_comment_id_uses_requested_marker_only(
   )
 
   assert comment_id == 2
+
+
+def test_comment_highlights_overall_result_and_winning_timings() -> None:
+  posts = load_posts_module()
+  payload = benchmark_payload()
+  payload["results"] = [
+    benchmark_result(
+      name="binary_add_f32",
+      monpy_median_us=2.0,
+      numpy_median_us=4.0,
+      ratio_median=0.5,
+    ),
+    benchmark_result(
+      name="binary_add_f64",
+      monpy_median_us=3.0,
+      numpy_median_us=6.0,
+      ratio_median=0.5,
+    ),
+    benchmark_result(
+      name="array_copy_f32",
+      monpy_median_us=5.0,
+      numpy_median_us=2.5,
+      ratio_median=2.0,
+    ),
+    benchmark_result(
+      name="astype_f32",
+      monpy_median_us=1.0,
+      numpy_median_us=1.0,
+      ratio_median=1.0,
+    ),
+  ]
+
+  body = posts.render_comment(payload)
+
+  assert (
+    "overall result: **monpy** (case outcomes: **monpy=2**, numpy=1, tie=1)"
+    in body
+  )
+  assert "| elementwise | binary_add_f32 | **2.000** | 4.000 | 0.500x | monpy |" in body
+  assert "| elementwise | array_copy_f32 | 5.000 | **2.500** | 2.000x | numpy |" in body
+  assert "| elementwise | astype_f32 | 1.000 | 1.000 | 1.000x | tie |" in body
+
+
+def test_overall_draw_highlights_both_tied_counts() -> None:
+  posts = load_posts_module()
+  payload = benchmark_payload()
+  payload["results"] = [
+    benchmark_result(
+      name="binary_add_f32",
+      monpy_median_us=2.0,
+      numpy_median_us=4.0,
+      ratio_median=0.5,
+    ),
+    benchmark_result(
+      name="array_copy_f32",
+      monpy_median_us=5.0,
+      numpy_median_us=2.5,
+      ratio_median=2.0,
+    ),
+  ]
+
+  body = posts.render_comment(payload)
+
+  assert (
+    "overall result: **tie** (case outcomes: **monpy=1**, **numpy=1**, tie=0)"
+    in body
+  )
