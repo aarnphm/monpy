@@ -458,6 +458,10 @@ def maybe_complex_binary_contiguous_accelerate(lhs: Array, rhs: Array, mut resul
         return False
     comptime if not CompilationTarget.is_macos():
         return False
+    # At 1024-element benchmark size, the vDSP call toll is larger than the
+    # inlined SIMD loop. Keep Accelerate for larger vectors where it amortizes.
+    if result.size_value < 4096:
+        return False
     if (
         lhs.dtype_code == ArrayDType.COMPLEX64.value
         and rhs.dtype_code == ArrayDType.COMPLEX64.value

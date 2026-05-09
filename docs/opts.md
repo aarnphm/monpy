@@ -1253,3 +1253,87 @@ is allocation and Python/native wrapper overhead rather than another SIMD
 kernel. The useful question is whether `array(copy=True)` can call a narrower
 native copy entrypoint that combines buffer import, allocation, and memcpy with
 fewer Python object transitions.
+
+### 2026-05-09 direct contiguous buffer copy and small complex add
+
+The refreshed complex slice ranked `array_copy_complex128` and
+`asarray_complex64` above the arithmetic rows:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/array_copy_complex128` | 3.603 | 2.438 | 1.477x |
+| `complex/interop/asarray_complex64` | 2.885 | 1.990 | 1.450x |
+| `complex/views/reversed_add_complex64` | 4.142 | 3.039 | 1.364x |
+| `complex/elementwise/binary_add_complex64` | 3.083 | 2.516 | 1.245x |
+| `complex/elementwise/binary_add_complex128` | 3.271 | 2.673 | 1.238x |
+| `complex/elementwise/binary_mul_complex64` | 3.085 | 2.543 | 1.204x |
+
+The first fix keeps same-dtype C-contiguous buffer copies inside
+`asarray_from_buffer_ops`: allocate the destination array, compute the storage
+byte count, and `memcpy` directly from `Py_buffer.buf`. The old path wrapped the
+source as an external `Array`, cloned shape/stride metadata, then called
+`copy_c_contiguous`. The direct copy leaf preserves the fallback path for
+strided inputs, dtype conversion, and readonly/copy policy failures.
+
+The second fix changes the small complex ADD/SUB cost model. Contiguous
+complex64/complex128 ADD/SUB was going through Accelerate vDSP even for the
+1024-element benchmark row. At that size the framework call toll is larger than
+the existing typed SIMD loop, so `maybe_complex_binary_contiguous_accelerate`
+now only uses vDSP at 4096 complex elements and above. The 1024-element row
+stays in the Mojo fused kernel (`backend_code=2`, `used_fused=True`,
+`used_accelerate=False`).
+
+Focused verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_complex.py::test_complex_arithmetic_add_sub_mul_div_match_numpy tests/python/numpy_compat/test_complex.py::test_complex_strided_arithmetic_preserves_imaginary_part tests/python/numpy_compat/test_complex.py::test_complex64_contiguous_multiply_uses_fused_kernel tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_copy_true_detaches_storage tests/python/numpy_compat/test_array_coercion.py::test_numpy_array_copy_true_detaches_storage -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --repeats 7 --rounds 5 --matrix-sizes 64 --format json --sort ratio --output-dir results/local-sweep-20260509-complex-small-mojo-add --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/elementwise/binary_add_complex64 --types complex --candidate monpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-binary-add-complex64-mojo-small --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/elementwise/binary_add_complex64 --types complex --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-binary-add-complex64-numpy --sample --no-perf-stat
+```
+
+Post-fix benchmark results:
+
+| row | before | after | delta |
+| --- | ---: | ---: | ---: |
+| `complex/interop/array_copy_complex128` | 3.603 us, 1.477x | 3.539 us, 1.421x | 1.02x faster |
+| `complex/elementwise/binary_add_complex64` | 3.083 us, 1.245x | 2.981 us, 1.216x | 1.03x faster |
+| `complex/elementwise/binary_add_complex128` | 3.271 us, 1.238x | 3.227 us, 1.226x | 1.01x faster |
+| `complex/elementwise/binary_mul_complex64` | 3.085 us, 1.204x | 3.067 us, 1.196x | flat/noise |
+
+Direct microbenchmarks show the copy leaf moving even though the full
+benchmark is mostly wrapper-bound: native complex128 buffer copy moved from
+1.002 us to 0.872 us, while `monpy.array(..., copy=True)` moved from 1.434 us
+to 1.313 us. NumPy stayed around 0.42 us for the same copy.
+
+The profile comparison for `complex/elementwise/binary_add_complex64` reports:
+
+| candidate | us/call | max RSS | traced peak | backend |
+| --- | ---: | ---: | ---: | --- |
+| monpy | 3.200 | 49.7 MB | 1,590 B | fused Mojo, no Accelerate |
+| numpy | 2.643 | 49.5 MB | 17,608 B | n/a |
+
+No PMU counters were collected in this run because `--no-perf-stat` was used.
+The macOS `sample(1)` stacks were written under
+`results/local-profile-20260509-binary-add-complex64-*`; they mostly show the
+benchmark harness and Python call/attribute machinery, so the next useful
+profile pass should use Instruments CPU Counters or a Linux `perf stat` run
+when we want instruction/cache ratios rather than wall-clock deltas.
+
+Remaining frontier after this slice:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.896 | 1.972 | 1.484x |
+| `complex/interop/array_copy_complex128` | 3.539 | 2.481 | 1.421x |
+| `complex/views/reversed_add_complex64` | 4.167 | 3.068 | 1.361x |
+| `complex/casts/astype_complex64_to_complex128` | 3.267 | 2.576 | 1.265x |
+| `complex/elementwise/binary_add_complex128` | 3.227 | 2.636 | 1.226x |
+| `complex/elementwise/binary_add_complex64` | 2.981 | 2.451 | 1.216x |
+| `complex/elementwise/binary_mul_complex64` | 3.067 | 2.571 | 1.196x |
+| `complex/matmul_64_complex64` | 7.576 | 7.161 | 1.061x |
+
+Next target should stay on the interop cluster. The direct copy leaf helped the
+native portion, but the row is still 1.42x NumPy because object creation and
+buffer classification dominate the remaining cost.

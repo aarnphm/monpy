@@ -1,5 +1,6 @@
 from std.collections import List
 from std.ffi import _Global, c_char, c_int, _CPointer
+from std.memory import memcpy
 from std.memory.unsafe_pointer import unsafe_cast
 from std.python import PythonObject
 from std.python._cpython import ExternalFunction, Py_ssize_t, PyObjectPtr
@@ -10,6 +11,7 @@ from array import (
     cast_copy_array,
     copy_c_contiguous,
     item_size,
+    make_empty_array,
     make_external_array,
 )
 from domain import (
@@ -95,6 +97,19 @@ comptime MONPY_BUFFER_FUNCTIONS = _Global[
 ]
 
 
+def _buffer_is_c_contiguous(shape: List[Int], strides: List[Int]) -> Bool:
+    if len(shape) != len(strides):
+        return False
+    var expected = 1
+    for axis in range(len(shape) - 1, -1, -1):
+        if shape[axis] == 0:
+            return True
+        if shape[axis] != 1 and strides[axis] != expected:
+            return False
+        expected *= shape[axis]
+    return True
+
+
 def asarray_from_buffer_ops(
     obj: PythonObject,
     requested_dtype_obj: PythonObject,
@@ -162,6 +177,15 @@ def asarray_from_buffer_ops(
     var must_copy = (copy_flag == 1) or readonly or (result_dtype_code != src_dtype_code)
     var data = UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=data_addr)
     if must_copy:
+        if result_dtype_code == src_dtype_code and _buffer_is_c_contiguous(shape, elem_strides):
+            var result_shape = List[Int]()
+            for i in range(len(shape)):
+                result_shape.append(shape[i])
+            var result = make_empty_array(src_dtype_code, result_shape^)
+            var byte_count = dtype_storage_byte_len(src_dtype_code, result.size_value)
+            memcpy(dest=result.data, src=data, count=byte_count)
+            release_fn(view_ptr)
+            return PythonObject(alloc=result^)
         var view_shape = List[Int]()
         for i in range(len(shape)):
             view_shape.append(shape[i])
