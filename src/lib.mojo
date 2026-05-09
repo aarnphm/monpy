@@ -122,7 +122,7 @@ def PyInit__native() -> PythonObject:
             .def_method[array_mul_method_ops]("mul")
             .def_method[array_div_method_ops]("div")
             .def_method[array_matmul_method_ops]("matmul")
-            .def_method[reverse_1d_ops]("reverse_1d_method")
+            .def_method[Array.reverse_1d_py]("reverse_1d_method")
             .def_method[slice_1d_ops]("slice_1d_method")
             .def_method[transpose_full_reverse_ops]("transpose_full_reverse_method")
         )

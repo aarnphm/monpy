@@ -33,7 +33,7 @@ from domain import (
     dtype_byte_offset,
     dtype_item_size,
 )
-from storage import Storage, release_storage
+from storage import Storage, release_storage, retain_storage
 
 
 @fieldwise_init
@@ -137,6 +137,33 @@ struct Array(Movable, Writable):
     def backend_code_py(py_self: PythonObject) raises -> PythonObject:
         var self_ptr = Self._get_self_ptr(py_self)
         return PythonObject(self_ptr[].backend_code)
+
+    @staticmethod
+    def reverse_1d_py(py_self: PythonObject) raises -> PythonObject:
+        var self_ptr = Self._get_self_ptr(py_self)
+        if len(self_ptr[].shape) != 1:
+            raise Error("reverse_1d() requires a rank-1 array")
+        var length = self_ptr[].shape[0]
+        var shape = List[Int]()
+        shape.append(length)
+        var strides = List[Int]()
+        strides.append(-self_ptr[].strides[0])
+        var offset = self_ptr[].offset_elems
+        if length > 0:
+            offset += (length - 1) * self_ptr[].strides[0]
+        var storage = retain_storage(self_ptr[].storage)
+        var result = Self(
+            self_ptr[].dtype_code,
+            shape^,
+            strides^,
+            self_ptr[].size_value,
+            offset,
+            storage,
+            self_ptr[].data,
+            self_ptr[].byte_len,
+            self_ptr[].backend_code,
+        )
+        return PythonObject(alloc=result^)
 
     @staticmethod
     def get_scalar_py(py_self: PythonObject, index_obj: PythonObject) raises -> PythonObject:

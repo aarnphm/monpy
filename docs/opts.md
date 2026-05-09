@@ -1422,3 +1422,76 @@ The interop rows still lead, but their remaining raw leaf is already
 sub-microsecond; the official row is now dominated by harness and Python wrapper
 constant factors. The reversed-add row has real native work left in negative
 stride handling and may have more actual loot per line changed.
+
+### 2026-05-09 reverse view wrapper fast path
+
+This pass started by trying a four-complex unroll inside the negative-stride
+`complex64` ADD/SUB kernel. That did not move the leaf: presliced monpy add
+stayed around 0.94 us and the official `reversed_add_complex64` ratio stayed at
+1.359x. The patch was reverted before landing. The useful deficit was still the
+view creation path around the already-fused native kernel.
+
+Raw timing before the wrapper patch put a single `z[::-1]` at about 0.456 us
+and the full `z[::-1] + w[::-1]` expression at about 1.932 us. The bound native
+reverse method itself was only about 0.230 us, so roughly half the slice cost was
+Python dispatch and wrapper construction.
+
+`src/array/accessors.mojo` now owns the bound `Array.reverse_1d_method()` path
+directly. The public module-level `_native.reverse_1d()` function still uses the
+generic shape helper, but the method used by `ndarray.__getitem__` builds the
+rank-1 reverse view from the receiver fields without re-entering the generic
+factory. `python/monpy/__init__.py` also inlines the wrapper construction for
+the exact `[::-1]` case, avoiding the extra `ndarray._wrap(...)` staticmethod
+dispatch in this tiny hot path.
+
+Raw post-fix timing:
+
+| path | before | after |
+| --- | ---: | ---: |
+| native `reverse_1d_method()` | 0.230 us | 0.228 us |
+| `ndarray._wrap(reverse_1d_method())` | 0.342 us | 0.337 us |
+| `z[::-1]` | 0.456 us | 0.409 us |
+| `z[::-1] + w[::-1]` | 1.932 us | 1.819 us |
+
+Focused verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_complex.py::test_complex_strided_arithmetic_preserves_imaginary_part tests/python/numpy_compat/test_complex.py::test_complex_arithmetic_add_sub_mul_div_match_numpy tests/python/numpy_compat/test_complex.py::test_complex64_contiguous_multiply_uses_fused_kernel -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_complex.py::test_complex_strided_arithmetic_preserves_imaginary_part tests/python/numpy_compat/test_complex.py::test_complex_arithmetic_add_sub_mul_div_match_numpy tests/python/numpy_compat/test_indexing.py -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_complex.py::test_complex_strided_arithmetic_preserves_imaginary_part tests/python/numpy_compat/test_indexing.py -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --repeats 7 --rounds 5 --matrix-sizes 64 --format json --sort ratio --output-dir results/local-sweep-20260509-complex-reverse-wrapper-fastpath --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/views/reversed_add_complex64 --types complex --candidate monpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-reversed-add-wrapper-fastpath-monpy --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/views/reversed_add_complex64 --types complex --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-reversed-add-wrapper-fastpath-numpy --sample --no-perf-stat
+```
+
+Official post-fix benchmark results:
+
+| row | before | after | delta |
+| --- | ---: | ---: | ---: |
+| `complex/views/reversed_add_complex64` | 4.131 us, 1.359x | 4.076 us, 1.335x | 1.01x faster |
+
+The profile manifests reported `complex/views/reversed_add_complex64` at 4.210
+us/call for monpy and 3.162 us/call for NumPy. Monpy stayed on backend code 2,
+the fused Mojo path, with max RSS around 49.3 MB and a 1,728 byte traced peak.
+NumPy reported max RSS around 49.3 MB and a 17,760 byte traced peak. No
+hardware PMU counters were collected because `--no-perf-stat` was used. The
+macOS `sample(1)` captures were written under
+`results/local-profile-20260509-reversed-add-wrapper-fastpath-*`; the visible
+stacks are still dominated by CPython frame evaluation, attribute lookup, and
+benchmark harness work around the native kernel.
+
+Remaining frontier after this slice:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.790 | 1.971 | 1.408x |
+| `complex/interop/array_copy_complex128` | 3.280 | 2.441 | 1.339x |
+| `complex/views/reversed_add_complex64` | 4.076 | 3.054 | 1.335x |
+| `complex/casts/astype_complex64_to_complex128` | 3.301 | 2.582 | 1.279x |
+| `complex/elementwise/binary_add_complex128` | 3.225 | 2.684 | 1.225x |
+
+Next target should move to `complex/interop/array_copy_complex128` or the
+attention rows. For complex reverse views, the easy wrapper win is spent and the
+remaining ratio is mostly Python object overhead around two view creations plus
+one already-fused native add.
