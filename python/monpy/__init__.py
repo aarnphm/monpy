@@ -893,11 +893,31 @@ def asarray(obj:object, dtype:object=None, *, copy:builtins.bool|None=None, devi
   tgt=_resolve_dtype(dtype) if dtype is not None else _infer_dtype(flat)
   return ndarray(_native.from_flat(flat, shape, tgt.code))
 
+def _empty_native_from_shape(shape:tuple[int, ...], dtype_code:int)->_NativeArray:
+  if len(shape)==1:return _native.empty_rank1(shape[0], dtype_code)
+  if len(shape)==2:return _native.empty_rank2(shape[0], shape[1], dtype_code)
+  return _native.empty(shape, dtype_code)
+
+def _empty_from_shape_obj(shape:int|Sequence[int], dtype_code:int)->ndarray:
+  if type(shape) is tuple:
+    if len(shape)==1 and type(shape[0]) is builtins.int:
+      d0=shape[0]
+      if d0<0:raise ValueError("negative dimensions are not allowed")
+      return ndarray._wrap(_native.empty_rank1(d0, dtype_code))
+    if len(shape)==2 and type(shape[0]) is builtins.int and type(shape[1]) is builtins.int:
+      d0=shape[0]
+      d1=shape[1]
+      if d0<0 or d1<0:raise ValueError("negative dimensions are not allowed")
+      return ndarray._wrap(_native.empty_rank2(d0, d1, dtype_code))
+  if isinstance(shape, builtins.int):
+    if shape<0:raise ValueError("negative dimensions are not allowed")
+    return ndarray._wrap(_native.empty_rank1(shape, dtype_code))
+  return ndarray._wrap(_empty_native_from_shape(_norm_shape(shape), dtype_code))
+
 def empty(shape:int|Sequence[int], dtype:object=None, *, device:object=None)->ndarray:
   _check_cpu(device)
   t=_resolve_dtype(dtype) if dtype is not None else float64
-  n=_norm_shape(shape)
-  return ndarray(_native.empty(n, t.code))
+  return _empty_from_shape_obj(shape, t.code)
 
 def zeros(shape:int|Sequence[int], dtype:object=None, *, device:object=None)->ndarray:return full(shape, 0, dtype=_resolve_dtype(dtype) if dtype is not None else float64, device=device)
 def ones(shape:int|Sequence[int], dtype:object=None, *, device:object=None)->ndarray:return full(shape, 1, dtype=_resolve_dtype(dtype) if dtype is not None else float64, device=device)
@@ -911,9 +931,14 @@ def full(shape:int|Sequence[int], fill_value:object, *, dtype:object=None, devic
 def empty_like(prototype:object, dtype:object=None, order:str="K", subok:builtins.bool=True, shape:int|Sequence[int]|None=None, *, device:object=None)->ndarray:
   _check_order(order)
   del subok
-  arr=asarray(prototype)
+  _check_cpu(device)
+  if shape is not None:
+    if dtype is not None:return _empty_from_shape_obj(shape, _resolve_dtype(dtype).code)
+    arr=prototype if type(prototype) is ndarray else asarray(prototype)
+    return _empty_from_shape_obj(shape, arr.dtype.code)
+  arr=prototype if type(prototype) is ndarray else asarray(prototype)
   t=_resolve_dtype(dtype) if dtype is not None else arr.dtype
-  return empty(arr.shape if shape is None else _norm_shape(shape), dtype=t, device=device)
+  return _empty_from_shape_obj(arr.shape, t.code)
 
 def _full_like(prototype:object, fill_value:object, dtype:object, shape:int|Sequence[int]|None, device:object)->ndarray:
   _check_cpu(device)
@@ -3073,6 +3098,17 @@ def _norm_shape(shape:int|Sequence[int])->tuple[int, ...]:
   if isinstance(shape, builtins.int):
     if shape<0:raise ValueError("negative dimensions are not allowed")
     return(shape,)
+  if type(shape) is tuple:
+    if len(shape)==0:return()
+    if len(shape)==1 and type(shape[0]) is builtins.int:
+      d0=shape[0]
+      if d0<0:raise ValueError("negative dimensions are not allowed")
+      return(d0,)
+    if len(shape)==2 and type(shape[0]) is builtins.int and type(shape[1]) is builtins.int:
+      d0=shape[0]
+      d1=shape[1]
+      if d0<0 or d1<0:raise ValueError("negative dimensions are not allowed")
+      return(d0, d1)
   out=tuple(int(d) for d in shape)
   if builtins.any(d<0 for d in out):raise ValueError("negative dimensions are not allowed")
   return out

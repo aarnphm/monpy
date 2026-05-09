@@ -39,6 +39,8 @@ from create import (
     eig_ops,
     eigh_ops,
     empty_ops,
+    empty_rank1_ops,
+    empty_rank2_ops,
     expand_dims_ops,
     eye_ops,
     fill_ops,
@@ -153,6 +155,8 @@ def PyInit__native() -> PythonObject:
             .def_method[transpose_full_reverse_ops]("transpose_full_reverse_method")
         )
         module.def_function[empty_ops]("empty")
+        module.def_function[empty_rank1_ops]("empty_rank1")
+        module.def_function[empty_rank2_ops]("empty_rank2")
         module.def_function[full_ops]("full")
         module.def_function[full_like_ops]("full_like")
         module.def_function[from_flat_ops]("from_flat")

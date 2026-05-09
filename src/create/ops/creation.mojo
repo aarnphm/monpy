@@ -11,6 +11,7 @@ The `from_external_ops` and `copy_from_external_ops` pair handle the
 __array_interface__ / DLPack bridge to numpy.
 """
 
+from std.collections import List
 from std.python import PythonObject
 
 from accelerate import libm_pow_f64
@@ -42,6 +43,28 @@ def empty_ops(shape_obj: PythonObject, dtype_obj: PythonObject) raises -> Python
     var dtype_code = Int(py=dtype_obj)
     var shape = int_list_from_py(shape_obj)
     var result = make_empty_array(dtype_code, shape^)
+    return PythonObject(alloc=result^)
+
+
+def empty_rank1_ops(size_obj: PythonObject, dtype_obj: PythonObject) raises -> PythonObject:
+    var size = Int(py=size_obj)
+    if size < 0:
+        raise Error("negative dimensions are not allowed")
+    var shape = List[Int]()
+    shape.append(size)
+    var result = make_empty_array(Int(py=dtype_obj), shape^)
+    return PythonObject(alloc=result^)
+
+
+def empty_rank2_ops(rows_obj: PythonObject, cols_obj: PythonObject, dtype_obj: PythonObject) raises -> PythonObject:
+    var rows = Int(py=rows_obj)
+    var cols = Int(py=cols_obj)
+    if rows < 0 or cols < 0:
+        raise Error("negative dimensions are not allowed")
+    var shape = List[Int]()
+    shape.append(rows)
+    shape.append(cols)
+    var result = make_empty_array(Int(py=dtype_obj), shape^)
     return PythonObject(alloc=result^)
 
 

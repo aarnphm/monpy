@@ -29,6 +29,8 @@ def test_like_creation_and_copy_helpers_match_numpy() -> None:
 
   empty = np.empty_like(base, dtype=np.float32, shape=(2, 2))
   assert_same_shape_dtype(empty, numpy.empty_like(oracle, dtype=numpy.float32, shape=(2, 2)))
+  scalar_shape = np.empty_like(object(), dtype=np.float64, shape=(2, 3))
+  assert_same_shape_dtype(scalar_shape, numpy.empty_like(object(), dtype=numpy.float64, shape=(2, 3)))
   assert_same_values(np.zeros_like(base), numpy.zeros_like(oracle))
   assert_same_values(np.ones_like(base, dtype=np.float32), numpy.ones_like(oracle, dtype=numpy.float32))
   assert_same_values(np.full_like(base, 7), numpy.full_like(oracle, 7))
@@ -69,6 +71,8 @@ def test_arange_and_linspace_match_numpy() -> None:
 def test_invalid_creation_arguments_are_explicit_blockers() -> None:
   with pytest.raises(ValueError, match="negative dimensions"):
     np.zeros((-1,), dtype=np.float64)
+  with pytest.raises(ValueError, match="negative dimensions"):
+    np.empty_like(object(), dtype=np.float64, shape=(2, -1))
   with pytest.raises(Exception, match="step"):
     np.arange(0, 4, 0)
   with pytest.raises(NotImplementedError, match="cpu"):

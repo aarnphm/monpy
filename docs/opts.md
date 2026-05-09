@@ -3714,6 +3714,101 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py tests/python/numpy_compat/test_linalg.py -q
 ```
 
+### 2026-05-09 empty-like shape override allocator
+
+Fresh frontier before patch:
+
+| row                                             | monpy us | numpy us | ratio  |
+| ----------------------------------------------- | -------: | -------: | -----: |
+| `array/creation/empty_like_shape_override_f32`  |    4.345 |    2.190 | 2.004x |
+| `array/creation/meshgrid_xy_f32`                |   15.032 |    8.998 | 1.678x |
+| `array/views/transpose_add_f32`                 |    4.497 |    2.622 | 1.715x |
+
+Profile read:
+
+- `empty_like(shape=..., dtype=...)` was not blocked on SIMD. It was Python
+  metadata traffic.
+- cProfile for 50k calls showed 1.5M Python calls and 0.346 s wall. The two
+  main wastes were 100k `_norm_shape` calls and the extra `empty()` wrapper.
+- `monpy-profile` measured 4.563 us/call, with tracemalloc peak at 109,632
+  bytes in the allocation run.
+- The macOS `sample(1)` stack still had `empty_ops`, `int_list_from_py`, and
+  `make_empty_array`. We were parsing a Python tuple into a Mojo list even
+  when the benchmark supplied a literal rank-2 shape.
+
+Patch:
+
+- Added `_native.empty_rank1` and `_native.empty_rank2`.
+- Added `_empty_from_shape_obj` on the Python side. Common int, rank-1 tuple,
+  and rank-2 tuple shapes now validate and allocate in one leaf path.
+- `empty()` uses the same helper, so the rank-specific bridge is not special
+  to the benchmark.
+- `empty_like(shape=..., dtype=...)` no longer converts the prototype first
+  when both result shape and dtype are explicit. NumPy's public contract makes
+  these explicit overrides; `np.empty_like(object(), dtype=float64, shape=(2,
+  3))` is legal, so this is a semantics-preserving fast path for the case we
+  care about. Source: https://numpy.org/doc/2.0/reference/generated/numpy.empty_like.html
+- Added coverage for scalar/object prototypes with explicit shape/dtype and
+  for negative override shapes.
+
+Post-patch profile:
+
+| probe                     | before | after | movement |
+| ------------------------- | -----: | ----: | -------: |
+| cProfile calls, 50k loop  | 1.50M  | 0.55M | 2.73:1 fewer |
+| cProfile wall, 50k loop   | 0.346s | 0.151s | 2.29:1 faster |
+| `monpy-profile` median    | 4.563 us | 3.468 us | 1.32:1 faster |
+| alloc-profile peak        | 109,632 B | 1,598 B | 68.6:1 lower |
+
+Post-patch array rerun:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-array-20260509-empty-rank-alloc-inline --no-progress --no-stdout
+```
+
+Key row:
+
+| row                                             | before us | after us | before ratio | after ratio | speedup |
+| ----------------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/creation/empty_like_shape_override_f32`  |     4.345 |    3.262 |       2.004x |      1.451x |  1.33:1 |
+
+Pure-Mojo/std/NuMojo/threading check:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo --include-numojo --include-threading --thread-caps auto,1,2,4,8 --format json --sort slowest --output-dir results/local-mojo-20260509-empty-rank-alloc --no-stdout --timeout 240
+```
+
+- This patch does not touch the pure-Mojo benchmark bodies. The check is still
+  useful as a drift guard after adding native extension entrypoints.
+- Group means: elementwise 0.851x, reductions 0.988x, matmul 1.038x.
+- Threading means: auto 0.723x, threads1 1.042x, threads2 0.684x, threads4
+  0.622x, threads8 0.701x.
+- Worst row was `threading.auto/exp_f32_64k` at 2.256x. This is policy
+  overhead on a too-small threaded exp cell, not evidence that the serial
+  unary kernel got worse.
+
+Next target:
+
+- `empty_like_shape_override_f32` moved out of the worst cluster. Good.
+- `meshgrid_xy_f32` is the next high-upside creation target by absolute loss:
+  latest row is 13.823 us vs NumPy 8.485 us, roughly 5.34 us/call left on the
+  floor.
+- It is also a correctness target. The current facade accepts `copy=True` by
+  default but still returns broadcast views. A native two-input `meshgrid`
+  should handle `xy`/`ij`, dense `copy=True`, view `copy=False`, and owner
+  lifetime in one place.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/create/ops/creation.mojo src/create/ops/__init__.mojo src/create/__init__.mojo src/lib.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_numeric.py::test_creation_functions_match_numpy_shape_dtype_and_values tests/python/numpy_compat/test_numeric.py::test_like_creation_and_copy_helpers_match_numpy tests/python/numpy_compat/test_numeric.py::test_invalid_creation_arguments_are_explicit_blockers -q
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/creation/empty_like_shape_override_f32 --types array,attention --candidate monpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-empty-like-shape-monpy-inline --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-array-20260509-empty-rank-alloc-inline --no-progress --no-stdout
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo --include-numojo --include-threading --thread-caps auto,1,2,4,8 --format json --sort slowest --output-dir results/local-mojo-20260509-empty-rank-alloc --no-stdout --timeout 240
+```
+
 ### 2026-05-09 matrix-power native float path
 
 Fresh baseline, same runner shape as the prior dot-family pass:
