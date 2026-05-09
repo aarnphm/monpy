@@ -101,8 +101,8 @@ major local blockers already called out in compatibility coverage:
 - unsupported dtype families: object, string, structured, datetime, and
   timedelta.
 - higher-rank / batched matmul and stacked linalg semantics.
-- full numpy random, fft, masked-array, string, polynomial, io, testing, and
-  f2py subsystems.
+- full numpy random bit-generator/distribution parity, fft, masked-array,
+  string, polynomial, io, testing, and f2py subsystems.
 - deep ufunc/reduction tail: `where=` keyword support on ufuncs,
   `reduce(initial=...)`, `reduceat`, complete floating-point error-state
   behavior, bitwise integer ufuncs, and the c-api-level machinery behind
@@ -369,22 +369,27 @@ monpy implementation note:
 
 ### random
 
-numpy's `random` module is its own library, not a thin helper file.
+numpy's `random` module is its own library, not a thin helper file. monpy now
+has a first native slice, centered on explicit immutable keys plus numpy-shaped
+convenience wrappers.
+
+covered first slice:
+
+- explicit `key`, `split`, `fold_in`, `key_data`, and `wrap_key_data`.
+- module-level `seed`, `rand`, `randn`, `randint`, `random_sample`, `sample`,
+  `ranf`, `uniform`, and `normal`.
+- minimal `default_rng(...).random`, `.standard_normal`, `.uniform`, `.normal`,
+  and `.integers`.
+- native mojo loops for bits, uniform, normal, and bounded integer sampling.
 
 missing pieces:
 
-- bit generators: `PCG64`, `PCG64DXSM`, `MT19937`, `Philox`, `SFC64`.
-- `Generator`, legacy `RandomState`, seeding, state serialization, and pickle
-  behavior.
-- distributions: uniform, normal, integers, binomial, poisson, exponential,
-  gamma, beta, chisquare, dirichlet, multinomial, choice, permutation, shuffle,
-  and the rest of numpy's distribution surface.
-
-monpy implementation note:
-
-- this should be a separate subsystem after core ndarray semantics are stable.
-  use numpy's distribution tests as behavioral references, but avoid copying the
-  random module's cython layout.
+- bit-generator classes and bitstream parity: `PCG64`, `PCG64DXSM`, `MT19937`,
+  `Philox`, and `SFC64`.
+- legacy `RandomState`, state serialization, pickle behavior, `choice`,
+  permutation/shuffle, and the larger distribution surface.
+- exact NumPy stream compatibility. v1 pins shape, dtype, range, and
+  reproducibility semantics instead.
 
 ### fft
 

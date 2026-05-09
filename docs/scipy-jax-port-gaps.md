@@ -204,8 +204,8 @@ the graph-level version should follow jax's primitive-batcher model:
    matrices, Cholesky solve, and LU solve.
 6. add stats operations that reuse existing primitives before distributions.
 7. add signal windows, then FFT-backed convolution/correlation.
-8. defer sparse, full optimize, integrate, interpolate, ndimage, random, and io
-   until the core array and transform contracts stop moving.
+8. defer sparse, full optimize, integrate, interpolate, ndimage, full random
+   distributions, and io until the core array and transform contracts stop moving.
 
 ## coverage homes
 

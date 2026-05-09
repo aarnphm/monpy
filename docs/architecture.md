@@ -21,6 +21,7 @@ monpy should be a mojo array library with numpy-shaped python APIs.
 - `python/monpy` is the python API facade. it parses python objects, cpython buffers, array-interface exporters, dlpack cpu producers, keyword arguments, and numpy-shaped ergonomics, then delegates implemented work into mojo. NEP 50 weak-scalar dispatch lives here; the registry mirrors numpy's dtype metadata (`kind`, `itemsize`, `alignment`, `byteorder`, `format`, `scalar_type`).
 - `python/monpy/runtime/ops_numpy.py` is the explicit numpy interop boundary. core `monpy` does not import numpy; numpy dtype aliases, `to_numpy(...)`, and numpy-aware `asarray(...)` live in this module.
 - `python/monpy/linalg.py` is the numpy-shaped linear algebra namespace. wraps the LAPACK dispatchers and adds python-level `pinv` / `matrix_rank` / `einsum` / `tensorinv` / `tensorsolve`. `einsum` parses the subscript string, folds pairwise contractions through `tensordot` (transpose + reshape + matmul), and unpacks LAPACK's compressed conjugate-pair `WR` / `WI` representation when `eig` returns a complex spectrum.
+- `python/monpy/random.py` is the random namespace. it owns immutable explicit keys, numpy-shaped module helpers, and the thin `Generator` wrapper; element generation loops live in mojo.
 - `python/monpy/array_api.py` is the standards-shaped namespace and re-exports the same `linalg` module for the currently supported surface.
 - `python/monumpy` is a compatibility shim that re-exports `monpy`.
 
@@ -35,9 +36,10 @@ monpy should be a mojo array library with numpy-shaped python APIs.
 | linalg    | `solve` / `inv` / `det` / `qr` / `cholesky` / `eigh` / `eig` / `svd` / `lstsq` via Accelerate LAPACK; `pinv` / `matrix_rank` / `einsum` / `tensorinv` / `tensorsolve` in python |
 | creation  | `empty` / `full` / `zeros` / `ones` / `arange` / `linspace` / `eye` / `tri` / `tril` / `triu` / `concatenate` / `pad` (constant mode) native                                    |
 | views     | slicing, reshape, transpose, broadcast, expand_dims, flip, diagonal — all stride-only, no copies                                                                                |
+| random    | explicit `key` / `split` / `fold_in`, `random` / `uniform` / `normal` / `randint`, numpy legacy helpers, and minimal `default_rng` wrapper over native mojo samplers             |
 | io        | `__array_interface__` export, dlpack round-trips, explicit `runtime.ops_numpy` conversion, and cpython buffer protocol fast paths via `buffer.mojo`                             |
 
-v1 non-goals: `numpy.random`, `numpy.fft`, `numpy.ma`, `numpy.strings`, `numpy.io`. see [[numpy-port-gaps]].
+v1 non-goals: full `numpy.random` bit-generator/distribution parity, `numpy.fft`, `numpy.ma`, `numpy.strings`, `numpy.io`. see [[numpy-port-gaps]].
 
 ## policy
 

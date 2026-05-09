@@ -38,6 +38,10 @@ def test_core_import_and_buffer_paths_do_not_import_numpy() -> None:
     assert arr.tolist() == [1, 2, 3]
     assert (arr + 2).tolist() == [3, 4, 5]
     assert monumpy.asarray([True, False]).dtype == monpy.bool
+    assert monpy.random.key_data(monpy.random.key(0)).shape == (2,)
+    assert monpy.random.random(monpy.random.key(1), size=(2,)).shape == (2,)
+    assert monumpy.random is monpy.random
+    assert "numpy" not in sys.modules
 
     exported = array.array("i", [1, 2, 3])
     view = monpy.asarray(exported, copy=False)

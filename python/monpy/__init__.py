@@ -3150,9 +3150,16 @@ def _check_order(order:str)->None:
 def _is_kernel_value(v:object)->builtins.bool:return builtins.bool(getattr(v, "__monpy_kernel_tensor__", False))
 def _has_kernel_arg(args:Sequence[object])->builtins.bool:return builtins.any(_is_kernel_value(arg) for arg in args)
 
-runtime=importlib.import_module(f"{__name__}.runtime")
-linalg=importlib.import_module(f"{__name__}.linalg")
-nn=importlib.import_module(f"{__name__}.nn")
+if typing.TYPE_CHECKING:
+  from . import runtime as runtime
+  from . import linalg as linalg
+  from . import nn as nn
+  from . import random as random
+else:
+  runtime=importlib.import_module(f"{__name__}.runtime")
+  linalg=importlib.import_module(f"{__name__}.linalg")
+  nn=importlib.import_module(f"{__name__}.nn")
+  random=importlib.import_module(f"{__name__}.random")
 
 # Top-level numpy aliases for the linalg surface; numpy exposes both `numpy.dot` and `numpy.linalg` paths.
 dot=linalg.dot
@@ -3175,8 +3182,13 @@ from_numpy=runtime.ops_numpy.from_numpy
 
 _KERNEL_LAZY_EXPORTS={"jit", "Tensor", "TensorSpec", "LayoutSpec", "TileSpec", "DTypeSpec", "DeviceSpec", "SymbolicDim"}
 _JAX_LAZY_EXPORTS={"vmap"}
+_MODULE_LAZY_EXPORTS={"random"}
 
 def __getattr__(name:str)->object:
+  if name in _MODULE_LAZY_EXPORTS:
+    module=importlib.import_module(f"{__name__}.{name}")
+    globals()[name]=module
+    return module
   if name in _KERNEL_LAZY_EXPORTS:
     kernels=importlib.import_module(f"{__name__}.kernels")
     return getattr(kernels, name)
@@ -3185,5 +3197,4 @@ def __getattr__(name:str)->object:
     return getattr(jax_api, name)
   raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-__all__=["DType", "Ufunc", "abs", "absolute", "add", "all", "any", "append", "arange", "arccos", "arcsin", "arctan", "arctan2", "argpartition", "argsort", "argwhere", "array", "array_split", "asarray", "ascontiguousarray", "argmax", "argmin", "asfortranarray", "astype", "atleast_1d", "atleast_2d", "atleast_3d", "average", "bfloat16", "bincount", "block", "bool", "bool_", "broadcast_arrays", "broadcast_to", "can_cast", "cbrt", "cdouble", "ceil", "clongdouble", "column_stack", "complex_", "complex64", "complex128", "concatenate", "conj", "conjugate", "copy", "copysign", "cos", "cosh", "count_nonzero", "cross", "csingle", "cummax", "cummin", "cumprod", "cumsum", "deg2rad", "degrees", "delete", "diagonal", "diag_indices", "digitize", "divide", "dot", "dsplit", "dstack", "dtype", "einsum", "e", "empty", "empty_like", "equal", "exp", "exp2", "expm1", "expand_dims", "eye", "fabs", "finfo", "fix", "flatnonzero", "flatten", "flip", "fliplr", "flipud", "float_", "float16", "float32", "float4_e2m1fn", "float64", "float8_e4m3fn", "float8_e4m3fnuz", "float8_e5m2", "float8_e5m2fnuz", "float8_e8m0fnu", "floor", "floor_divide", "fmax", "fmin", "frombuffer", "from_dlpack", "fromiter", "full", "full_like", "geomspace", "greater", "greater_equal", "half", "hsplit", "hstack", "hypot", "identity", "iinfo", "imag", "indices", "inf", "inner", "insert", "int_", "int8", "int16", "int32", "int64", "intersect1d", "intp", "isdtype", "isfinite", "isinf", "isin", "isnan", "issubdtype", "ix_", "kron", "less", "less_equal", "lexsort", "linalg", "layer_norm", "linspace", "log", "log2", "log10", "log1p", "logical_and", "logical_not", "logical_or", "logical_xor", "logspace", "matmul", "matrix_transpose", "matvec", "max", "maximum", "mean", "median", "meshgrid", "min", "minimum", "mod", "moveaxis", "multiply", "nan", "nanargmax", "nanargmin", "nancumprod", "nancumsum", "nanmax", "nanmean", "nanmedian", "nanmin", "nanpercentile", "nanprod", "nanquantile", "nanstd", "nansum", "nanvar", "ndarray", "negative", "newaxis", "nn", "nonzero", "not_equal", "ones", "ones_like", "outer", "pad", "partition", "percentile", "pi", "positive", "power", "prod", "promote_types", "ptp", "put", "put_along_axis", "quantile", "radians", "rad2deg", "ravel", "ravel_multi_index", "real", "reciprocal", "remainder", "repeat", "reshape", "result_type", "rint", "roll", "rot90", "scaled_masked_softmax", "searchsorted", "setdiff1d", "setxor1d", "sign", "signbit", "sin", "sin_add_mul", "sinh", "softmax", "sort", "split", "sqrt", "square", "squeeze", "stack", "std", "subtract", "sum", "swapaxes", "take", "take_along_axis", "tan", "tanh", "angle", "tensordot", "tile", "trace", "transpose", "tri", "trim_zeros", "triu", "tril", "triu_indices", "tril_indices", "true_divide", "trunc", "ubyte", "ufunc", "uint8", "uint16", "uint32", "uint64", "uintc", "ulonglong", "union1d", "unique", "unravel_index", "ushort", "var", "vdot", "vecdot", "vecmat", "vsplit", "vstack", "where", "zeros", "zeros_like"]+sorted(_KERNEL_LAZY_EXPORTS)
-__all__+=sorted(_JAX_LAZY_EXPORTS)
+__all__=["DType", "Ufunc", "abs", "absolute", "add", "all", "any", "append", "arange", "arccos", "arcsin", "arctan", "arctan2", "argpartition", "argsort", "argwhere", "array", "array_split", "asarray", "ascontiguousarray", "argmax", "argmin", "asfortranarray", "astype", "atleast_1d", "atleast_2d", "atleast_3d", "average", "bfloat16", "bincount", "block", "bool", "bool_", "broadcast_arrays", "broadcast_to", "can_cast", "cbrt", "cdouble", "ceil", "clongdouble", "column_stack", "complex_", "complex64", "complex128", "concatenate", "conj", "conjugate", "copy", "copysign", "cos", "cosh", "count_nonzero", "cross", "csingle", "cummax", "cummin", "cumprod", "cumsum", "deg2rad", "degrees", "delete", "diagonal", "diag_indices", "digitize", "divide", "dot", "dsplit", "dstack", "dtype", "einsum", "e", "empty", "empty_like", "equal", "exp", "exp2", "expm1", "expand_dims", "eye", "fabs", "finfo", "fix", "flatnonzero", "flatten", "flip", "fliplr", "flipud", "float_", "float16", "float32", "float4_e2m1fn", "float64", "float8_e4m3fn", "float8_e4m3fnuz", "float8_e5m2", "float8_e5m2fnuz", "float8_e8m0fnu", "floor", "floor_divide", "fmax", "fmin", "frombuffer", "from_dlpack", "fromiter", "full", "full_like", "geomspace", "greater", "greater_equal", "half", "hsplit", "hstack", "hypot", "identity", "iinfo", "imag", "indices", "inf", "inner", "insert", "int_", "int8", "int16", "int32", "int64", "intersect1d", "intp", "isdtype", "isfinite", "isinf", "isin", "isnan", "issubdtype", "ix_", "kron", "less", "less_equal", "lexsort", "linalg", "layer_norm", "linspace", "log", "log2", "log10", "log1p", "logical_and", "logical_not", "logical_or", "logical_xor", "logspace", "matmul", "matrix_transpose", "matvec", "max", "maximum", "mean", "median", "meshgrid", "min", "minimum", "mod", "moveaxis", "multiply", "nan", "nanargmax", "nanargmin", "nancumprod", "nancumsum", "nanmax", "nanmean", "nanmedian", "nanmin", "nanpercentile", "nanprod", "nanquantile", "nanstd", "nansum", "nanvar", "ndarray", "negative", "newaxis", "nn", "nonzero", "not_equal", "ones", "ones_like", "outer", "pad", "partition", "percentile", "pi", "positive", "power", "prod", "promote_types", "ptp", "put", "put_along_axis", "quantile", "radians", "rad2deg", "random", "ravel", "ravel_multi_index", "real", "reciprocal", "remainder", "repeat", "reshape", "result_type", "rint", "roll", "rot90", "scaled_masked_softmax", "searchsorted", "setdiff1d", "setxor1d", "sign", "signbit", "sin", "sin_add_mul", "sinh", "softmax", "sort", "split", "sqrt", "square", "squeeze", "stack", "std", "subtract", "sum", "swapaxes", "take", "take_along_axis", "tan", "tanh", "angle", "tensordot", "tile", "trace", "transpose", "tri", "trim_zeros", "triu", "tril", "triu_indices", "tril_indices", "true_divide", "trunc", "ubyte", "ufunc", "uint8", "uint16", "uint32", "uint64", "uintc", "ulonglong", "union1d", "unique", "unravel_index", "ushort", "var", "vdot", "vecdot", "vecmat", "vsplit", "vstack", "where", "zeros", "zeros_like"]+sorted(_KERNEL_LAZY_EXPORTS)+sorted(_JAX_LAZY_EXPORTS)

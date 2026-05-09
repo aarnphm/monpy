@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import math
-import monpy as np
-import numpy as onp
-
 from dataclasses import dataclass
-from typing import Protocol, SupportsInt, cast
+from typing import Protocol, SupportsInt, TypeAlias, cast
+
+import monumpy as np
+
+RNG: TypeAlias = np.random.Generator
 
 
 class Array(Protocol):
@@ -57,9 +58,8 @@ class GPTParams:
   causal_mask: Array
 
 
-def _normal(rng: onp.random.Generator, shape: tuple[int, ...], *, scale: float = 0.02) -> Array:
-  values = rng.normal(0.0, scale, size=shape).astype(onp.float32)
-  return _a(np.asarray(values, dtype=np.float32, copy=False))
+def _normal(rng: RNG, shape: tuple[int, ...], *, scale: float = 0.02) -> Array:
+  return _a(np.asarray(rng.normal(0.0, scale, size=shape), dtype=np.float32))
 
 
 def _ones(shape: tuple[int, ...]) -> Array:
@@ -71,11 +71,11 @@ def _zeros(shape: tuple[int, ...]) -> Array:
 
 
 def init_params(config: GPTConfig, *, seed: int = 0) -> GPTParams:
-  rng = onp.random.default_rng(seed)
-  hidden = config.hidden_size
+  rng = np.random.default_rng(seed)
+  hidden, ctx = config.hidden_size, config.context_size
   return GPTParams(
     token_embedding=_normal(rng, (config.vocab_size, hidden)),
-    position_embedding=_normal(rng, (config.context_size, hidden)),
+    position_embedding=_normal(rng, (ctx, hidden)),
     w_q=_normal(rng, (hidden, hidden)),
     w_k=_normal(rng, (hidden, hidden)),
     w_v=_normal(rng, (hidden, hidden)),
@@ -89,11 +89,12 @@ def init_params(config: GPTConfig, *, seed: int = 0) -> GPTParams:
     final_ln_gain=_ones((hidden,)),
     final_ln_bias=_zeros((hidden,)),
     lm_head=_normal(rng, (hidden, config.vocab_size)),
-    causal_mask=_a(np.triu(np.ones((config.context_size, config.context_size), dtype=np.bool), k=1)),
+    causal_mask=_a(np.triu(np.ones((ctx, ctx), dtype=np.bool), k=1)),
   )
 
 
-def embedding_lookup(table: Array, ids: tuple[int, ...]) -> Array: return _a(np.stack([_a(table[token]) for token in ids]))
+def embedding_lookup(table: Array, ids: tuple[int, ...]) -> Array:
+  return _a(np.stack([_a(table[token]) for token in ids]))
 
 
 def softmax(x: Array) -> Array:
@@ -166,4 +167,5 @@ def main() -> None:
   print(f"next-token argmax: {next_token}")
 
 
-if __name__ == "__main__":main()
+if __name__ == "__main__":
+  main()

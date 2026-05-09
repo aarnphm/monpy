@@ -34,6 +34,9 @@ and compatibility modules.
 - `vmap` exists as a jax-shaped eager batching wrapper for flat positional axes,
   axis-0 keyword mapping, tuple/list/mapping outputs, and `out_axes` placement.
   graph-level primitive batching remains the performance path.
+- `monpy.random` exists as a first native slice: explicit immutable keys,
+  `split` / `fold_in`, numpy-shaped module helpers, and a minimal `default_rng`
+  wrapper over mojo samplers.
 
 ## design decisions
 
@@ -68,6 +71,8 @@ and compatibility modules.
 - higher-rank matmul.
 - graph-level `vmap`, autodiff transforms, named collectives, pmap/sharding, and
   full jax pytree semantics.
+- full numpy random bit-generator/distribution parity, including `RandomState`,
+  state serialization, `choice`, permutation/shuffle, and the distribution zoo.
 - scipy subsystems beyond the current planning map: sparse storage, fft-backed
   signal processing, optimize/integrate/interpolate/ndimage/io, and the full
   special/stats distribution surface.

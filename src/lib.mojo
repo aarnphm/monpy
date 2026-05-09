@@ -93,6 +93,16 @@ from create import (
 )
 from array import Array
 from metadata import domain_codes_py_ops
+from rng import (
+    random_bits_ops,
+    random_fold_in_ops,
+    random_key_data_ops,
+    random_key_ops,
+    random_normal_ops,
+    random_randint_ops,
+    random_split_ops,
+    random_uniform_ops,
+)
 
 
 # Keep this file as the CPython extension boundary. Mojo modules stay flat and
@@ -209,6 +219,14 @@ def PyInit__native() -> PythonObject:
         module.def_function[fill_ops]("fill")
         module.def_function[copyto_ops]("copyto")
         module.def_function[slice_1d_ops]("slice_1d")
+        module.def_function[random_key_ops]("_random_key")
+        module.def_function[random_key_data_ops]("_random_key_data")
+        module.def_function[random_split_ops]("_random_split")
+        module.def_function[random_fold_in_ops]("_random_fold_in")
+        module.def_function[random_bits_ops]("_random_bits")
+        module.def_function[random_uniform_ops]("_random_uniform")
+        module.def_function[random_normal_ops]("_random_normal")
+        module.def_function[random_randint_ops]("_random_randint")
         return module.finalize()
     except e:
         abort(String("failed to create Python module: ", e))
