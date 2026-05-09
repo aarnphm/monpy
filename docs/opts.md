@@ -1660,3 +1660,75 @@ Remaining frontier after this slice:
 Next target should move back to `complex/views/reversed_add_complex64` or
 `complex/casts/astype_complex64_to_complex128`. The remaining asarray gap is now
 mostly wrapper construction versus NumPy returning its input object.
+
+### 2026-05-09 cached native reverse views
+
+The next complex refresh put `asarray_complex64` and `reversed_add_complex64`
+near the top again:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.808 | 2.060 | 1.365x |
+| `complex/views/reversed_add_complex64` | 4.308 | 3.216 | 1.330x |
+| `complex/casts/astype_complex64_to_complex128` | 3.457 | 2.681 | 1.282x |
+| `complex/interop/array_copy_complex128` | 3.246 | 2.643 | 1.241x |
+| `complex/elementwise/binary_add_complex64` | 3.207 | 2.625 | 1.222x |
+
+The remaining reverse-add cost was not the fused complex64 add. A raw split
+showed presliced monpy add around 0.96 us, while the full expression paid for
+two `[::-1]` calls every iteration. `ndarray` now caches the native reverse view
+object in a private `_reverse_native` slot, but still returns a fresh Python
+wrapper for each `a[::-1]` call. That avoids the repeated Mojo view construction
+without making `a[::-1] is a[::-1]` true.
+
+Raw post-fix timing:
+
+| path | before | after |
+| --- | ---: | ---: |
+| `z[::-1]` | 0.409 us | 0.185 us |
+| `z[::-1] is z[::-1]` | false | false |
+| presliced monpy add | 0.948 us | 0.961 us |
+| `z[::-1] + w[::-1]` | 1.819 us | 1.361 us |
+| NumPy `z[::-1] + w[::-1]` | 0.971 us | 0.983 us |
+
+Focused verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_indexing.py tests/python/numpy_compat/test_complex.py::test_complex_strided_arithmetic_preserves_imaginary_part tests/python/numpy_compat/test_array_coercion.py::test_astype_supported_cast_matrix_matches_numpy -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --repeats 7 --rounds 5 --matrix-sizes 64 --format json --sort ratio --output-dir results/local-sweep-20260509-complex-reverse-native-cache --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/views/reversed_add_complex64 --types complex --candidate monpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-reversed-add-native-cache-monpy --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/views/reversed_add_complex64 --types complex --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-reversed-add-native-cache-numpy --sample --no-perf-stat
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/python -m monpy._bench.mojo_sweep --format json --sort ratio --output-dir results/local-sweep-20260509-mojo-stdlib-refresh-0244 --no-stdout --timeout 300
+```
+
+Official post-fix benchmark results:
+
+| row | before | after | delta |
+| --- | ---: | ---: | ---: |
+| `complex/views/reversed_add_complex64` | 4.308 us, 1.330x | 3.591 us, 1.172x | 1.20x faster |
+
+The profile manifests reported `complex/views/reversed_add_complex64` at 3.728
+us/call for monpy and 3.208 us/call for NumPy. Monpy stayed on backend code 2,
+the fused Mojo path, with max RSS about 49.5 MB and a 1,598 byte traced peak.
+NumPy's traced peak was 17,760 bytes. No hardware PMU counters were collected
+because `--no-perf-stat` was used; the `sample(1)` captures live under
+`results/local-profile-20260509-reversed-add-native-cache-*`.
+
+The pure-Mojo stdlib sweep stayed quiet. The largest candidate/stdlib ratios
+were `small_matmul_f32_8` at 1.077x, `small_matmul_f64_8` at 1.035x,
+`sum_f64_1k` at 1.022x, and `sum_f32_1k` at 1.016x.
+
+Remaining frontier after this slice:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.708 | 1.975 | 1.369x |
+| `complex/casts/astype_complex64_to_complex128` | 3.322 | 2.574 | 1.283x |
+| `complex/interop/array_copy_complex128` | 3.132 | 2.487 | 1.255x |
+| `complex/elementwise/binary_add_complex64` | 3.042 | 2.485 | 1.224x |
+| `complex/elementwise/binary_add_complex128` | 3.278 | 2.678 | 1.223x |
+| `complex/views/reversed_add_complex64` | 3.591 | 3.057 | 1.172x |
+
+Next target should be `complex/casts/astype_complex64_to_complex128` or another
+interop facade cut. `asarray_complex64` is still the top ratio, but most of its
+remaining gap is the unavoidable wrapper around a zero-copy external buffer.

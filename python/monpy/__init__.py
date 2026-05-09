@@ -426,17 +426,19 @@ class ndarray:
   # We will recompute properties via Mojo each call (~80 ns for dtype, ~150 ns for shape/strides at rank 2).
   # The hot binary-op paths don't read these properties at all (Mojo handles dtype promotion in `binary_dispatch_ops`)
   __array_priority__=1000
-  __slots__=("_base", "_native", "_owner")
+  __slots__=("_base", "_native", "_owner", "_reverse_native")
   def __init__(self, native:_NativeArray, base:ndarray|None=None, *, owner:object|None=None)->None:
     self._native=native
     self._base=base
     self._owner=owner
+    self._reverse_native=None
   @staticmethod
   def _wrap(native:_NativeArray, base:ndarray|None=None)->ndarray: # Hot-path constructor: skip __init__'s arg parsing for fresh op results.
     r=ndarray.__new__(ndarray)
     r._native=native
     r._base=base
     r._owner=None
+    r._reverse_native=None
     return r
   @property
   def dtype(self)->DType:return _DTC[builtins.int(self._native.dtype_code())]
@@ -506,10 +508,15 @@ class ndarray:
     if type(k) is slice:
       if k.start is None and k.stop is None and k.step==-1:
         try:
+          native=self._reverse_native
+          if native is None:
+            native=self._native.reverse_1d_method()
+            self._reverse_native=native
           r=ndarray.__new__(ndarray)
-          r._native=self._native.reverse_1d_method()
+          r._native=native
           r._base=self
           r._owner=None
+          r._reverse_native=None
           return r
         except Exception as exc:
           if "requires a rank-1 array" not in str(exc):raise
