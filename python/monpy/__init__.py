@@ -1052,11 +1052,17 @@ def geomspace(start:float, stop:float, num:int=50, endpoint:builtins.bool=True, 
 
 def meshgrid(*xi:object, indexing:str="xy", sparse:builtins.bool=False, copy:builtins.bool=True)->tuple[ndarray, ...]:
   if indexing not in("xy", "ij"):raise ValueError("indexing must be 'xy' or 'ij'")
-  if sparse:raise NotImplementedError("sparse meshgrid not implemented in monpy v1")
-  del copy  # all monpy view ops produce the same lifetime semantics; copy=True/False is a no-op for our shape model
   arrs=[asarray(x) for x in xi]
   n=len(arrs)
   if n==0:return ()
+  for i, a in enumerate(arrs):
+    if a.ndim==0:arrs[i]=a.reshape((1,))
+  if n==2 and arrs[0].ndim==1 and arrs[1].ndim==1:
+    x_native, y_native=_native.meshgrid2(arrs[0]._native, arrs[1]._native, indexing=="xy", sparse, copy)
+    base_x=None if copy else arrs[0]
+    base_y=None if copy else arrs[1]
+    return (ndarray._wrap(x_native, base=base_x), ndarray._wrap(y_native, base=base_y))
+  if sparse:raise NotImplementedError("sparse meshgrid not implemented for rank != 2 in monpy v1")
   for a in arrs:
     if a.ndim>1:raise ValueError("meshgrid input must be 1D")
   shapes=[a.shape[0] for a in arrs]
@@ -1071,7 +1077,9 @@ def meshgrid(*xi:object, indexing:str="xy", sparse:builtins.bool=False, copy:bui
     bcast_shape=[1]*n
     bcast_shape[target_axis]=shapes[i]
     bcast=a.reshape(tuple(bcast_shape))
-    results.append(broadcast_to(bcast, tuple(out_shape)))
+    out=broadcast_to(bcast, tuple(out_shape))
+    if copy:out=out.astype(out.dtype, copy=True)
+    results.append(out)
   return tuple(results)
 
 def indices(dimensions:Sequence[int], dtype:object=None, sparse:builtins.bool=False)->ndarray|tuple[ndarray, ...]:

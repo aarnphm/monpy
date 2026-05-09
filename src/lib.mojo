@@ -61,6 +61,7 @@ from create import (
     logical_ops,
     lstsq_ops,
     materialize_c_contiguous_ops,
+    meshgrid2_ops,
     matrix_power_float_try_ops,
     matmul_ops,
     moveaxis_single_ops,
@@ -183,6 +184,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[swapaxes_ops]("swapaxes")
         module.def_function[slice_ops]("slice")
         module.def_function[broadcast_to_ops]("broadcast_to")
+        module.def_function[meshgrid2_ops]("meshgrid2")
         module.def_function[expand_dims_ops]("expand_dims")
         module.def_function[flip_axis_single_ops]("flip_axis_single")
         module.def_function[flip_ops]("flip")

@@ -18,6 +18,7 @@ each note is self-contained but the corpus cross-references freely. organized by
 | [memory-alignment.md](memory-alignment.md)               | cache-line alignment, SIMD width, AoS vs SoA, false sharing, allocator proposal for monpy                         |
 | [einsum-contraction.md](einsum-contraction.md)           | contraction order NP-hardness, opt_einsum strategies, BLAS-friendly reductions, cost model                        |
 | [matrix-power.md](matrix-power.md)                       | NumPy/JAX matrix_power contract, binary-decomposition proof, small-matrix dispatch boundary                       |
+| [meshgrid-stride-semantics.md](meshgrid-stride-semantics.md) | NumPy `meshgrid` view contract, sparse/dense stride formulas, `copy=True` materialisation policy               |
 | [simd-vectorisation.md](simd-vectorisation.md)           | width selection, roofline / arithmetic-intensity argument, strided loads, f16 fallbacks, reductions               |
 | [recent-field-notes.md](recent-field-notes.md)           | May 8-9 implementation field notes: wrappers, interop, views, threading policy, linalg API frontier               |
 

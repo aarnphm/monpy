@@ -3714,6 +3714,94 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py tests/python/numpy_compat/test_linalg.py -q
 ```
 
+### 2026-05-09 native meshgrid stride path
+
+The next sweep target was `array/creation/meshgrid_xy_f32`. The row looked like
+plain creation overhead, but the source contract was wrong: `copy=True` was
+being deleted in Python, so monpy returned broadcast views while NumPy returned
+dense independent arrays. That is the bad kind of benchmark loss: slower while
+doing less work.
+
+Reference contract:
+
+- NumPy documents `copy=False` as a view-saving mode, with possible
+  non-contiguous zero-stride broadcast outputs.
+- NumPy's implementation reshapes each input into an open grid, swaps the first
+  two axes for `xy`, broadcasts unless `sparse=True`, then copies if
+  `copy=True`.
+- I wrote the stride proof under
+  `docs/research/meshgrid-stride-semantics.md`; the two-vector dense formulas
+  are `X: (0, sx), Y: (sy, 0)` for `xy`, and `X: (sx, 0), Y: (0, sy)` for
+  `ij`.
+
+Patch:
+
+- Added `_native.meshgrid2`, a two-vector shape op that builds the correct
+  dense or sparse views in one native call.
+- `copy=True` now materializes those views with `copy_c_contiguous`, so dtype,
+  negative strides, complex storage, and aliasing reuse existing copy machinery.
+- `copy=False` returns views and keeps the source arrays as Python wrapper
+  bases, which matters for external NumPy-buffer lifetime.
+- `meshgrid(..., sparse=True)` is now supported for the two-vector fast path.
+
+Pre-patch evidence:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array,attention --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-20260509-2235-python-frontier --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/creation/meshgrid_xy_f32 --types array,attention --candidate monpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-meshgrid-monpy-before --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/creation/meshgrid_xy_f32 --types array,attention --candidate numpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-meshgrid-numpy-before --sample --no-perf-stat
+```
+
+Pre-patch profile read:
+
+- `monpy-profile`: monpy `15.202 us/call`, NumPy `9.423 us/call`.
+- `cProfile`: 50k calls spent `1.328 s`, with 100k native `reshape`, 100k
+  native `broadcast_to`, and 200k `_norm_shape` calls.
+- Allocation pass: monpy `392.9 us/call` under tracemalloc, NumPy
+  `593.6 us/call`; allocation tracing says the wall-clock loss was not simply
+  "more Python allocations."
+
+Post-patch rerun:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/create/ops/shape.mojo src/create/ops/__init__.mojo src/create/__init__.mojo src/lib.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_creation_helpers.py::test_meshgrid_xy_indexing_swaps_first_two_axes tests/python/numpy_compat/test_creation_helpers.py::test_meshgrid_ij_indexing_keeps_natural_order tests/python/numpy_compat/test_creation_helpers.py::test_meshgrid_default_copy_materializes_dense_outputs tests/python/numpy_compat/test_creation_helpers.py::test_meshgrid_copy_false_keeps_broadcast_views tests/python/numpy_compat/test_creation_helpers.py::test_meshgrid_sparse_two_vector_parity tests/python/numpy_compat/test_creation_helpers.py::test_meshgrid_copy_false_preserves_negative_stride_alias -q
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/creation/meshgrid_xy_f32 --types array,attention --candidate monpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-meshgrid-native-monpy --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-array-20260509-native-meshgrid2 --no-progress --no-stdout
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo --include-numojo --include-threading --thread-caps auto,1,2,4,8 --format json --sort slowest --output-dir results/local-mojo-20260509-native-meshgrid2 --no-stdout --timeout 240
+```
+
+Key movement:
+
+| row                                | before us | after us | before ratio | after ratio | speedup |
+| ---------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/creation/meshgrid_xy_f32`   |    14.209 |    6.038 |       1.640x |      0.695x |  2.35:1 |
+
+Profile movement:
+
+| probe                                 | before | after | movement |
+| ------------------------------------- | -----: | ----: | -------: |
+| `monpy-profile` us/call               | 15.202 | 6.680 |  2.28:1 |
+| cProfile calls for 50k meshgrid calls |   3.5M |  1.0M |  3.50:1 |
+| cProfile wall for 50k calls           | 1.328s | 0.321s |  4.14:1 |
+
+Read:
+
+- The row now beats NumPy on this machine, about `1.44:1` faster in the
+  benchmark rerun.
+- The win came from deleting Python orchestration, not widening a SIMD loop.
+  The useful unit was "one native shape op" instead of four native view ops plus
+  two shape-normalisation passes.
+- The corrected `copy=True` path does more semantic work than before, yet is
+  faster. That is the clean signal.
+- The new slowest array rows are `asarray_squeeze_axis0_f32` at `1.909x`,
+  `transpose_add_f32` at `1.788x`, and `trace_16_f64` at `1.669x`.
+- The pure-Mojo/std sweep is effectively orthogonal to this patch. The latest
+  run has 114 rows; elementwise mean ratio `0.908x`, reductions `0.985x`,
+  matmul `1.008x`. Threading still has the old policy shape: `threads1` mean
+  `1.059x`, `threads4` mean `0.620x`, and `auto` mean `0.764x`.
+
 ### 2026-05-09 empty-like shape override allocator
 
 Fresh frontier before patch:

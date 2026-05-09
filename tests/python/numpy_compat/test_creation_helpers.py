@@ -95,17 +95,109 @@ def test_meshgrid_xy_indexing_swaps_first_two_axes() -> None:
   x = np.arange(3)
   y = np.arange(4)
   xx, yy = np.meshgrid(x, y)
+  expected_x, expected_y = numpy.meshgrid(numpy.arange(3), numpy.arange(4))
   assert xx.shape == (4, 3)
   assert yy.shape == (4, 3)
-  numpy.testing.assert_array_equal(numpy.asarray(xx), numpy.meshgrid(numpy.arange(3), numpy.arange(4))[0])
+  numpy.testing.assert_array_equal(numpy.asarray(xx), expected_x)
+  numpy.testing.assert_array_equal(numpy.asarray(yy), expected_y)
 
 
 def test_meshgrid_ij_indexing_keeps_natural_order() -> None:
   x = np.arange(3)
   y = np.arange(4)
   xx, yy = np.meshgrid(x, y, indexing="ij")
+  expected_x, expected_y = numpy.meshgrid(numpy.arange(3), numpy.arange(4), indexing="ij")
   assert xx.shape == (3, 4)
   assert yy.shape == (3, 4)
+  numpy.testing.assert_array_equal(numpy.asarray(xx), expected_x)
+  numpy.testing.assert_array_equal(numpy.asarray(yy), expected_y)
+
+
+@pytest.mark.parametrize("indexing", ["xy", "ij"])
+def test_meshgrid_default_copy_materializes_dense_outputs(indexing: str) -> None:
+  x = np.arange(3, dtype=np.float32)
+  y = np.arange(4, dtype=np.float32)
+  expected_x, expected_y = numpy.meshgrid(
+    numpy.arange(3, dtype=numpy.float32),
+    numpy.arange(4, dtype=numpy.float32),
+    indexing=indexing,
+  )
+
+  xx, yy = np.meshgrid(x, y, indexing=indexing)
+
+  assert xx.strides == expected_x.strides
+  assert yy.strides == expected_y.strides
+  numpy.testing.assert_array_equal(numpy.asarray(xx), expected_x)
+  numpy.testing.assert_array_equal(numpy.asarray(yy), expected_y)
+  x[0] = 99
+  y[0] = 77
+  numpy.testing.assert_array_equal(numpy.asarray(xx), expected_x)
+  numpy.testing.assert_array_equal(numpy.asarray(yy), expected_y)
+
+
+@pytest.mark.parametrize("indexing", ["xy", "ij"])
+def test_meshgrid_copy_false_keeps_broadcast_views(indexing: str) -> None:
+  x = np.arange(3, dtype=np.float32)
+  y = np.arange(4, dtype=np.float32)
+  expected_x, expected_y = numpy.meshgrid(
+    numpy.arange(3, dtype=numpy.float32),
+    numpy.arange(4, dtype=numpy.float32),
+    indexing=indexing,
+    copy=False,
+  )
+
+  xx, yy = np.meshgrid(x, y, indexing=indexing, copy=False)
+
+  assert xx.strides == expected_x.strides
+  assert yy.strides == expected_y.strides
+  numpy.testing.assert_array_equal(numpy.asarray(xx), expected_x)
+  numpy.testing.assert_array_equal(numpy.asarray(yy), expected_y)
+  x[1] = 42
+  y[2] = 55
+  assert 42 in numpy.asarray(xx)
+  assert 55 in numpy.asarray(yy)
+
+
+@pytest.mark.parametrize("indexing", ["xy", "ij"])
+@pytest.mark.parametrize("copy_flag", [False, True])
+def test_meshgrid_sparse_two_vector_parity(indexing: str, copy_flag: bool) -> None:
+  x = np.arange(3, dtype=np.float32)
+  y = np.arange(4, dtype=np.float32)
+  expected_x, expected_y = numpy.meshgrid(
+    numpy.arange(3, dtype=numpy.float32),
+    numpy.arange(4, dtype=numpy.float32),
+    indexing=indexing,
+    sparse=True,
+    copy=copy_flag,
+  )
+
+  xx, yy = np.meshgrid(x, y, indexing=indexing, sparse=True, copy=copy_flag)
+
+  assert xx.shape == expected_x.shape
+  assert yy.shape == expected_y.shape
+  assert xx.strides == expected_x.strides
+  assert yy.strides == expected_y.strides
+  numpy.testing.assert_array_equal(numpy.asarray(xx), expected_x)
+  numpy.testing.assert_array_equal(numpy.asarray(yy), expected_y)
+
+
+def test_meshgrid_copy_false_preserves_negative_stride_alias() -> None:
+  x = np.arange(4, dtype=np.float32)[::-1]
+  y = np.arange(3, dtype=np.float32)
+  expected_x, expected_y = numpy.meshgrid(
+    numpy.arange(4, dtype=numpy.float32)[::-1],
+    numpy.arange(3, dtype=numpy.float32),
+    copy=False,
+  )
+
+  xx, yy = np.meshgrid(x, y, copy=False)
+
+  assert xx.strides == expected_x.strides
+  assert yy.strides == expected_y.strides
+  numpy.testing.assert_array_equal(numpy.asarray(xx), expected_x)
+  numpy.testing.assert_array_equal(numpy.asarray(yy), expected_y)
+  x[0] = 123
+  assert numpy.asarray(xx)[0, 0] == 123
 
 
 def test_indices_matches_numpy() -> None:

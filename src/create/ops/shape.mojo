@@ -15,7 +15,7 @@ copy dispatch.
 
 from std.collections import List
 from std.memory import memcpy as _memcpy
-from std.python import PythonObject
+from std.python import Python, PythonObject
 
 from array import (
     Array,
@@ -92,6 +92,103 @@ def flatten_ops(array_obj: PythonObject) raises -> PythonObject:
     strides.append(1)
     var view = make_view_array(copied, shape^, strides^, copied.size_value, copied.offset_elems)
     return PythonObject(alloc=view^)
+
+
+def _meshgrid2_shape(x_len: Int, y_len: Int, indexing_xy: Bool, sparse: Bool, first: Bool) -> List[Int]:
+    var shape = List[Int]()
+    if sparse:
+        if indexing_xy:
+            if first:
+                shape.append(1)
+                shape.append(x_len)
+            else:
+                shape.append(y_len)
+                shape.append(1)
+        else:
+            if first:
+                shape.append(x_len)
+                shape.append(1)
+            else:
+                shape.append(1)
+                shape.append(y_len)
+        return shape^
+    if indexing_xy:
+        shape.append(y_len)
+        shape.append(x_len)
+    else:
+        shape.append(x_len)
+        shape.append(y_len)
+    return shape^
+
+
+def _meshgrid2_strides(source_len: Int, source_stride: Int, indexing_xy: Bool, sparse: Bool, first: Bool) -> List[Int]:
+    var strides = List[Int]()
+    if sparse:
+        if indexing_xy:
+            if first:
+                strides.append(source_len * source_stride)
+                strides.append(source_stride)
+            else:
+                strides.append(source_stride)
+                strides.append(source_stride)
+        else:
+            if first:
+                strides.append(source_stride)
+                strides.append(source_stride)
+            else:
+                strides.append(source_len * source_stride)
+                strides.append(source_stride)
+        return strides^
+    if indexing_xy:
+        if first:
+            strides.append(0)
+            strides.append(source_stride)
+        else:
+            strides.append(source_stride)
+            strides.append(0)
+    else:
+        if first:
+            strides.append(source_stride)
+            strides.append(0)
+        else:
+            strides.append(0)
+            strides.append(source_stride)
+    return strides^
+
+
+def _meshgrid2_view(
+    source: Array, x_len: Int, y_len: Int, indexing_xy: Bool, sparse: Bool, first: Bool
+) raises -> Array:
+    var source_len = x_len if first else y_len
+    var shape = _meshgrid2_shape(x_len, y_len, indexing_xy, sparse, first)
+    var strides = _meshgrid2_strides(source_len, source.strides[0], indexing_xy, sparse, first)
+    var size = shape_size(shape)
+    return make_view_array(source, shape^, strides^, size, source.offset_elems)
+
+
+def meshgrid2_ops(
+    x_obj: PythonObject,
+    y_obj: PythonObject,
+    indexing_xy_obj: PythonObject,
+    sparse_obj: PythonObject,
+    copy_obj: PythonObject,
+) raises -> PythonObject:
+    var x = x_obj.downcast_value_ptr[Array]()
+    var y = y_obj.downcast_value_ptr[Array]()
+    if len(x[].shape) != 1 or len(y[].shape) != 1:
+        raise Error("meshgrid: native fast path expects rank-1 inputs")
+    var indexing_xy = Bool(py=indexing_xy_obj)
+    var sparse = Bool(py=sparse_obj)
+    var copy = Bool(py=copy_obj)
+    var x_len = x[].shape[0]
+    var y_len = y[].shape[0]
+    var x_view = _meshgrid2_view(x[], x_len, y_len, indexing_xy, sparse, True)
+    var y_view = _meshgrid2_view(y[], x_len, y_len, indexing_xy, sparse, False)
+    if copy:
+        var x_copy = copy_c_contiguous(x_view)
+        var y_copy = copy_c_contiguous(y_view)
+        return Python.list(PythonObject(alloc=x_copy^), PythonObject(alloc=y_copy^))
+    return Python.list(PythonObject(alloc=x_view^), PythonObject(alloc=y_view^))
 
 
 def squeeze_all_ops(array_obj: PythonObject) raises -> PythonObject:

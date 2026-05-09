@@ -88,6 +88,7 @@ from .shape import (
     flip_ops,
     matrix_transpose_ops,
     materialize_c_contiguous_ops,
+    meshgrid2_ops,
     moveaxis_single_ops,
     normalize_axis_ops,
     pad_constant_ops,
