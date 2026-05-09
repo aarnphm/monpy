@@ -267,7 +267,53 @@ def asarray_complex64_view_from_buffer_ops(obj: PythonObject) raises -> PythonOb
 
 
 def asarray_complex128_copy_from_buffer_ops(obj: PythonObject) raises -> PythonObject:
-    return _asarray_from_buffer_impl(obj, ArrayDType.COMPLEX128.value, 1)
+    var view = Py_buffer()
+    var view_ptr = UnsafePointer(to=view).as_any_origin()
+    var buffer_functions = MONPY_BUFFER_FUNCTIONS.get_or_create_ptr()
+    var get_buffer_fn = buffer_functions[].get_buffer
+    var release_fn = buffer_functions[].release
+    var rc = get_buffer_fn(obj._obj_ptr, view_ptr, PyBUF_RECORDS_RO)
+    if Int(rc) != 0:
+        raise Error("PyObject_GetBuffer failed")
+    var byte_len = Int(view.len)
+    var item_bytes = Int(view.itemsize)
+    var ndim = Int(view.ndim)
+    if not view.buf:
+        release_fn(view_ptr)
+        raise Error("buffer view has null data pointer")
+    var data_addr = Int(view.buf.value())
+    var format_char_value = 0
+    if view.format:
+        format_char_value = Int(view.format.value()[0])
+    if item_bytes != 16 or (format_char_value != 0x44 and format_char_value != 0x5A):
+        release_fn(view_ptr)
+        raise Error("buffer format unsupported by monpy")
+    var shape = List[Int]()
+    var elem_strides = List[Int]()
+    if ndim != 0:
+        if not view.shape or not view.strides:
+            release_fn(view_ptr)
+            raise Error("buffer view missing shape or strides")
+        var shape_ptr = view.shape.value()
+        var strides_ptr = view.strides.value()
+        for i in range(ndim):
+            shape.append(Int(shape_ptr[i]))
+            var byte_stride = Int(strides_ptr[i])
+            if byte_stride % item_bytes != 0:
+                release_fn(view_ptr)
+                raise Error("buffer strides must align to itemsize")
+            elem_strides.append(byte_stride // item_bytes)
+    var data = UnsafePointer[UInt8, MutExternalOrigin](unsafe_from_address=data_addr)
+    if _buffer_is_c_contiguous(shape, elem_strides):
+        var result = make_empty_array(ArrayDType.COMPLEX128.value, shape^)
+        var byte_count = dtype_storage_byte_len(ArrayDType.COMPLEX128.value, result.size_value)
+        memcpy(dest=result.data, src=data, count=byte_count)
+        release_fn(view_ptr)
+        return PythonObject(alloc=result^)
+    var external = make_external_array(ArrayDType.COMPLEX128.value, shape^, elem_strides^, 0, data, byte_len)
+    var result = copy_c_contiguous(external)
+    release_fn(view_ptr)
+    return PythonObject(alloc=result^)
 
 
 def frombuffer_ops(

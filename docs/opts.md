@@ -1974,3 +1974,68 @@ Remaining frontier after this slice:
 Next target should move back to complex128 add/copy. The remaining
 `asarray_complex64` gap is now mostly the cost of allocating a monpy wrapper
 around a borrowed Python buffer; there is less generic bridge code left to cut.
+
+### 2026-05-09 specialized complex128 copy buffer path
+
+The next refresh kept the public interop and complex128 rows at the top:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.657 | 1.961 | 1.355x |
+| `complex/interop/array_copy_complex128` | 3.046 | 2.441 | 1.253x |
+| `complex/elementwise/binary_add_complex128` | 3.221 | 2.619 | 1.228x |
+| `complex/elementwise/binary_add_complex64` | 2.968 | 2.423 | 1.222x |
+| `complex/elementwise/binary_mul_complex64` | 3.056 | 2.552 | 1.200x |
+
+The pure-Mojo stdlib refresh was quieter than the public facade rows:
+`small_matmul_f32_8` led at 1.073x, `sin_f64_1k` was 1.064x, and the previous
+`scalar_mul_f32_64k` candidate had settled to 1.014x. That made the
+complex128 copy bridge the better target.
+
+`asarray_complex128_copy_from_buffer_ops` now has its own exact-copy path for
+complex128 buffers. It skips the generic requested-dtype/copy-policy machinery,
+validates complex128 format directly (`D` or NumPy's `Z`, 16 bytes), uses
+`memcpy` for c-contiguous sources, and falls back to `copy_c_contiguous` for
+strided sources. While testing the strided fallback, a real old bug showed up:
+`copy_c_contiguous`'s scalar fallback was reading complex arrays through the
+f64 accessor, which preserved only the real lane and zeroed the imaginary lane.
+The shared copy fallback now copies complex64 and complex128 with their
+dedicated interleaved real/imag accessors.
+
+Focused verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/buffer.mojo src/array/cast.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_copy_true_detaches_storage tests/python/numpy_compat/test_complex.py::test_complex_array_from_strided_numpy_copy_true_detaches_storage tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_round_trip tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_copy_false_shares_storage tests/python/test_buffer_core.py::test_asarray_from_writable_buffer_shares_storage tests/python/test_buffer_core.py::test_asarray_buffer_dtype_mismatch_copy_policy -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --repeats 7 --rounds 5 --matrix-sizes 64 --format json --sort ratio --output-dir results/local-sweep-20260509-complex-c128-copy-specialized-final-0404 --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/interop/array_copy_complex128 --types complex --candidate monpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-array-copy-complex128-specialized-final-monpy --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/interop/array_copy_complex128 --types complex --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-array-copy-complex128-specialized-final-numpy --sample --no-perf-stat
+```
+
+Post-fix public complex result:
+
+| row | before | after | delta |
+| --- | -----: | ----: | ----: |
+| `complex/interop/array_copy_complex128` | 3.046 us vs 2.441 us, 1.253x | 2.961 us vs 2.429 us, 1.220x | 1.03x faster monpy side |
+
+The final profiles reported `array_copy_complex128` at 3.140 us/call for monpy
+and 2.627 us/call for NumPy. Monpy used backend code 0, as expected for a copy
+bridge. Max RSS was about 49.3 MB for both candidates. Traced allocation peaks
+were 1,598 bytes for monpy and 33,992 bytes for NumPy. No hardware PMU counters
+were collected because the profile command used `--no-perf-stat`; the
+`sample(1)` captures live under
+`results/local-profile-20260509-array-copy-complex128-specialized-final-*`.
+
+Remaining frontier after this slice:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.660 | 1.939 | 1.359x |
+| `complex/elementwise/binary_add_complex128` | 3.221 | 2.595 | 1.241x |
+| `complex/interop/array_copy_complex128` | 2.961 | 2.429 | 1.220x |
+| `complex/elementwise/binary_add_complex64` | 2.948 | 2.424 | 1.216x |
+| `complex/elementwise/binary_mul_complex64` | 3.057 | 2.523 | 1.204x |
+
+Next target should be the complex128 ADD fused path. The copy bridge has less
+generic machinery left, and the live add row now sits above it.

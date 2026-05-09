@@ -486,6 +486,10 @@ def copy_c_contiguous(src: Array) raises -> Array:
                 set_logical_from_f64(result, i, 0.0)
         elif src.dtype_code == ArrayDType.INT64.value:
             set_logical_from_i64(result, i, get_physical[DType.int64](src, physical))
+        elif src.dtype_code == ArrayDType.COMPLEX64.value:
+            set_physical_c64(result, i, get_physical_c64_real(src, physical), get_physical_c64_imag(src, physical))
+        elif src.dtype_code == ArrayDType.COMPLEX128.value:
+            set_physical_c128(result, i, get_physical_c128_real(src, physical), get_physical_c128_imag(src, physical))
         else:
             set_logical_from_f64(result, i, get_physical_as_f64(src, physical))
     return result^
