@@ -24,17 +24,21 @@ from std.benchmark import keep, run
 from std.math import sin as std_sin
 from std.memory import Span
 from std.memory.unsafe_pointer import alloc
-from std.sys import simd_width_of, size_of
+from std.sys import num_performance_cores, simd_width_of, size_of
 
 from domain import BinaryOp, UnaryOp
 from elementwise.kernels.matmul import matmul_small_typed
 from elementwise.kernels.reduce import (
+    reduce_max_par_typed,
     reduce_max_typed,
+    reduce_min_par_typed,
     reduce_min_typed,
     reduce_prod_typed,
+    reduce_sum_par_typed,
     reduce_sum_typed,
 )
 from elementwise.kernels.typed import (
+    binary_same_shape_contig_typed,
     binary_same_shape_contig_typed_static,
     binary_scalar_contig_typed_static,
     unary_contig_typed,
@@ -189,7 +193,13 @@ def size_name[n: Int]() -> String:
             comptime if n == 1048576:
                 return "1m"
             else:
-                return String(n)
+                comptime if n == 16777216:
+                    return "16m"
+                else:
+                    comptime if n == 134217728:
+                        return "128m"
+                    else:
+                        return String(n)
 
 
 def emit_binary_add[dtype: DType, n: Int]() raises:
@@ -423,6 +433,129 @@ def emit_prod[dtype: DType, n: Int]() raises where dtype.is_floating_point():
     src.free()
 
 
+def emit_sum_par[dtype: DType, n: Int]() raises where dtype.is_floating_point():
+    # Parallel sum vs serial 8-way SIMD baseline. Ratio < 1 means parallel
+    # wins; expected to drop sharply at sizes that blow past L2 (DRAM-bound
+    # at single thread, multi-channel DRAM at parallel).
+    var src = alloc[Scalar[dtype]](n)
+    fill_buffer[dtype](src, n)
+    var nw = num_performance_cores()
+
+    @parameter
+    def monpy_call() raises:
+        var result = reduce_sum_par_typed[dtype](src, n, nw)
+        keep(result)
+
+    @parameter
+    def baseline_call() raises:
+        var result = reduce_sum_typed[dtype](src, n)
+        keep(result)
+
+    emit_result(
+        "reductions",
+        String("sum_par_{}_{}").format(dtype_name[dtype](), size_name[n]()),
+        "monpy.reduce_sum_par_typed",
+        "monpy.reduce_sum_typed",
+        bench_configured[monpy_call](),
+        bench_configured[baseline_call](),
+        n * size_of[Scalar[dtype]](),
+        n,
+    )
+    src.free()
+
+
+def emit_min_par[dtype: DType, n: Int]() raises where dtype.is_floating_point():
+    var src = alloc[Scalar[dtype]](n)
+    fill_buffer[dtype](src, n)
+    var nw = num_performance_cores()
+
+    @parameter
+    def monpy_call() raises:
+        var result = reduce_min_par_typed[dtype](src, n, nw)
+        keep(result)
+
+    @parameter
+    def baseline_call() raises:
+        var result = reduce_min_typed[dtype](src, n)
+        keep(result)
+
+    emit_result(
+        "reductions",
+        String("min_par_{}_{}").format(dtype_name[dtype](), size_name[n]()),
+        "monpy.reduce_min_par_typed",
+        "monpy.reduce_min_typed",
+        bench_configured[monpy_call](),
+        bench_configured[baseline_call](),
+        n * size_of[Scalar[dtype]](),
+        n,
+    )
+    src.free()
+
+
+def emit_max_par[dtype: DType, n: Int]() raises where dtype.is_floating_point():
+    var src = alloc[Scalar[dtype]](n)
+    fill_buffer[dtype](src, n)
+    var nw = num_performance_cores()
+
+    @parameter
+    def monpy_call() raises:
+        var result = reduce_max_par_typed[dtype](src, n, nw)
+        keep(result)
+
+    @parameter
+    def baseline_call() raises:
+        var result = reduce_max_typed[dtype](src, n)
+        keep(result)
+
+    emit_result(
+        "reductions",
+        String("max_par_{}_{}").format(dtype_name[dtype](), size_name[n]()),
+        "monpy.reduce_max_par_typed",
+        "monpy.reduce_max_typed",
+        bench_configured[monpy_call](),
+        bench_configured[baseline_call](),
+        n * size_of[Scalar[dtype]](),
+        n,
+    )
+    src.free()
+
+
+def emit_binary_add_par[dtype: DType, n: Int]() raises:
+    # Same-shape binary `add` through the parallel-aware entry point.
+    # At n*size_of[dtype]() >= ELEMENTWISE_LIGHT_GRAIN (2MB) the kernel
+    # fans out via sync_parallelize; below it stays serial. Baseline is
+    # the static-op kernel (no parallel gate) so we can read the spawn cost.
+    var lhs = alloc[Scalar[dtype]](n)
+    var rhs = alloc[Scalar[dtype]](n)
+    var out = alloc[Scalar[dtype]](n)
+    fill_buffer[dtype](lhs, n)
+    fill_buffer[dtype](rhs, n)
+
+    @parameter
+    def monpy_call() raises:
+        binary_same_shape_contig_typed[dtype](lhs, rhs, out, n, BinaryOp.ADD.value)
+        keep(out[0])
+
+    @parameter
+    def baseline_call() raises:
+        binary_same_shape_contig_typed_static[dtype, BinaryOp.ADD.value](lhs, rhs, out, n)
+        keep(out[0])
+
+    emit_result(
+        "elementwise",
+        String("add_par_{}_{}").format(dtype_name[dtype](), size_name[n]()),
+        "monpy.binary_same_shape_contig_typed",
+        "monpy.binary_same_shape_contig_typed_static",
+        bench_configured[monpy_call](),
+        bench_configured[baseline_call](),
+        n * size_of[Scalar[dtype]]() * 3,
+        n,
+    )
+    lhs.free()
+    rhs.free()
+    out.free()
+
+
 def emit_matmul_small[dtype: DType, n: Int]() raises where dtype.is_floating_point():
     var lhs = alloc[Scalar[dtype]](n * n)
     var rhs = alloc[Scalar[dtype]](n * n)
@@ -463,6 +596,7 @@ def emit_family[dtype: DType]() raises where dtype.is_floating_point():
     emit_scalar_mul[dtype, 65536]()
     emit_unary_sin[dtype, 1024]()
     emit_unary_sin[dtype, 65536]()
+    emit_unary_sin[dtype, 1048576]()
     emit_sum[dtype, 1024]()
     emit_sum[dtype, 65536]()
     emit_sum[dtype, 1048576]()
@@ -473,6 +607,16 @@ def emit_family[dtype: DType]() raises where dtype.is_floating_point():
     emit_max[dtype, 65536]()
     emit_prod[dtype, 1024]()
     emit_prod[dtype, 65536]()
+    # Parallel-vs-serial head-to-head at sizes that exceed the
+    # REDUCE_GRAIN (1MB) and ELEMENTWISE_LIGHT_GRAIN (2MB) gates.
+    # These are the rows that surface multi-thread regressions.
+    emit_sum_par[dtype, 1048576]()
+    emit_sum_par[dtype, 16777216]()
+    emit_min_par[dtype, 1048576]()
+    emit_min_par[dtype, 16777216]()
+    emit_max_par[dtype, 1048576]()
+    emit_max_par[dtype, 16777216]()
+    emit_binary_add_par[dtype, 16777216]()
     emit_matmul_small[dtype, 8]()
     emit_matmul_small[dtype, 16]()
 
