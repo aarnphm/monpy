@@ -92,6 +92,16 @@ def make_view_array(
     if len(shape) != len(strides):
         raise Error("shape and stride rank mismatch")
     validate_shape(shape)
+    return make_view_array_unchecked(source, shape^, strides^, size_value, offset_elems)
+
+
+def make_view_array_unchecked(
+    source: Array,
+    var shape: List[Int],
+    var strides: List[Int],
+    size_value: Int,
+    offset_elems: Int,
+) -> Array:
     var storage = retain_storage(source.storage)
     return Array(
         source.dtype_code,

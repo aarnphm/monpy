@@ -85,6 +85,7 @@ from .factory import (
     make_empty_array,
     make_external_array,
     make_view_array,
+    make_view_array_unchecked,
 )
 from .result_dtypes import (
     broadcast_shape,

@@ -3001,3 +3001,78 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/interop/asarray_squeeze_axis0_f32 --types array,strides,complex,attention --candidate monpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-full-asarray-squeeze-monpy --sample --no-perf-stat
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/decomp/eigh_2_f64 --types array,strides,complex,attention --candidate monpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-full-eigh2-f64-monpy --sample --no-perf-stat
 ```
+
+### 2026-05-09 unchecked source-derived views
+
+First iteration from the full frontier: view construction. `make_view_array`
+validates shape length and non-negative dimensions, which is correct for
+external inputs, but redundant for shape/stride lists derived directly from an
+already-valid `Array`. I split out `make_view_array_unchecked` and used it in
+the source-derived squeeze paths plus the full reverse transpose path.
+
+This is intentionally small. It does not touch Python facade files, which were
+already staged from another edit stream, and it does not change view ownership:
+the unchecked helper still retains the source storage and preserves dtype,
+backend code, data pointer, byte length, and offset.
+
+Local read:
+
+| row | before us | after us | speedup |
+| --- | --------: | -------: | ------: |
+| `array/views/transpose_add_f32` | 4.826 | 4.518 | 1.07:1 |
+| `array/views/squeeze_axis0_f32` | 3.181 | 3.124 | 1.02:1 |
+| `array/interop/asarray_squeeze_axis0_f32` | 4.258 | 4.227 | 1.01:1 |
+
+The direct native microtiming moved harder:
+
+| call | before ns | after ns | speedup |
+| ---- | --------: | -------: | ------: |
+| raw `_native.squeeze_axis(..., 0)` | 713 | 578 | 1.23:1 |
+| `mnp.squeeze(existing_monpy, axis=0)` | 918 | 926 | 0.99:1 |
+| `mnp.squeeze(mnp.asarray(numpy), axis=0)` | 2,031 | 1,957 | 1.04:1 |
+
+Read:
+
+- Native leaf cost moved, so the validation split did what it was supposed to
+  do.
+- Public `squeeze` barely moved because the Python wrapper/native-call boundary
+  is now the visible floor. We should not keep grinding this path in Mojo unless
+  a profile shows another native allocation hotspot.
+- `transpose_add_f32` improved more than squeeze because the reverse transpose
+  view is in the hot fused-add setup. This makes the helper useful beyond the
+  one benchmark row.
+- `empty_like_shape_override_f32` is still worse after noise: 4.511 us vs 2.295
+  us, 1.915x. The next iteration should either profile that row directly or
+  avoid Python facade churn and go after tiny `eigh`.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/array/factory.mojo src/array/__init__.mojo src/create/ops/shape.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_creation_helpers.py::test_squeeze_matches_numpy tests/python/numpy_compat/test_creation_helpers.py::test_squeeze_rejects_non_singleton_axis -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python - <<'PY'
+import time
+import numpy as np
+import monpy as mnp
+
+src_np = np.zeros((1, 4, 1, 5), dtype=np.float32)
+src_mp = mnp.asarray(src_np)
+cases = [
+  ("existing squeeze", lambda: mnp.squeeze(src_mp, axis=0)),
+  ("asarray+squeeze", lambda: mnp.squeeze(mnp.asarray(src_np), axis=0)),
+  ("native squeeze", lambda: mnp._native.squeeze_axis(src_mp._native, 0)),
+]
+for name, fn in cases:
+  for _ in range(1000):
+    fn()
+  best = 10**9
+  for _ in range(7):
+    t0 = time.perf_counter_ns()
+    for _ in range(20000):
+      fn()
+    best = min(best, (time.perf_counter_ns() - t0) / 20000)
+  print(f"{name}: {best:.1f} ns")
+PY
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-sweep-20260509-view-unchecked --no-progress --no-stdout
+```

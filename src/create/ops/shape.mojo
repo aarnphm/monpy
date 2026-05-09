@@ -34,6 +34,7 @@ from array import (
     item_size,
     make_empty_array,
     make_view_array,
+    make_view_array_unchecked,
     result_dtype_for_reduction,
     set_logical_from_f64,
     set_logical_from_i64,
@@ -101,7 +102,7 @@ def squeeze_all_ops(array_obj: PythonObject) raises -> PythonObject:
         if src[].shape[axis] != 1:
             shape.append(src[].shape[axis])
             strides.append(src[].strides[axis])
-    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    var result = make_view_array_unchecked(src[], shape^, strides^, src[].size_value, src[].offset_elems)
     return PythonObject(alloc=result^)
 
 
@@ -121,7 +122,7 @@ def squeeze_axis_ops(array_obj: PythonObject, axis_obj: PythonObject) raises -> 
         if src_axis != axis:
             shape.append(src[].shape[src_axis])
             strides.append(src[].strides[src_axis])
-    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    var result = make_view_array_unchecked(src[], shape^, strides^, src[].size_value, src[].offset_elems)
     return PythonObject(alloc=result^)
 
 
@@ -149,7 +150,7 @@ def squeeze_axes_ops(array_obj: PythonObject, axes_obj: PythonObject) raises -> 
         if not drop[axis]:
             shape.append(src[].shape[axis])
             strides.append(src[].strides[axis])
-    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    var result = make_view_array_unchecked(src[], shape^, strides^, src[].size_value, src[].offset_elems)
     return PythonObject(alloc=result^)
 
 
@@ -294,7 +295,8 @@ def transpose_full_reverse_ops(
     # Fast path for `.T` on rank>=2: reverse every axis without crossing
     # Python boundaries for an axes tuple. Avoids `int_list_from_py` and
     # the per-axis bounds check; `make_view_array` validates shape/strides
-    # match.
+    # match; the lists are source-derived, so the unchecked view constructor
+    # avoids paying shape validation again.
     var src = array_obj.downcast_value_ptr[Array]()
     var ndim = len(src[].shape)
     var shape = List[Int]()
@@ -302,7 +304,7 @@ def transpose_full_reverse_ops(
     for i in range(ndim - 1, -1, -1):
         shape.append(src[].shape[i])
         strides.append(src[].strides[i])
-    var result = make_view_array(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    var result = make_view_array_unchecked(src[], shape^, strides^, src[].size_value, src[].offset_elems)
     return PythonObject(alloc=result^)
 
 
