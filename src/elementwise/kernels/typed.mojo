@@ -57,6 +57,7 @@ from array import Array
 from domain import BinaryOp, UnaryOp
 
 from elementwise.kernels.parallel import (
+    ELEMENTWISE_HEAVY_GRAIN,
     ELEMENTWISE_LIGHT_GRAIN,
     worker_count_for_bytes,
 )
@@ -674,7 +675,7 @@ def binary_column_broadcast_contig_typed[
             j += 1
 
 
-def unary_contig_typed[
+def _unary_contig_typed_serial[
     dtype: DType
 ](
     src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
@@ -682,9 +683,7 @@ def unary_contig_typed[
     size: Int,
     op: Int,
 ) raises where dtype.is_floating_point():
-    if try_unary_contig_typed_static[dtype](src_ptr, out_ptr, size, op):
-        return
-    # Comptime-typed unary kernel. SIMD width derives from dtype.
+    # Single-thread SIMD body. SIMD width derives from dtype.
     comptime width = simd_width_of[dtype]()
     var i = 0
     while i + width <= size:
@@ -696,6 +695,42 @@ def unary_contig_typed[
     while i < size:
         out_ptr[i] = apply_unary_typed_vec[dtype, 1](SIMD[dtype, 1](src_ptr[i]), op)[0]
         i += 1
+
+
+def unary_contig_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    size: Int,
+    op: Int,
+) raises where dtype.is_floating_point():
+    if try_unary_contig_typed_static[dtype](src_ptr, out_ptr, size, op):
+        return
+    # Per-worker work budget: ELEMENTWISE_HEAVY_GRAIN (256KB). Unary ops
+    # like exp/log/sin/cos do enough per-element work to amortize spawn
+    # cost earlier than binary add/mul. Cheap unary (neg/abs/square)
+    # also fans out at this size — slightly under-utilized but correct;
+    # an op-kind table refinement is a future improvement.
+    var byte_count = size * size_of[Scalar[dtype]]()
+    var nworkers = worker_count_for_bytes(size, byte_count, ELEMENTWISE_HEAVY_GRAIN)
+    if nworkers <= 1:
+        _unary_contig_typed_serial[dtype](src_ptr, out_ptr, size, op)
+        return
+
+    var chunk = ceildiv(size, nworkers)
+
+    @parameter
+    def chunk_worker(i: Int) raises:
+        var start = i * chunk
+        var end = start + chunk
+        if end > size:
+            end = size
+        if start >= size:
+            return
+        _unary_contig_typed_serial[dtype](src_ptr + start, out_ptr + start, end - start, op)
+
+    sync_parallelize[chunk_worker](nworkers)
 
 
 def unary_contig_typed_static[
