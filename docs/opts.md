@@ -2736,3 +2736,89 @@ Next target: promote the threading sweep from measurement to policy. Start with
 threaded static `EXP` for f32/f64 above the heavy gate, cap auto workers by row
 size instead of blindly using every performance core, and keep ADD/NEGATE serial
 below the 1M-element region.
+
+### 2026-05-09 static EXP threading policy
+
+The static unary fast path was the trap. `unary_contig_typed` had a parallel
+branch, but `try_unary_contig_typed_static` caught `EXP` first and went straight
+to the serial static kernel. So the policy existed, but the hot op was stepping
+around it.
+
+I added `unary_contig_typed_static_parallel[dtype, op, grain]` and routed only
+`EXP` through it for now. The serial `unary_contig_typed_static` primitive stays
+unchanged so we still have a fixed baseline for calibration rows. `MONPY_THREADS=1`
+still collapses the wrapper back to serial through `worker_count_for_bytes`.
+
+`bench_mojo_sweep.mojo` now emits production `exp_par_*` rows:
+
+- candidate: `monpy.unary_contig_typed`, the public contiguous unary entry.
+- baseline: `monpy.unary_contig_typed_static`, the serial static kernel.
+- ratio: production / serial, so below `1.0x` means the new dispatch wins.
+
+Fresh run:
+
+| row                | production ns | serial ns | ratio |
+| ------------------ | ------------: | --------: | ----: |
+| `exp_par_f32_256k` |        40,600 |   118,086 | 0.344x |
+| `exp_par_f32_1m`   |       329,400 |   472,278 | 0.697x |
+| `exp_par_f64_256k` |       241,400 |   320,480 | 0.753x |
+| `exp_par_f64_1m`   |       531,353 | 1,277,400 | 0.416x |
+
+Serial escape-hatch run with `MONPY_THREADS=1`:
+
+| row                | production ns | serial ns | ratio |
+| ------------------ | ------------: | --------: | ----: |
+| `exp_par_f32_256k` |       117,186 |   117,102 | 1.001x |
+| `exp_par_f32_1m`   |       480,944 |   464,167 | 1.036x |
+| `exp_par_f64_256k` |       310,960 |   309,840 | 1.004x |
+| `exp_par_f64_1m`   |     1,272,600 | 1,271,800 | 1.001x |
+
+The f32 1M serial-cap row is the wrapper tax plus bench noise: about 3.6% in
+that run, while the other three rows sit at parity. Good enough for the env
+contract; not a reason to make the hot path branchier.
+
+I also reran the direct cap-4 threading harness after one noisy saved outlier:
+
+| row             | threaded ns | serial ns | ratio |
+| --------------- | ----------: | --------: | ----: |
+| `exp_f32_64k`   |      31,569 |    29,488 | 1.071x |
+| `exp_f32_256k`  |      39,389 |   114,000 | 0.346x |
+| `exp_f32_1m`    |     143,962 |   487,632 | 0.295x |
+| `exp_f64_256k`  |      89,905 |   320,280 | 0.281x |
+
+Read:
+
+- The 256KB heavy gate is right for f32/f64 `EXP`. It turns on at 256K-ish
+  element counts and wins by roughly 2.7-3.6x in the stable cap-4 rows.
+- 64K f32 `EXP` stays a loss. The gate keeps production serial there.
+- `sync_parallelize` variance is real. One saved include-threading run put
+  `threads4 exp_f32_256k` at 1.76x, but the direct rerun and cap-4 artifact both
+  returned to ~0.346x. Treat one-shot cap sweeps as smoke, not truth serum.
+- The remaining stdlib-facing deficits are small: tiny 8x8 matmul and reductions
+  around 1.04-1.11x. The next high-leverage target is not another transcendental
+  branch; it is scalar MUL / tiny-matmul dispatch overhead or a steadier worker
+  pool story.
+
+Artifacts:
+
+- `results/local-sweep-20260509-exp-static-thread-policy`
+- `results/local-sweep-20260509-exp-static-thread-policy-serial`
+- `results/local-sweep-20260509-exp-static-thread-policy-threading`
+- `results/local-sweep-20260509-exp-static-thread-policy-threading-cap4-rerun`
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 benches/bench_mojo_sweep.mojo src/elementwise/kernels/typed.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --format json --sort ratio --output-dir results/local-sweep-20260509-exp-static-thread-policy --no-stdout --timeout 300
+MONPY_THREADS=1 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --format json --sort ratio --output-dir results/local-sweep-20260509-exp-static-thread-policy-serial --no-stdout --timeout 300
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m py_compile python/monpy/_bench/mojo_sweep.py
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/test_mojo_bench_sweep.py -q
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --include-threading --thread-caps auto,4 --format json --sort ratio --output-dir results/local-sweep-20260509-exp-static-thread-policy-threading --no-stdout --timeout 300
+MONPY_THREADS=4 MOHAUS_EDITABLE_REBUILDING=1 /Users/aarnphm/workspace/modular/.derived/build/bin/mojo run -I src benches/bench_threading_sweep.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --include-threading --thread-caps 4 --format json --sort ratio --output-dir results/local-sweep-20260509-exp-static-thread-policy-threading-cap4-rerun --no-stdout --timeout 300
+```
+
+Next target: scalar MUL and tiny matmul. The current worst rows are single-digit
+percent losses, which is exactly where dispatch overhead, scalar-left branches,
+and benchmark harness noise all start wearing the same coat.

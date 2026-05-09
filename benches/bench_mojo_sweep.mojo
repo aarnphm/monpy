@@ -39,6 +39,7 @@ from elementwise.kernels.typed import (
     binary_same_shape_contig_typed_static,
     binary_scalar_contig_typed_static,
     unary_contig_typed,
+    unary_contig_typed_static,
 )
 
 
@@ -290,6 +291,37 @@ def emit_unary_sin[dtype: DType, n: Int]() raises where dtype.is_floating_point(
     out.free()
 
 
+def emit_unary_exp_par[dtype: DType, n: Int]() raises where dtype.is_floating_point():
+    # Production `EXP` through the public unary entry point. Baseline keeps the
+    # serial static kernel fixed so this row isolates the static parallel gate.
+    var src = alloc[Scalar[dtype]](n)
+    var out = alloc[Scalar[dtype]](n)
+    fill_buffer[dtype](src, n)
+
+    @parameter
+    def monpy_call() raises:
+        unary_contig_typed[dtype](src, out, n, UnaryOp.EXP.value)
+        keep(out[0])
+
+    @parameter
+    def baseline_call() raises:
+        unary_contig_typed_static[dtype, UnaryOp.EXP.value](src, out, n)
+        keep(out[0])
+
+    emit_result(
+        "elementwise",
+        String("exp_par_{}_{}").format(dtype_name[dtype](), size_name[n]()),
+        "monpy.unary_contig_typed",
+        "monpy.unary_contig_typed_static",
+        bench_configured[monpy_call](),
+        bench_configured[baseline_call](),
+        n * size_of[Scalar[dtype]]() * 2,
+        n,
+    )
+    src.free()
+    out.free()
+
+
 def emit_sum[dtype: DType, n: Int]() raises where dtype.is_floating_point():
     var src = alloc[Scalar[dtype]](n)
     fill_buffer[dtype](src, n)
@@ -522,6 +554,8 @@ def emit_family[dtype: DType]() raises where dtype.is_floating_point():
     # lives in bench_parallel.mojo / bench_reduce.mojo so stdlib deficit
     # ranking is not dominated by non-production calibration rows.
     # These are the rows that surface multi-thread regressions.
+    emit_unary_exp_par[dtype, 262144]()
+    emit_unary_exp_par[dtype, 1048576]()
     emit_binary_add_par[dtype, 16777216]()
     emit_matmul_small[dtype, 8]()
     emit_matmul_small[dtype, 16]()

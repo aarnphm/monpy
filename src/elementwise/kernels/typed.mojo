@@ -754,6 +754,34 @@ def unary_contig_typed_static[
         i += 1
 
 
+def unary_contig_typed_static_parallel[
+    dtype: DType, op: Int, grain: Int
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    size: Int,
+) raises where dtype.is_floating_point():
+    var byte_count = size * size_of[Scalar[dtype]]()
+    var nworkers = worker_count_for_bytes(size, byte_count, grain)
+    if nworkers <= 1 or size < nworkers:
+        unary_contig_typed_static[dtype, op](src_ptr, out_ptr, size)
+        return
+
+    var chunk = ceildiv(size, nworkers)
+
+    @parameter
+    def chunk_worker(i: Int) raises:
+        var start = i * chunk
+        var end = start + chunk
+        if end > size:
+            end = size
+        if start >= size:
+            return
+        unary_contig_typed_static[dtype, op](src_ptr + start, out_ptr + start, end - start)
+
+    sync_parallelize[chunk_worker](nworkers)
+
+
 def try_unary_contig_typed_static[
     dtype: DType
 ](
@@ -769,7 +797,7 @@ def try_unary_contig_typed_static[
         unary_contig_typed_static[dtype, UnaryOp.COS.value](src_ptr, out_ptr, size)
         return True
     if op == UnaryOp.EXP.value:
-        unary_contig_typed_static[dtype, UnaryOp.EXP.value](src_ptr, out_ptr, size)
+        unary_contig_typed_static_parallel[dtype, UnaryOp.EXP.value, ELEMENTWISE_HEAVY_GRAIN](src_ptr, out_ptr, size)
         return True
     if op == UnaryOp.LOG.value:
         unary_contig_typed_static[dtype, UnaryOp.LOG.value](src_ptr, out_ptr, size)
