@@ -239,8 +239,16 @@ def test_join_helpers_match_numpy_for_axis0_fast_paths() -> None:
   b_np = numpy.arange(4, 8, dtype=numpy.float32)
 
   numpy.testing.assert_array_equal(numpy.asarray(np.concatenate([a, b])), numpy.concatenate([a_np, b_np]))
+  numpy.testing.assert_array_equal(numpy.asarray(np.concatenate((a, b))), numpy.concatenate((a_np, b_np)))
   numpy.testing.assert_array_equal(numpy.asarray(np.stack([a, b], axis=0)), numpy.stack([a_np, b_np], axis=0))
   numpy.testing.assert_array_equal(numpy.asarray(np.vstack([a, b])), numpy.vstack([a_np, b_np]))
+
+  a2 = np.arange(4, dtype=np.float32).reshape(2, 2)
+  b2 = np.arange(3, dtype=np.float32).reshape(1, 3)
+  with pytest.raises(ValueError):
+    np.concatenate([a2, b2], axis=0)
+  with pytest.raises(ValueError):
+    np.concatenate([a, b], axis=2)
 
 
 def test_concatenate_falls_back_for_promotion() -> None:

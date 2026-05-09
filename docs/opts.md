@@ -4286,3 +4286,73 @@ MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarn
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py tests/python/numpy_compat/test_linalg.py -q
 ```
+
+### 2026-05-09 concatenate exact-ndarray facade
+
+Fresh frontier:
+
+| row                                                   | monpy us | numpy us | ratio  |
+| ----------------------------------------------------- | -------: | -------: | -----: |
+| `array/views/transpose_add_f32`                       |    5.031 |    2.505 | 1.927x |
+| `array/interop/asarray_squeeze_axis0_f32`             |    4.328 |    2.361 | 1.840x |
+| `array/native_kernels/concatenate_axis0_8x128_f64`    |    5.343 |    3.265 | 1.612x |
+
+Profile read:
+
+- `concatenate_axis0_8x128_f64` moves 8 KiB: eight rank-1 `float64` arrays,
+  each 128 elements.
+- Native already does the right thing for this shape: one contiguous slab copy
+  per input. SIMD/threading is the wrong denominator here. The row is mostly
+  facade tax, not memory bandwidth.
+- Before patch: `monpy-profile` measured `6.144 us/call`, and cProfile saw
+  `1.10M` calls for `50k` concatenations. The hot waste was `400k` exact
+  `asarray` calls, even though every input was already a monpy `ndarray`.
+
+Patch:
+
+- `concatenate` now materializes non-list inputs once, then gives sequences
+  that start with an exact monpy `ndarray` one speculative native call.
+- The hot path skips the `asarray` pass and builds the native-array list
+  directly.
+- Mixed dtype and non-contiguous exact-array cases keep the existing
+  native-error fallback.
+- If the native probe fails on a non-exact sequence, the facade falls back
+  through `asarray` instead of trusting `_native` by accident.
+- Shape and axis validation errors now surface as `ValueError`, matching the
+  Python-side join contract instead of leaking raw native `Exception`.
+
+Post-patch profile:
+
+| run                                                      | us/call | calls for 50k | read |
+| -------------------------------------------------------- | ------: | ------------: | ---- |
+| `results/local-profile-20260509-concat8x128-before`      |   6.144 |         1.10M | `asarray` loop dominates wrapper |
+| `results/local-profile-20260509-concat8x128-speculative` |   5.110 |          350k | native copy is now the large fixed cost |
+
+Post-patch array rerun:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-array-20260509-concat-exact-native-list --no-progress --no-stdout
+```
+
+| row                                                   | before us | after us | before ratio | after ratio | speedup |
+| ----------------------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/native_kernels/concatenate_axis0_8x128_f64`    |     5.343 |    4.831 |       1.612x |      1.385x |  1.11:1 |
+
+Read:
+
+- The benchmark-row movement is smaller than the profile movement because NumPy
+  moved too: `3.265 us -> 3.482 us` between the two sweeps. The monpy-side clock
+  still moved in the intended direction.
+- The row left the top cluster. The remaining Python-frontier misses are now
+  `asarray_squeeze_axis0_f32` at `1.902x`, `transpose_add_f32` at `1.877x`,
+  and small metadata rows like `atleast_2d_f32`.
+- The pure-Mojo check says the native target is different: dynamic typed
+  elementwise dispatch. `add_par_f32_16m` is `3.541x` slower than the static
+  typed baseline, while NuMojo rows are already behind monpy in this local run.
+
+Verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_creation_helpers.py::test_join_helpers_match_numpy_for_axis0_fast_paths tests/python/numpy_compat/test_creation_helpers.py::test_concatenate_falls_back_for_promotion tests/python/numpy_compat/test_creation_helpers.py::test_concatenate_falls_back_for_non_contiguous_inputs tests/python/test_dtype_storage.py::test_fp4_concatenate_repacks_instead_of_byte_memcpy -q
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/native_kernels/concatenate_axis0_8x128_f64 --types array,attention --candidate monpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-concat8x128-speculative --sample --no-perf-stat
+```

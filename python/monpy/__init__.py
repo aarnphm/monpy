@@ -1210,16 +1210,38 @@ def _concat_into_flat(arrs:Sequence[ndarray], axis:int)->tuple[list[object], tup
     cursor+=a.shape[ax]
   return flat, tuple(out_shape)
 
+def _is_concatenate_validation_error(message:str)->bool:
+  return message.startswith(("concatenate: axis out of range", "concatenate: arrays must have same ndim", "concatenate: shape mismatch"))
+
 def concatenate(arrays:Sequence[object], axis:int=0, *, out:object=None, dtype:object=None, casting:str="same_kind")->ndarray:
   if out is not None:raise NotImplementedError("concatenate out= not implemented in monpy v1")
-  arrs=[asarray(a) for a in arrays]
-  if not arrs:raise ValueError("concatenate: need at least one array")
+  seq=arrays if isinstance(arrays, (list, tuple)) else list(arrays)
+  if not seq:raise ValueError("concatenate: need at least one array")
+  if dtype is None and type(seq[0]) is ndarray:
+    exact_arrs=typing.cast(Sequence[ndarray], seq)
+    try:natives=[a._native for a in exact_arrs]
+    except AttributeError:arrs=[asarray(a) for a in seq]
+    else:
+      arrs=exact_arrs
+      try:return ndarray._wrap(_native.concatenate(natives, axis, -1))
+      except Exception as exc:
+        message=str(exc)
+        all_exact=builtins.all(type(a) is ndarray for a in seq)
+        if "dtype mismatch" in message or "c-contiguous" in message:
+          if not all_exact:arrs=[asarray(a) for a in seq]
+        elif not all_exact:arrs=[asarray(a) for a in seq]
+        else:
+          if _is_concatenate_validation_error(message):raise ValueError(message) from exc
+          raise
+  else:arrs=[asarray(a) for a in seq]
   natives=[a._native for a in arrs]
   if dtype is None:
     try:return ndarray._wrap(_native.concatenate(natives, axis, -1))
     except Exception as exc:
       message=str(exc)
-      if "dtype mismatch" not in message and "c-contiguous" not in message:raise
+      if "dtype mismatch" not in message and "c-contiguous" not in message:
+        if _is_concatenate_validation_error(message):raise ValueError(message) from exc
+        raise
   t=_resolve_dtype(dtype) if dtype is not None else result_type(*arrs)
   # Pre-cast all inputs and pre-materialise into c-contig — native concat
   # walks logical indices, but the f64 round-trip path is faster on
