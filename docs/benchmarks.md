@@ -114,7 +114,7 @@ python .github/scripts/posts.py \
 
 ## Mojo-side head-to-head benches (`benches/`)
 
-These benches sit *next to* the Python sweep above; they answer a different question. The Python sweep asks "is monpy's user-facing API faster than numpy's?" — these ask "is monpy's *kernel* implementation actually competitive with the equivalent Mojo stdlib primitive?" Pure Mojo, no Python in the inner loop, no FFI overhead. Run them when you suspect a hand-rolled kernel is leaving performance on the table, or before/after touching `src/elementwise/*kernels*.mojo`.
+These benches sit _next to_ the Python sweep above; they answer a different question. The Python sweep asks "is monpy's user-facing API faster than numpy's?" — these ask "is monpy's _kernel_ implementation actually competitive with the equivalent Mojo stdlib primitive?" Pure Mojo, no Python in the inner loop, no FFI overhead. Run them when you suspect a hand-rolled kernel is leaving performance on the table, or before/after touching `src/elementwise/*kernels*.mojo`.
 
 ### Run
 
@@ -159,7 +159,7 @@ Interpretation rule: rows near `1.0x` mean the monpy kernel and stdlib-shaped lo
 
 NuMojo is an external array library, so its bench is separate and opt-in. The
 repo carries a patched vendored copy at `vendor/NuMojo`; that is the default
-`monpy-bench --include-numojo` lookup after `NUMOJO_PATH`.
+`monpy-bench-mojo --include-numojo` lookup after `NUMOJO_PATH`.
 
 ```bash
 monpy-bench-mojo --include-numojo
@@ -172,7 +172,7 @@ $MODULAR_DERIVED_PATH/build/bin/mojo run \
 
 `bench_numojo_sweep.mojo` compares NuMojo public NDArray operations against monpy raw kernels for add, `sin`, `sum`, and small matmul. That comparison is intentionally not identical to `bench_mojo_sweep.mojo`: NuMojo includes its array abstraction overhead, while monpy rows are kernel-level. Treat it as an external-library baseline, not as a stdlib replacement proof.
 
-NuMojo `0.9.0` currently tracks the Modular 0.26.x toolchain family. The vendored copy is patched for this checkout's Mojo `1.0.0.dev0` benchmark path; see `vendor/README.md` and `vendor/NuMojo/MONPY_PATCHES.md` for provenance, license references, and the compatibility patch ledger. External NuMojo checkouts may still fail at import time with stdlib API drift. The CLI treats that as a skipped optional baseline by default: it still reports the monpy/stdlib Mojo rows and writes the attempted NuMojo command into the manifest. Use `--strict-numojo` when you want that compatibility failure to stop the run.
+NuMojo `0.9.0` currently tracks the Modular 0.26.x toolchain family. The vendored copy is patched for this checkout's Mojo `1.0.0.dev0` benchmark path; see `vendor/README.md` and `vendor/NuMojo/MONPY_PATCHES.md` for provenance, license references, and the compatibility patch ledger. Update that ledger whenever the vendored source changes. External NuMojo checkouts may still fail at import time with stdlib API drift. The CLI treats that as a skipped optional baseline by default: it still reports the monpy/stdlib Mojo rows and writes the attempted NuMojo command into the manifest. Use `--strict-numojo` when you want that compatibility failure to stop the run.
 
 ### `bench_reduce.mojo`
 
@@ -191,7 +191,7 @@ Throughput in GB/s (data movement, higher is better). Boldface marks the winner 
 **SUM**
 
 | dtype | size | 4-way | **8-way** | std |
-|-------|------|------:|----------:|----:|
+| ----- | ---- | ----: | --------: | --: |
 | f32   | 1k   |    90 |   **134** | 130 |
 | f32   | 64k  |    66 |    **83** |  82 |
 | f32   | 1M   |    65 |    **81** |  80 |
@@ -201,7 +201,7 @@ Throughput in GB/s (data movement, higher is better). Boldface marks the winner 
 **MIN**
 
 | dtype | size | 4-way | **8-way** | std |
-|-------|------|------:|----------:|----:|
+| ----- | ---- | ----: | --------: | --: |
 | f32   | 1k   |   123 |   **153** | 134 |
 | f32   | 64k  |    84 |        85 |  83 |
 | f32   | 1M   |    80 |        81 |  80 |
@@ -209,25 +209,25 @@ Throughput in GB/s (data movement, higher is better). Boldface marks the winner 
 
 **MAX**
 
-| dtype | size | 4-way | **8-way** | std |
-|-------|------|------:|----------:|----:|
-| f32   | 1k   |   108 |   **143** | 134 |
-| f32   | 64k  |    85 |        85 |  85 |
-| f32   | 1M   |    82 |        82 |  82 |
+| dtype | size | 4-way | **8-way** |     std |
+| ----- | ---- | ----: | --------: | ------: |
+| f32   | 1k   |   108 |   **143** |     134 |
+| f32   | 64k  |    85 |        85 |      85 |
+| f32   | 1M   |    82 |        82 |      82 |
 | f64   | 1k   |   113 |       137 | **146** |
 
 **PROD** (largest 4→8 jump — FMUL has deeper latency than FADD)
 
-| dtype | size | 4-way | **8-way** | std |
-|-------|------|------:|----------:|----:|
-| f32   | 1k   |    79 |   **126** | 113 |
-| f32   | 64k  |    51 |    **85** |  84 |
+| dtype | size | 4-way | **8-way** |     std |
+| ----- | ---- | ----: | --------: | ------: |
+| f32   | 1k   |    79 |   **126** |     113 |
+| f32   | 64k  |    51 |    **85** |      84 |
 | f64   | 1k   |    63 |       115 | **117** |
 
 **MEAN** (8-way only — same kernel as sum + scalar div)
 
 | dtype | size | **8-way** | std |
-|-------|------|----------:|----:|
+| ----- | ---- | --------: | --: |
 | f32   | 64k  |        84 |  85 |
 | f32   | 1M   |        81 |  81 |
 
@@ -237,7 +237,7 @@ Throughput in GB/s (data movement, higher is better). Boldface marks the winner 
 
 2. **PROD shows the steepest 4→8 win** (51→85 GB/s at f32 64k, ~67% boost). FMUL is ~4-cycle latency on M-series — needing 4 × 2 IPC = 8 in flight to saturate. 4-way leaves half the multiplier idle; 8-way fills it. Every floating-point op has its own latency-IPC product; 8 is the safe choice across the FADD/FMIN/FMAX/FMUL family on modern cores.
 
-3. **DRAM-bound regime is bandwidth-bound regardless of unroll.** At 16M+ on a single thread, all three implementations converge near ~50 GB/s f32 — that's the M-series single-thread DRAM ceiling. The next-tier improvement is *parallelization*, not a smarter SIMD loop.
+3. **DRAM-bound regime is bandwidth-bound regardless of unroll.** At 16M+ on a single thread, all three implementations converge near ~50 GB/s f32 — that's the M-series single-thread DRAM ceiling. The next-tier improvement is _parallelization_, not a smarter SIMD loop.
 
 ### What's been done in this commit
 
@@ -256,13 +256,13 @@ Added a parallel sum kernel using `std.algorithm.sync_parallelize` over `num_per
 
 **Result on M3 Pro (8 P-core, 8MB shared L2, ~150 GB/s peak DRAM):**
 
-| dtype | size  | regime           | sum8 (1T) | sum_par (8T) | speedup |
-|-------|-------|------------------|----------:|-------------:|--------:|
-| f32   | 1M    | shared-L2 fits   |   85 GB/s |  ~99–263 GB/s | **3–8×** (warm-cache variance) |
-| f32   | 16M   | DRAM-bound       |   61 GB/s |   **117 GB/s** | **1.9×** |
-| f32   | 128M  | DRAM-bound       |   61 GB/s |   **117 GB/s** | **1.9×** |
-| f64   | 1M    | shared-L2 fits   |   82 GB/s |   **374 GB/s** | **4.6×** |
-| f64   | 16M   | DRAM-bound       |   61 GB/s |   **112 GB/s** | **1.8×** |
+| dtype | size | regime         | sum8 (1T) | sum_par (8T) |                        speedup |
+| ----- | ---- | -------------- | --------: | -----------: | -----------------------------: |
+| f32   | 1M   | shared-L2 fits |   85 GB/s | ~99–263 GB/s | **3–8×** (warm-cache variance) |
+| f32   | 16M  | DRAM-bound     |   61 GB/s | **117 GB/s** |                       **1.9×** |
+| f32   | 128M | DRAM-bound     |   61 GB/s | **117 GB/s** |                       **1.9×** |
+| f64   | 1M   | shared-L2 fits |   82 GB/s | **374 GB/s** |                       **4.6×** |
+| f64   | 16M  | DRAM-bound     |   61 GB/s | **112 GB/s** |                       **1.8×** |
 
 The 117 GB/s f32 / 112 GB/s f64 ceiling at 16M+ is the **actual M3 Pro DRAM bandwidth** — within 10% of the spec-sheet 150 GB/s. The kernel is now bandwidth-pinned; further gains require pinning to memory-controller-side techniques (large-page faulting in advance, NT stores on writes, prefetch tuning).
 
@@ -282,6 +282,6 @@ The "warm-cache variance" on f32 1M (99 vs 263 GB/s across two reps) is an artif
 
 #### Educational framing for new readers
 
-The `<op>4_*` vs `<op>8_*` vs `<op>S_*` triple is a textbook lesson on out-of-order pipelines. Run the bench, observe the gap close at item 1, try editing one of the kernels to use `block = width * 2` and watch the gap reopen. The comment in `reduce.mojo` documents *why* multiple accumulators are needed; the bench documents *how many*. Together they make the pipeline visible.
+The `<op>4_*` vs `<op>8_*` vs `<op>S_*` triple is a textbook lesson on out-of-order pipelines. Run the bench, observe the gap close at item 1, try editing one of the kernels to use `block = width * 2` and watch the gap reopen. The comment in `reduce.mojo` documents _why_ multiple accumulators are needed; the bench documents _how many_. Together they make the pipeline visible.
 
 The PROD numbers are the cleanest demonstration: FMUL is one cycle deeper than FADD, so the 4-way kernel under-saturates by ~50%, exactly the gap that 8-way closes. If you can predict from a chip's spec sheet how the bench will move, you've internalized the lesson.

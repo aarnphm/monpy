@@ -1,41 +1,51 @@
-## Local Optimization Log
+## Optimization Log
+
+I use this file as the local ledger for optimization passes: what was slow,
+what changed, what moved, and what still smells suspicious enough to profile
+again.
+
+Read it like this:
+
+- `results/.../manifest.json` paths are the evidence trail.
+- `monpy/numpy` ratios are first-pass triage; profiles decide the real story.
+- Wrapper-sized rows need profiles because tiny microbenchmarks can measure the
+  harness more than the kernel.
+- A 1.01:1 move is noise until a rerun or profile gives it teeth.
 
 ### 2026-05-08 rank-3 transposed add dispatch
 
-The first post-refactor hot spot was the `strides/rank3_transpose_add_f32`
+I hit the first post-refactor hot spot in the `strides/rank3_transpose_add_f32`
 case. The input shape is `32x32x32`; both operands are c-contiguous arrays
-viewed as `.transpose((2, 0, 1))`, so the logical output is contiguous but the
-inputs have a stride-1 axis that is not the innermost logical axis.
+viewed as `.transpose((2, 0, 1))`, so the logical output is contiguous and the
+stride-1 input axis sits outside the innermost logical axis.
 
-`src/elementwise/__init__.mojo` now routes matching same-dtype rank-3 layouts
-through `maybe_binary_rank3_axis0_tile`, the batched form of the existing rank-2
-transpose tile. The kernel processes each middle-axis slice as a 4x4 register
-tile:
+I routed matching same-dtype rank-3 layouts through
+`maybe_binary_rank3_axis0_tile` in `src/elementwise/__init__.mojo`, using the
+batched form of the existing rank-2 transpose tile. The kernel does four things
+for each middle-axis slice:
 
 1. Load four stride-1 SIMD vectors from each operand.
 2. Apply the binary op in registers.
 3. Transpose the 4x4 tile with `shuffle`.
 4. Store four contiguous rows into the c-contiguous result.
 
-Focused local result on the M3 Pro checkout:
+Local result on the M3 Pro checkout:
 
 | run                                                               | monpy us | numpy us | monpy/numpy |
 | ----------------------------------------------------------------- | -------: | -------: | ----------: |
 | `results/local-sweep-20260508-pass0/results.json`                 |   30.653 |    8.404 |      3.648x |
 | `results/local-sweep-20260508-rank3-source-dispatch/results.json` |   19.064 |    8.210 |      2.263x |
 
-That is a 1.61:1 reduction in monpy wall time for this row. The row still does
-not beat numpy, so the next optimization pass should use sampled profiles and
-hardware counters before adding another kernel. The likely split to verify is
-Python wrapper time versus tile shuffle/store pressure versus library-assisted
-iterator behavior in numpy.
+That gave a 1.61:1 reduction in monpy wall time for this row. NumPy is still faster, so next I would use sampled profiles and hardware counters before
+adding another kernel. The split I want to verify is Python wrapper time versus
+tile shuffle/store pressure versus NumPy's iterator behavior.
 
 ## Profiling
 
-`monpy-profile` profiles one benchmark case for enough wall time that OS
-profilers can see native Mojo, C library, and Python frames. It is intentionally
-separate from `monpy-bench`: benchmark runs stay low-overhead and comparable,
-while profile runs collect heavier evidence.
+`monpy-profile` is my heavier evidence path. It runs one benchmark case for
+enough wall time that OS profilers can see native Mojo, C library, and Python
+frames. I keep it separate from `monpy-bench` so benchmark runs stay
+low-overhead and comparable.
 
 ```bash
 monpy-profile \
@@ -46,15 +56,15 @@ monpy-profile \
   --output-dir results/profile-rank3
 ```
 
-Every run writes:
+Each run writes:
 
 - `manifest.json`: command, case, child-loop timing, profiler outputs.
 - `measurement.json`: long-loop wall time, calls per second, resource usage,
-  peak RSS, and native backend flags. This pass does not enable `tracemalloc`,
+  peak RSS, and native backend flags. I leave off `tracemalloc`,
   because tracing allocations perturbs the CPU timing.
 - `allocation-measurement.json`: a shorter allocation pass with Python
   `tracemalloc` enabled.
-- `numpy-config.txt`: numpy build and BLAS/LAPACK configuration.
+- `numpy-config.txt`: NumPy build and BLAS/LAPACK configuration.
 
 On macOS, the command captures a `sample(1)` stack report by default:
 
@@ -62,7 +72,7 @@ On macOS, the command captures a `sample(1)` stack report by default:
 results/profile-rank3/sample.txt
 ```
 
-Use xctrace when the question needs Instruments data rather than text stacks:
+I use xctrace when the question needs Instruments data beyond text stacks:
 
 ```bash
 monpy-profile \
@@ -87,10 +97,10 @@ monpy-profile \
   --perf-events cycles,instructions,cache-references,cache-misses
 ```
 
-This gives a hardware-counter pass that can distinguish a Python wrapper
+I use this for a hardware-counter pass that can distinguish a Python wrapper
 regression from a cache-miss, instruction-count, or branch-miss regression.
 
-Run the same case with `--candidate numpy` when the question is whether monpy is
+I run the same case with `--candidate numpy` when the question is whether monpy is
 losing to NumPy wrapper overhead, iterator behavior, or a lower-level library
 call:
 
@@ -110,14 +120,14 @@ scalar: build a rank-0 array via `asarray(3.5)`, then reshape it to NumPy's
 required shape `(1,)`. The Python facade now handles Python bool/int/float
 inputs directly as `full((1,), scalar, dtype=...)`.
 
-Focused local result:
+Local result:
 
 | run                                                         | monpy us | numpy us | monpy/numpy |
 | ----------------------------------------------------------- | -------: | -------: | ----------: |
 | `results/local-sweep-20260508-pass0/results.json`           |    7.808 |    2.216 |      3.524x |
 | `results/local-sweep-20260508-scalar-ascontig/results.json` |    3.498 |    2.164 |      1.618x |
 
-That is a 2.23:1 reduction in monpy wall time for the scalar row. Dense and
+That gave a 2.23:1 reduction in monpy wall time for the scalar row. Dense and
 transpose `ascontiguousarray` rows stayed within noise, which is the important
 guardrail for this wrapper-only change.
 
@@ -134,19 +144,18 @@ singleton-axis validation and view shape/stride construction happen in one
 native call. The Python facade is reduced to `asarray` plus one native view
 constructor.
 
-Focused local result:
+Local result:
 
 | run                                                        | monpy us | numpy us | monpy/numpy |
 | ---------------------------------------------------------- | -------: | -------: | ----------: |
 | `results/local-sweep-20260508-heartbeat1/results.json`     |   12.494 |    2.436 |      5.205x |
 | `results/local-sweep-20260508-native-squeeze/results.json` |    8.182 |    2.429 |      3.390x |
 
-That is a 1.53:1 reduction in monpy wall time for this row. The residual gap is
+That gave a 1.53:1 reduction in monpy wall time for this row. The residual gap is
 mostly outside squeeze itself: a direct microbench of an existing monpy array
 showed `mnp.asarray(np.zeros(...))` around 4.2 us and native-backed squeeze
-around the low single-digit microsecond range. The next wrapper-pass target is
-therefore the NumPy-input marshaling family (`from_dlpack`, `asarray_zero_copy`,
-and small `array_copy`), not another squeeze-specialized kernel.
+around the low single-digit microsecond range. Next target: the NumPy-input marshaling family (`from_dlpack`, `asarray_zero_copy`,
+and small `array_copy`). The squeeze-specialized kernel can sit.
 
 ### 2026-05-08 NumPy DLPack fast path
 
@@ -161,14 +170,14 @@ The fast path preserves the important DLPack copy-policy behavior: `copy=True`
 detaches, writable `copy=False` shares storage, and readonly `copy=False` still
 raises `BufferError`.
 
-Focused local result:
+Local result:
 
 | run                                                               | monpy us | numpy us | monpy/numpy |
 | ----------------------------------------------------------------- | -------: | -------: | ----------: |
 | `results/local-sweep-20260508-native-squeeze/results.json`        |    8.824 |    2.182 |      4.052x |
 | `results/local-sweep-20260508-dlpack-numpy-fastpath/results.json` |    5.669 |    2.172 |      2.587x |
 
-That is a 1.56:1 reduction in monpy wall time for NumPy-backed DLPack imports.
+That gave a 1.56:1 reduction in monpy wall time for NumPy-backed DLPack imports.
 The row now sits with the rest of the small NumPy-input marshaling family rather
 than standing out as a separate capsule-parser tax.
 
@@ -181,9 +190,7 @@ benchmark path where NumPy is already live. The detector now checks
 `sys.modules["numpy"].ndarray` with `isinstance` when available, then falls back
 to the import-free MRO scan. The hot `asarray` and NumPy-backed `from_dlpack`
 facades also use an unchecked internal converter after the detector succeeds,
-so the same ndarray is not classified twice.
-
-Focused local result:
+so each ndarray is classified once.
 
 | row                                    | previous monpy us | new monpy us | previous ratio | new ratio |
 | -------------------------------------- | ----------------: | -----------: | -------------: | --------: |
@@ -195,7 +202,7 @@ Focused local result:
 
 The direct detector microbench moved from about 0.34 us to about 0.09 us while
 `tests/python/test_no_numpy_core.py` still verifies that importing the core
-package does not import NumPy.
+core package stays NumPy-free.
 
 ### 2026-05-08 native stack-axis-0 path
 
@@ -208,15 +215,15 @@ contiguous input slab directly. The Python `stack(axis=0)` and rank-1 `vstack`
 facades optimistically use it when no dtype override is requested, then fall
 back to the promotion/general-axis path on mismatch.
 
-Focused local result:
+Local result:
 
 | row                           | previous monpy us | new monpy us | previous ratio | new ratio |
 | ----------------------------- | ----------------: | -----------: | -------------: | --------: |
 | `array/views/stack_axis0_f32` |             9.191 |        3.731 |         2.610x |    1.051x |
 | `array/views/vstack_f32`      |             9.678 |        3.700 |         2.926x |    1.127x |
 
-That is a 2.46:1 reduction for `stack_axis0_f32` and a 2.62:1 reduction for
-`vstack_f32`. `hstack` and plain `concatenate` did not move, as expected; those
+That gave a 2.46:1 reduction for `stack_axis0_f32` and a 2.62:1 reduction for
+`vstack_f32`. `hstack` and plain `concatenate` stayed flat, as expected; those
 already route through the native concatenate leaf and need a different target if
 they become important.
 
@@ -228,7 +235,7 @@ this case as a view (`arr[None, :]`), so monpy now uses the same shape operation
 rank-1 `atleast_2d` calls native `expand_dims(axis=0)` directly and keeps the
 original array as the base owner.
 
-Focused local result:
+Local result:
 
 | row                             | previous monpy us | new monpy us | previous ratio | new ratio |
 | ------------------------------- | ----------------: | -----------: | -------------: | --------: |
@@ -250,14 +257,14 @@ slice pattern, none of the shape metadata is needed: the result is just
 before entering the generic slice path. Mixed keys such as `arr[:, None, ::-1]`
 still fall through to the existing generic slice machinery.
 
-Focused local result:
+Local result:
 
 | row                              | previous monpy us | new monpy us | previous ratio | new ratio |
 | -------------------------------- | ----------------: | -----------: | -------------: | --------: |
 | `array/views/newaxis_middle_f32` |             5.743 |        3.138 |         2.734x |    1.535x |
 
 The direct microbench moved the exact `helper[:, None, :]` view from about 3.6
-us to about 1.1 us. The row is still not NumPy-fast, but it no longer pays the
+us to about 1.1 us. The row is still trails NumPy, and it has shed the
 full generic slice tax for a fixed full-slice newaxis.
 
 ### 2026-05-08 native swapaxes view
@@ -268,7 +275,7 @@ side can avoid layout selection and Python tuple normalization entirely: clone
 the shape and stride lists, swap two slots, then return a view with the original
 storage.
 
-Focused local result:
+Local result:
 
 | row                        | previous monpy us | new monpy us | previous ratio | new ratio |
 | -------------------------- | ----------------: | -----------: | -------------: | --------: |
@@ -288,7 +295,7 @@ now reads `dtype.str`, `shape`, `strides`, `ctypes.data`, and `flags.writeable`
 directly, then calls native `from_external` / `copy_from_external` with the same
 copy and readonly policy as before.
 
-Focused local result:
+Local result:
 
 | row                                    | previous monpy us | new monpy us | previous ratio | new ratio |
 | -------------------------------------- | ----------------: | -----------: | -------------: | --------: |
@@ -311,7 +318,7 @@ drop list, then built the view. Scalar-axis squeeze now has a direct
 `squeeze_axis` native entrypoint. It normalizes and validates one axis, then
 copies every non-dropped shape/stride slot into the result view.
 
-Focused local result:
+Local result:
 
 | row                             | previous monpy us | new monpy us | previous ratio | new ratio |
 | ------------------------------- | ----------------: | -----------: | -------------: | --------: |
@@ -332,13 +339,12 @@ list back into native storage through `asarray`. NumPy documents scalar-base
 does the same shape of work inside one native creator: allocate the output, walk
 the linear exponent range, and store `pow(base, exponent)` directly.
 
-The first native version used Mojo's SIMD scalar `pow`, which was fast but
+My first native version used Mojo's SIMD scalar `pow`, which was fast but
 missed the existing `1e-12` NumPy parity test by about `7.6e-10` relative on
 the 50-point `0..3` span. The committed path calls platform `libm` `pow`
-instead, preserving the strict parity test while still avoiding Python-list
-materialization.
+and preserves the strict parity test while keeping Python-list materialization out of the path.
 
-Focused local result:
+Local result:
 
 | row                          | previous monpy us | new monpy us | previous ratio | new ratio |
 | ---------------------------- | ----------------: | -----------: | -------------: | --------: |
@@ -363,7 +369,7 @@ an identity right-hand side inside one native `linalg_pinv` entrypoint. This
 keeps the existing monpy cutoff convention (`eps(dtype) * max(m, n)`) while
 removing the Python SVD post-processing graph.
 
-Focused local result:
+Local result:
 
 | row                        | previous monpy us | new monpy us | previous ratio | new ratio |
 | -------------------------- | ----------------: | -----------: | -------------: | --------: |
@@ -374,7 +380,7 @@ Focused local result:
 | `array/decomp/pinv_8_f32`  |            48.527 |       10.937 |         2.033x |    0.451x |
 
 All benchmarked pseudo-inverse rows now beat NumPy on this machine. The largest
-remaining deficit at this checkpoint was no longer `pinv`; it was the
+remaining deficit at this checkpoint shifted from `pinv` to the
 view/import-heavy `squeeze_axis0_f32` row.
 
 ### 2026-05-08 NumPy buffer-protocol ingest
@@ -393,7 +399,7 @@ borrow/copy/cast decision to the existing native `asarray_from_buffer` bridge.
 That removes the `ctypes.data` property and per-field Python tuple/int
 normalization from every NumPy ndarray import.
 
-Focused local result:
+Local result:
 
 | row                                    | previous monpy us | new monpy us | previous ratio | new ratio |
 | -------------------------------------- | ----------------: | -----------: | -------------: | --------: |
@@ -427,7 +433,7 @@ Profile artifacts:
   next native interop pass should remove that dynamic symbol lookup from the
   per-call path before chasing smaller Python wrapper costs.
 
-References used for the direction:
+References I used for the direction:
 
 - [Python C API buffer protocol](https://docs.python.org/3/c-api/buffer.html):
   `Py_buffer` carries `buf`, `itemsize`, `format`, `ndim`, `shape`, `strides`,
@@ -449,10 +455,10 @@ lookup accounted for 428 of 2,269 samples under `asarray_from_buffer_ops`.
 `src/buffer.mojo` now stores both CPython buffer function pointers in one
 `_Global` value, `MONPY_BUFFER_FUNCTIONS`, initialized once from Mojo's existing
 CPython handle. The hot path still calls the official buffer protocol, but it
-does not ask dyld for the same two symbols every time an ndarray crosses the
+reuses the same two resolved symbols an ndarray crosses the
 boundary.
 
-Focused local result:
+Local result:
 
 | row                                    | previous monpy us | new monpy us | previous ratio | new ratio |
 | -------------------------------------- | ----------------: | -----------: | -------------: | --------: |
@@ -505,7 +511,7 @@ dtypes and c-contiguous inputs, and raises a narrow fallback error when the
 Python facade needs the old promotion or materialization path. Shape and axis
 errors still propagate directly.
 
-Focused local result:
+Local result:
 
 | row                                                | previous monpy us | new monpy us | previous ratio | new ratio |
 | -------------------------------------------------- | ----------------: | -----------: | -------------: | --------: |
@@ -527,31 +533,30 @@ Profile artifacts:
   7.268 us/call in
   `results/profile-20260508-concat-axis0-8x128-baseline/manifest.json`.
 - Max RSS dropped from 87.4 MB to 85.0 MB in the profile child. The traced
-  Python allocation peak stayed at 1,718 bytes, so this pass removed call
-  overhead rather than changing allocation shape.
+  Python allocation peak stayed at 1,718 bytes, so I removed call
+  overhead while the allocation shape stayed fixed.
 
-The next concatenate-specific lever is a narrower axis-0 vector/list ABI that
-avoids Python list construction and repeated `downcast_value_ptr` inside native.
-That is probably smaller than the remaining linalg/view rows, so the next broad
-target should move to `cholesky_32_f64` or the view wrapper cluster.
+Next lever: a narrower axis-0 vector/list ABI that cuts Python list construction
+and repeated `downcast_value_ptr` inside native. That looks smaller than the
+remaining linalg/view rows, so the broader target moves to `cholesky_32_f64` or
+the view wrapper cluster.
 
 ### 2026-05-08 Cholesky typed writeback
 
-`array/decomp/cholesky_32_f64` was not losing because it missed LAPACK.
+`array/decomp/cholesky_32_f64` had already reached LAPACK.
 `sample(1)` on
 `results/profile-20260508-cholesky-32-f64-baseline-monpy/manifest.json`
 showed the native path already inside Accelerate `DPOTRF`; the largest local
 symbol was `array::__init__::physical_offset`, with 686 samples in the report.
 Netlib documents `DPOTRF` as a blocked Cholesky routine that calls Level-3 BLAS,
-so reimplementing the factorization in Mojo was the wrong lever for 32x32. The
-right lever was the row-major result copy after the vendor call.
+so the 32x32 lever was the row-major result copy after the vendor call.
 
 `lapack_cholesky_{f32,f64}_into` now writes the lower-triangular result through
-typed contiguous pointers instead of `set_logical_from_f64` for every output
+typed contiguous pointers, bypassing `set_logical_from_f64` for every output
 element. This removes the per-element shape/stride divmod from a result that is
 freshly allocated, c-contiguous, and already has the exact dtype.
 
-Focused local result:
+Local result:
 
 | row                            | previous monpy us | new monpy us | previous ratio | new ratio |
 | ------------------------------ | ----------------: | -----------: | -------------: | --------: |
@@ -563,20 +568,20 @@ Profile artifacts:
 - `results/profile-20260508-cholesky-32-f64-direct-writeback/manifest.json`
   measured the patched monpy row at 9.744 us/call, down from 16.546 us/call in
   `results/profile-20260508-cholesky-32-f64-baseline-monpy/manifest.json`.
-- The patched sample moved the stack back to Accelerate `DPOTRF`; `physical_offset`
-  no longer appears in the Cholesky hot-path grep. The remaining local staging
-  is `transpose_to_col_major_f64`, so any further Cholesky win needs a layout or
-  `UPLO` policy change rather than another result writeback rewrite.
+- The patched sample moved the stack back to Accelerate `DPOTRF`;
+  `physical_offset` drops out in the Cholesky hot-path grep. The remaining
+  local staging is `transpose_to_col_major_f64`; any further Cholesky win now
+  comes from layout or `UPLO` policy.
 - The CPU Counters xctrace artifact was captured under
   `results/profile-20260508-cholesky-32-f64-direct-writeback/xctrace-cpu-counters.trace`.
   The child loop in that trace measured 9.838 us/call with 3.0 s of user CPU and
   no major faults; the profile manifest stays the durable scalar record.
-- Traced Python allocation peak stayed at 110,752 bytes. This pass removed
-  native arithmetic and branch overhead, not Python allocation churn.
+- Traced Python allocation peak stayed at 110,752 bytes. Native arithmetic and
+  branch overhead moved; Python allocation churn stayed.
 
-The new focused top deficits are view-wrapper and stride rows:
+The focused deficits now are view-wrapper and stride rows:
 `reversed_add_f32`, `flatten_f32`, `ravel_f32`, `moveaxis_f32`, and
-`empty_like_shape_override_f32`. Cholesky is no longer the next broad target.
+`empty_like_shape_override_f32`. The next broad target shifts away from Cholesky.
 
 ### 2026-05-08 native ravel and flatten views
 
@@ -597,7 +602,7 @@ then exposes that copy through a one-dimensional view. This preserves the
 existing Python order surface while moving shape/stride construction and copy
 semantics into one native call.
 
-Focused local result:
+Local result:
 
 | row                       | previous monpy us | new monpy us | previous ratio | new ratio |
 | ------------------------- | ----------------: | -----------: | -------------: | --------: |
@@ -622,8 +627,7 @@ Profile artifacts:
   longer appears in the hot wrapper stack for these cases.
 
 The top rows after this pass are `reversed_add_f32`, `moveaxis_f32`,
-`empty_like_shape_override_f32`, and `transpose_add_f32`. The next high-upside
-view target is therefore negative-stride elementwise dispatch or moveaxis
+`empty_like_shape_override_f32`, and `transpose_add_f32`. Next high-upside view target: negative-stride elementwise dispatch or moveaxis
 permutation metadata, not further `ravel`/`flatten` work.
 
 ### 2026-05-08 F-order transposed binary output
@@ -642,7 +646,7 @@ linear SIMD order, writes the managed result buffer linearly, then marks the
 result strides as `[1, rows]`. That removes the in-register transpose and the
 row-store reshaping work.
 
-Focused local result:
+Local result:
 
 | row                                     | previous monpy us | new monpy us | previous ratio | new ratio |
 | --------------------------------------- | ----------------: | -----------: | -------------: | --------: |
@@ -663,11 +667,11 @@ Profile artifacts:
   faults, and a traced Python allocation peak of 1,856 bytes.
 - The patched sample still spends most native time in
   `maybe_binary_rank2_transposed_tile`, but it is now the linear F-order branch
-  rather than the 4x4 shuffle/store branch.
+  in place of the 4x4 shuffle/store branch.
 
-The new combined `array,strides` frontier is led by
+The combined `array,strides` frontier now starts with
 `strides/elementwise/rank3_transpose_add_f32`, `array/views/reversed_add_f32`,
-and `array/views/moveaxis_f32`. The next broad target should be the rank-3
+and `array/views/moveaxis_f32`. Next broad target: the rank-3
 transpose path's output order: it likely has the same "doing extra layout work
 to force c-contiguous output" smell, only with one more axis in the metadata.
 
@@ -677,7 +681,7 @@ to force c-contiguous output" smell, only with one more axis in the metadata.
 buffers viewed as `.transpose((2, 0, 1))`. The resulting logical shape is
 `[rows, batches, cols]`, but the positive dense element strides are
 `[1, rows * cols, rows]`. NumPy ufuncs default `order` to `K`, so NumPy keeps
-the output in that input element order instead of forcing a c-contiguous result.
+the output in that input element order and keeps the input element order.
 
 The previous monpy rank-3 fused path still used the 4x4 tile shuffle path that
 stores a c-contiguous result. `maybe_binary_rank3_axis0_tile` now detects this
@@ -686,7 +690,7 @@ linear SIMD walk, and marks the result strides as `[1, rows * cols, rows]`.
 That removes the unnecessary layout conversion while preserving NumPy's result
 stride contract.
 
-Focused local result:
+Local result:
 
 | row                                           | previous monpy us | new monpy us | previous ratio | new ratio |
 | --------------------------------------------- | ----------------: | -----------: | -------------: | --------: |
@@ -704,24 +708,23 @@ Profile artifacts:
   major faults, 8 minor faults, 2.925 s user CPU, and 0.029 s system CPU in the
   3 s child loop.
 - The allocation pass traced a 131,312 byte Python peak and reported 52.9 MB
-  max RSS. This pass changed native layout work, not Python allocation shape.
+  max RSS. I changed native layout work, not Python allocation shape.
 - The `sample(1)` report still puts the native time in
   `maybe_binary_rank3_axis0_tile`, now the linear F-order branch. It also shows
   allocator frames under `tc_memalign`, so the next stride-kernel pass should
   separate result allocation cost from pure arithmetic before adding another
   shuffle kernel.
 
-The new combined frontier is led by `array/views/reversed_add_f32` at 2.157x,
+The combined frontier now starts with `array/views/reversed_add_f32` at 2.157x,
 `array/views/moveaxis_f32` at 1.898x, and
-`array/creation/empty_like_shape_override_f32` at 1.875x. The next broad target
-should be negative-stride elementwise dispatch for `reversed_add_f32`, with
+`array/creation/empty_like_shape_override_f32` at 1.875x. Next broad target: negative-stride elementwise dispatch for `reversed_add_f32`, with
 `moveaxis` metadata construction as the next view-wrapper fallback if the
 negative-stride profile points mostly at allocation.
 
 ### 2026-05-08 exact rank-1 reverse slice view
 
 The fresh frontier still put `array/views/reversed_add_f32` first, but direct
-decomposition showed the fused reversed-add arithmetic was not the main cost:
+decomposition showed the fused reversed-add arithmetic was the smaller cost:
 
 | operation                    | monpy us | numpy us |
 | ---------------------------- | -------: | -------: |
@@ -739,10 +742,10 @@ of `(start, stop, step)`.
 `src/create/shape_ops.mojo` now exposes `reverse_1d_ops`, and
 `ndarray.__getitem__` dispatches exact rank-1 `[::-1]` to the new no-argument
 native method before the generic 1-D slice path. The generic path also reads the
-rank-1 length through `shape_at(0)` instead of materializing a one-element Python
+rank-1 length through `shape_at(0)` via a one-element Python
 shape tuple.
 
-Focused local result:
+Local result:
 
 | row                                      | previous monpy us | new monpy us | previous ratio | new ratio |
 | ---------------------------------------- | ----------------: | -----------: | -------------: | --------: |
@@ -751,7 +754,7 @@ Focused local result:
 | `array/views/strided_view_f32`           |             3.717 |        3.431 |         1.799x |    1.609x |
 
 Direct post-change microbenchmarks measured `x[::-1]` at about 0.696 us and
-the full `x[::-1] + y[::-1]` row at about 2.385 us. That is a 2.25:1 reduction
+the full `x[::-1] + y[::-1]` row at about 2.385 us. That gave a 2.25:1 reduction
 for exact reverse view construction and a 1.80:1 reduction for the full direct
 row.
 
@@ -763,31 +766,29 @@ Profile artifacts:
 - `results/profile-20260508-reversed-add-f32-reverse1d-fastpath/manifest.json`
   measured the patched row at 4.789 us/call, 87.2 MB max RSS, no major faults,
   and a 1,856 byte traced Python allocation peak.
-- The post-change `sample(1)` report shows `reverse_1d_ops` instead of the old
+- The post-change `sample(1)` report shows `reverse_1d_ops` in place of the old
   `slice_1d_ops` wrapper stack for the exact `[::-1]` construction. The
   remaining cost is now mostly Python wrapper/object allocation plus the
   existing reversed-add native loop.
 
-The new broad frontier is `empty_like_shape_override_f32` at 1.905x,
-`moveaxis_f32` at 1.891x, and `squeeze_axis0_f32` at 1.849x. The next target
-should be the view-wrapper cluster only after a quick profile decides whether
+The broad frontier now is `empty_like_shape_override_f32` at 1.905x,
+`moveaxis_f32` at 1.891x, and `squeeze_axis0_f32` at 1.849x. Next target: the view-wrapper cluster only after a quick profile decides whether
 `moveaxis` or `empty_like(shape=...)` has the larger removable Python metadata
 tax.
 
 ### 2026-05-08 attention scalar and row-kernel recovery
 
-The linked reference commit, `e2ed21d`, only added `pyyaml`; it was not the
-attention regression point. A detached baseline at that commit measured the
+The linked reference commit, `e2ed21d`, only added `pyyaml`; it was only a PyYAML commit. A detached baseline at that commit measured the
 attention rows as:
 
-| row | `e2ed21d` monpy us | current-start monpy us | post-fix monpy us | post-fix ratio |
-| --- | -----------------: | ---------------------: | ----------------: | -------------: |
-| `attention/softmax/causal_scores_t32_f32` | 57.121 | 47.262 | 21.292 | 1.988x |
-| `attention/attention/causal_attention_t32_d32_f32` | 133.539 | 121.953 | 43.121 | 1.907x |
-| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 1606.192 | 1534.498 | 165.275 | 1.569x |
+| row                                                | `e2ed21d` monpy us | current-start monpy us | post-fix monpy us | post-fix ratio |
+| -------------------------------------------------- | -----------------: | ---------------------: | ----------------: | -------------: |
+| `attention/softmax/causal_scores_t32_f32`          |             57.121 |                 47.262 |            21.292 |         1.988x |
+| `attention/attention/causal_attention_t32_d32_f32` |            133.539 |                121.953 |            43.121 |         1.907x |
+| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32`   |           1606.192 |               1534.498 |           165.275 |         1.569x |
 
 The bad current-start profile was still real. It just came from the attention
-stack's generic paths, not the PyYAML commit:
+stack's generic paths, the attention stack itself:
 
 - `reduce_axis_ops` used the coordinate-list f64 walker for every
   `axis=-1, keepdims=True` row reduction. Direct softmax decomposition showed
@@ -800,7 +801,7 @@ stack's generic paths, not the PyYAML commit:
   matmuls. The two rectangular matmuls were about 565 us each before fixing
   weak scalar handling.
 
-This pass added three general fast paths rather than benchmark-only branches:
+I added three general fast paths with benchmark rows as witnesses:
 
 - C-contiguous last-axis reductions for float32/float64 `sum`, `mean`, `prod`,
   `min`, and `max`. The sum/mean path reuses the existing 4-accumulator SIMD
@@ -809,31 +810,30 @@ This pass added three general fast paths rather than benchmark-only branches:
   float64. This covers softmax row shifts/divides and layer-norm centering.
 - Same-shape bool-mask `where` for contiguous float32/float64 arrays, plus weak
   Python-scalar ufunc dispatch so `mnp.power(float32_array, 3.0)` stays float32.
-  Scalar power `x**2` and `x**3` now lower to multiplication instead of libm
-  `pow`.
+  Scalar power `x**2` and `x**3` now lower to multiplication through multiplication.
 
 Direct microbenchmarks for the attention shapes moved as follows:
 
-| operation | before us | after us |
-| --- | --------: | -------: |
-| `mnp.max(scores, axis=-1, keepdims=True)` | 11.492 | 2.658 |
-| `mnp.sum(scores, axis=-1, keepdims=True)` | 11.272 | 2.326 |
-| `scores - row_max` with a prebuilt `(32, 1)` row max | 8.7-ish | 4.858 |
-| `mnp.where(causal_mask, fill, scores)` | 55.867 | 3.443 |
-| `mnp.power(x_f32, 3.0)` for a 32x128 MLP activation | 64.073 | 2.379 |
-| `_gelu_monpy(32x128)` | about 61.4 after mask work | 37.245 |
+| operation                                            |                  before us | after us |
+| ---------------------------------------------------- | -------------------------: | -------: |
+| `mnp.max(scores, axis=-1, keepdims=True)`            |                     11.492 |    2.658 |
+| `mnp.sum(scores, axis=-1, keepdims=True)`            |                     11.272 |    2.326 |
+| `scores - row_max` with a prebuilt `(32, 1)` row max |                    8.7-ish |    4.858 |
+| `mnp.where(causal_mask, fill, scores)`               |                     55.867 |    3.443 |
+| `mnp.power(x_f32, 3.0)` for a 32x128 MLP activation  |                     64.073 |    2.379 |
+| `_gelu_monpy(32x128)`                                | about 61.4 after mask work |   37.245 |
 
-Post-fix decomposition now has the GPT row dominated by compositional layer
+After the patch, decomposition has the GPT row dominated by compositional layer
 norm and attention overhead, not BLAS misses:
 
-| operation | monpy us | numpy us |
-| --- | -------: | -------: |
-| layer norm, one 32x32 block | 23.699 | 10.844 |
-| causal attention on normalized input | 39.176 | 18.755 |
-| GELU on 32x128 MLP activation | 31.778 | 39.254 |
-| MLP output matmul | 1.674 | n/a |
-| final `lm_head` matmul | 1.624 | n/a |
-| full tiny GPT logits | 160.262 | 100.863 |
+| operation                            | monpy us | numpy us |
+| ------------------------------------ | -------: | -------: |
+| layer norm, one 32x32 block          |   23.699 |   10.844 |
+| causal attention on normalized input |   39.176 |   18.755 |
+| GELU on 32x128 MLP activation        |   31.778 |   39.254 |
+| MLP output matmul                    |    1.674 |      n/a |
+| final `lm_head` matmul               |    1.624 |      n/a |
+| full tiny GPT logits                 |  160.262 |  100.863 |
 
 Profile artifacts:
 
@@ -854,14 +854,14 @@ Profile artifacts:
   allocation around layer norm / softmax composition.
 
 Next target: fused row softmax and fused row layer norm. The current arithmetic
-is no longer absurd, but the benchmark still makes several Python/native
+is sane again, and the benchmark still makes several Python/native
 round-trips and temporary arrays per row-normalization step. A single-pass
 last-axis layer norm and a stable row softmax would attack the remaining
 1.57x GPT gap directly.
 
 ### 2026-05-08 `monpy.nn` compile fix
 
-The first `src/nn` split failed at the Mojo extension boundary:
+My first `src/nn` split failed at the Mojo extension boundary:
 
 ```text
 src/lib.mojo:84:16: error: package 'nn' does not contain 'layer_norm_last_axis_ops'
@@ -878,8 +878,8 @@ hit the same owner. The working shape is:
 - import the bridge functions in `src/lib.mojo` with the rest of `from create import ...`
 - keep `python/monpy/nn` as the public Python import scope
 
-This keeps the public Python surface as `monpy.nn` while avoiding collision with
-MAX's own `nn` package. Focused verification:
+This keeps the public Python surface as `monpy.nn` while sidestepping collision with
+MAX's own `nn` package. Verification:
 
 ```text
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
@@ -896,7 +896,7 @@ The editable build completed with the existing ld64 target-version warning, the
 three focused tests passed, and both import-scope identity checks printed
 `True`. A one-round attention benchmark smoke also wrote
 `results/local-sweep-20260508-nn-compile-smoke/manifest.json`; treat that as an
-import/runner smoke only, not a stable performance sample.
+import/runner smoke only, a deliberately unstable performance sample.
 
 Follow-up naming consolidation:
 
@@ -906,7 +906,7 @@ Follow-up naming consolidation:
 - `src/elementwise/kernels/nn.mojo` owns the row-wise NN loop bodies
 - `src/elementwise/kernels/matmul.mojo` owns the matmul loop/BLAS dispatchers
 
-Focused verification after the role-first package move:
+Verification after the role-first package move:
 
 ```text
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
@@ -930,7 +930,7 @@ attention rows were already ahead of NumPy on the current machine, while the
 wrapper-bound `array/elementwise/binary_add_out_f32` row still cost 2.126x NumPy
 time. The benchmark already had a lower-level extension comparison,
 `binary_add_extension_out_f32`, at 1.128x, which isolated most of the remaining
-gap to Python ufunc dispatch rather than the native loop.
+gap to Python ufunc dispatch over the native loop.
 
 `python/monpy/__init__.py` now gives the exact `ndarray, ndarray, out=ndarray`
 binary ufunc case a direct `_native.binary_into(...)` path before the staged
@@ -938,7 +938,7 @@ kernel probe and promotion machinery. This is intentionally narrow: default
 `where=True`, default `casting="same_kind"`, no `dtype=`, exact `ndarray` inputs,
 and exact `ndarray` output.
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_numeric.py::test_binary_out_writes_existing_destination tests/python/numpy_compat/test_ufunc.py::test_ufunc_out_kwarg_writes_in_place tests/python/numpy_compat/test_ufunc.py::test_ufunc_dtype_kwarg_casts -q
@@ -947,33 +947,32 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types array --loops 50 --re
 
 The focused tests passed. Before/after for the wrapper-bound rows:
 
-| row | before | after | delta |
-| --- | ---: | ---: | ---: |
-| `binary_add_out_f32` | 5.103 us, 2.116x | 2.955 us, 1.263x | 1.73x faster |
-| `binary_add_f32` | 3.126 us, 1.248x | 3.050 us, 1.247x | neutral |
-| `binary_add_extension_out_f32` | 2.694 us, 1.128x | 2.667 us, 1.135x | neutral |
+| row                            |           before |            after |        delta |
+| ------------------------------ | ---------------: | ---------------: | -----------: |
+| `binary_add_out_f32`           | 5.103 us, 2.116x | 2.955 us, 1.263x | 1.73x faster |
+| `binary_add_f32`               | 3.126 us, 1.248x | 3.050 us, 1.247x |      neutral |
+| `binary_add_extension_out_f32` | 2.694 us, 1.128x | 2.667 us, 1.135x |      neutral |
 
-Next target remains `complex/matmul_64_complex64`: it already reports
+Next target: `complex/matmul_64_complex64`: it already reports
 `used_accelerate=True`, so the investigation should focus on BLAS function
 lookup/call overhead, row-major complex GEMM calling convention, and whether a
 small-N Mojo complex microkernel can beat the framework call for 64x64.
 
 ### 2026-05-08 macOS ILP64 complex GEMM
 
-The refreshed heartbeat slice confirmed attention was no longer the hot
-regression on this machine:
+The refreshed heartbeat slice confirmed attention had already moved below NumPy on this machine:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 81.206 | 109.272 | 0.743x |
-| `attention/softmax/causal_scores_t32_f32` | 8.144 | 10.272 | 0.814x |
-| `attention/attention/causal_attention_t32_d32_f32` | 20.717 | 22.987 | 0.914x |
+| row                                                | monpy us | numpy us |  ratio |
+| -------------------------------------------------- | -------: | -------: | -----: |
+| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32`   |   81.206 |  109.272 | 0.743x |
+| `attention/softmax/causal_scores_t32_f32`          |    8.144 |   10.272 | 0.814x |
+| `attention/attention/causal_attention_t32_d32_f32` |   20.717 |   22.987 | 0.914x |
 
 The same run left `complex/matmul_64_complex64` as the largest direct blocker:
 16.257 us for monpy vs 7.221 us for NumPy, a 2.318x ratio. `used_accelerate()`
-was already true, so the failure was not a missed BLAS dispatch.
+was already true, so BLAS dispatch was already active.
 
-The useful profiler fact was the symbol, not just the wall clock:
+The useful profiler fact I cared about was the symbol, not just the wall clock:
 
 - pre-fix monpy sample:
   `maybe_matmul_contiguous -> cblas_sgemm` inside `libBLAS.dylib`
@@ -996,7 +995,7 @@ the exact 64x64 complex64 workload measured the old symbol at about 17.020
 us/call and the ILP64 symbol at about 8.490 us/call, which matched the monpy
 delta after rebuilding.
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
@@ -1005,28 +1004,28 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/matmul/matmul_64_complex64 --types complex --matrix-sizes 64 --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260508-complex-matmul64-ilp64-monpy --sample --no-perf-stat
 ```
 
-Post-fix benchmark results:
+After the patch:
 
-| row | before | after | delta |
-| --- | ---: | ---: | ---: |
+| row                           |            before |            after |        delta |
+| ----------------------------- | ----------------: | ---------------: | -----------: |
 | `complex/matmul_64_complex64` | 16.257 us, 2.318x | 7.277 us, 1.042x | 2.23x faster |
 
 The post-fix profile loop measured 7.535 us/call, 49.7 MB max RSS, no major
-faults, and a 1,590 byte traced allocation peak. Next target moves to the
+faults, and a 1,590 byte traced allocation peak. Next target: the
 complex conversion/view cluster: `astype_complex64_to_complex128` remains
 2.008x NumPy, followed by `reversed_add_complex64` at 1.871x.
 
 ### 2026-05-08 complex width-cast lane fast path
 
-The next live complex rerun after the ILP64 GEMM fix ranked the remaining
+Next, I reran the live complex slice after the ILP64 GEMM fix ranked the remaining
 frontier as:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/casts/astype_complex64_to_complex128` | 5.289 | 2.579 | 2.051x |
-| `complex/views/reversed_add_complex64` | 5.885 | 3.057 | 1.929x |
-| `complex/interop/asarray_complex64` | 3.052 | 1.958 | 1.556x |
-| `complex/interop/array_copy_complex128` | 3.807 | 2.443 | 1.547x |
+| row                                            | monpy us | numpy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `complex/casts/astype_complex64_to_complex128` |    5.289 |    2.579 | 2.051x |
+| `complex/views/reversed_add_complex64`         |    5.885 |    3.057 | 1.929x |
+| `complex/interop/asarray_complex64`            |    3.052 |    1.958 | 1.556x |
+| `complex/interop/array_copy_complex128`        |    3.807 |    2.443 | 1.547x |
 
 The old cast path treated all complex casts as the general fallback:
 per-logical-element, fetch real/imag via accessors, widen to `Float64`, then
@@ -1041,7 +1040,7 @@ Complex → real still drops imaginary values through the existing fallback, and
 real → complex still writes zero imaginary lanes through the existing setter
 logic.
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
@@ -1050,35 +1049,35 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/casts/astype_complex64_to_complex128 --types complex --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260508-complex-astype-width-fastpath --sample --no-perf-stat
 ```
 
-Post-fix benchmark results:
+After the patch:
 
-| row | before | after | delta |
-| --- | ---: | ---: | ---: |
+| row                                            |           before |            after |        delta |
+| ---------------------------------------------- | ---------------: | ---------------: | -----------: |
 | `complex/casts/astype_complex64_to_complex128` | 5.289 us, 2.051x | 3.298 us, 1.260x | 1.60x faster |
 
 The post-fix profile loop measured 3.442 us/call, 49.7 MB max RSS, no major
 faults, and a 1,590 byte traced allocation peak. The sample now puts the hot
 native frame in `_complex_contig_lane_cast[f32,f64]`, which is the expected
-storage-level path. The new top complex deficit is `reversed_add_complex64` at
+storage-level path. The top complex deficit now is `reversed_add_complex64` at
 1.891x, then complex ingress/copy rows around 1.5x.
 
 ### 2026-05-08 reversed complex add native rank-1 path
 
-The next complex slice kept `complex/views/reversed_add_complex64` as the most
+Next, I kept the complex slice kept `complex/views/reversed_add_complex64` as the most
 visible view/kernel row:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/views/reversed_add_complex64` | 5.807 | 3.011 | 1.929x |
-| `complex/interop/array_copy_complex128` | 3.791 | 2.443 | 1.551x |
-| `complex/interop/asarray_complex64` | 3.023 | 1.958 | 1.543x |
-| `complex/elementwise/binary_mul_complex64` | 3.488 | 2.547 | 1.369x |
+| row                                        | monpy us | numpy us |  ratio |
+| ------------------------------------------ | -------: | -------: | -----: |
+| `complex/views/reversed_add_complex64`     |    5.807 |    3.011 | 1.929x |
+| `complex/interop/array_copy_complex128`    |    3.791 |    2.443 | 1.551x |
+| `complex/interop/asarray_complex64`        |    3.023 |    1.958 | 1.543x |
+| `complex/elementwise/binary_mul_complex64` |    3.488 |    2.547 | 1.369x |
 
 The pre-fix backend probe reported `used_accelerate=True`; the sample made the
 problem concrete. For a 1024-element `complex64[::-1] + complex64[::-1]`, monpy
 was issuing two small strided `vDSP_vadd` calls, one for real lanes and one for
 imaginary lanes. At this size the library-call and strided-dispatch overhead
-beat the useful arithmetic. The scalar generic fallback was not the right shape
+beat the useful arithmetic. The scalar generic fallback kept the wrong cost model
 either, because it pays `physical_offset` per complex element.
 
 `src/elementwise/kernels/complex.mojo` now has a rank-1 strided complex kernel
@@ -1087,7 +1086,7 @@ ADD/SUB case it uses a small SIMD pair-reversal path: load two adjacent complex
 values from the reversed physical span, reverse pair order in-register, then
 store four float lanes to the contiguous result. MUL/DIV also use the
 incremental-index rank-1 path, with the existing Smith division logic, so
-negative-stride complex arithmetic no longer falls back to `physical_offset`.
+negative-stride complex arithmetic uses an incremental-index path instead of falling back to `physical_offset`.
 
 `python/monpy/__init__.py` also trims the exact one-dimensional `[::-1]` path:
 it calls the native `reverse_1d_method()` directly before the extra `ndim()`
@@ -1095,7 +1094,7 @@ probe, and only falls back to the general slice machinery when the native method
 reports a non-rank-1 array. This preserves the multidimensional `a[::-1]`
 behavior while shaving the benchmark's two view constructions.
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
@@ -1104,32 +1103,32 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/views/reversed_add_complex64 --types complex --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-reversed-add-simd-fast-slice --sample --no-perf-stat
 ```
 
-Post-fix benchmark results:
+After the patch:
 
-| row | before | after | delta |
-| --- | ---: | ---: | ---: |
+| row                                    |           before |            after |        delta |
+| -------------------------------------- | ---------------: | ---------------: | -----------: |
 | `complex/views/reversed_add_complex64` | 5.807 us, 1.929x | 4.387 us, 1.361x | 1.32x faster |
 
 The profile loop measured 4.277 us/call, 49.6 MB max RSS, no major faults, and
 a 1,728 byte traced allocation peak. Backend reporting flipped from Accelerate
-to FUSED for the result, which is expected: the hot path now avoids the two
+to FUSED for the result, which is expected: the hot path now skips the two
 strided vDSP calls. A direct local timing split also showed the slice change:
 one `complex64` reverse view fell from about 0.639 us to 0.499 us, and the full
 `a[::-1] + b[::-1]` expression fell from about 2.58 us to 1.99 us in the
 micro-timer.
 
-The updated complex frontier is now the ingress/copy cluster plus one arithmetic
+The complex frontier now is the ingress/copy cluster plus one arithmetic
 kernel:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/array_copy_complex128` | 4.036 | 2.659 | 1.518x |
-| `complex/interop/asarray_complex64` | 3.104 | 2.055 | 1.511x |
-| `complex/elementwise/binary_mul_complex64` | 3.577 | 2.615 | 1.368x |
-| `complex/views/reversed_add_complex64` | 4.387 | 3.224 | 1.361x |
+| row                                        | monpy us | numpy us |  ratio |
+| ------------------------------------------ | -------: | -------: | -----: |
+| `complex/interop/array_copy_complex128`    |    4.036 |    2.659 | 1.518x |
+| `complex/interop/asarray_complex64`        |    3.104 |    2.055 | 1.511x |
+| `complex/elementwise/binary_mul_complex64` |    3.577 |    2.615 | 1.368x |
+| `complex/views/reversed_add_complex64`     |    4.387 |    3.224 | 1.361x |
 
-Next target should be complex ingress/copy. The likely win is keeping NumPy
-complex buffers on a narrow typed copy path instead of round-tripping through
+Next target: complex ingress/copy. The likely win is keeping NumPy
+complex buffers on a narrow typed copy path directly instead of
 generic scalar extraction.
 
 ### 2026-05-08 direct NumPy buffer ingress
@@ -1144,11 +1143,11 @@ The smaller, useful fix is simpler: when `monpy.asarray()` sees a NumPy ndarray,
 it now calls the existing native `asarray_from_buffer` bridge directly instead
 of routing through `runtime.ops_numpy.is_array_input()` and
 `runtime.ops_numpy._from_numpy_unchecked()`. That keeps dtype/copy semantics in
-the same native buffer decoder, avoids a Python module wrapper hop on the hot
+the same native buffer decoder, skips a Python module wrapper hop on the hot
 path, and still falls back to `runtime.ops_numpy` for any future exotic NumPy
 case the local probe misses.
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_array_coercion.py::test_numpy_array_copy_false_shares_storage tests/python/numpy_compat/test_array_coercion.py::test_numpy_array_copy_true_detaches_storage tests/python/numpy_compat/test_array_coercion.py::test_numpy_array_readonly_copy_false_raises_and_copy_none_detaches tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_round_trip tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_copy_false_shares_storage tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_copy_true_detaches_storage -q
@@ -1156,11 +1155,11 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/interop/asarray_complex64 --types complex --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-asarray-complex64-direct-numpy-buffer --sample --no-perf-stat
 ```
 
-Post-fix benchmark results:
+After the patch:
 
-| row | before | after | delta |
-| --- | ---: | ---: | ---: |
-| `complex/interop/asarray_complex64` | 3.005 us, 1.549x | 2.882 us, 1.484x | 1.04x faster |
+| row                                     |           before |            after |        delta |
+| --------------------------------------- | ---------------: | ---------------: | -----------: |
+| `complex/interop/asarray_complex64`     | 3.005 us, 1.549x | 2.882 us, 1.484x | 1.04x faster |
 | `complex/interop/array_copy_complex128` | 3.758 us, 1.535x | 3.647 us, 1.475x | 1.03x faster |
 
 The profile loop for `complex/interop/asarray_complex64` moved from 3.242
@@ -1171,16 +1170,16 @@ still `buffer::asarray_from_buffer_ops`, which is expected: this patch removes
 Python wrapper overhead, not memory traffic or SIMD work. No hardware PMU
 counters were collected in this run because `--no-perf-stat` was used.
 
-The remaining complex frontier after this slice:
+Remaining complex frontier:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/elementwise/binary_mul_complex64` | 3.455 | 2.538 | 1.364x |
-| `complex/elementwise/binary_add_complex64` | 3.082 | 2.438 | 1.265x |
-| `complex/elementwise/binary_add_complex128` | 3.253 | 2.619 | 1.248x |
-| `complex/matmul_64_complex64` | 7.517 | 7.124 | 1.055x |
+| row                                         | monpy us | numpy us |  ratio |
+| ------------------------------------------- | -------: | -------: | -----: |
+| `complex/elementwise/binary_mul_complex64`  |    3.455 |    2.538 | 1.364x |
+| `complex/elementwise/binary_add_complex64`  |    3.082 |    2.438 | 1.265x |
+| `complex/elementwise/binary_add_complex128` |    3.253 |    2.619 | 1.248x |
+| `complex/matmul_64_complex64`               |    7.517 |    7.124 | 1.055x |
 
-Next target should be `complex/elementwise/binary_mul_complex64`. It is no
+Next target: `complex/elementwise/binary_mul_complex64`. It is no
 longer an ingress problem; the likely work is inside the complex multiply
 kernel, specifically redundant real/imag lane loads, scalar temporary pressure,
 and whether a wider interleaved-lane SIMD path beats the current per-element
@@ -1188,19 +1187,19 @@ Smith-compatible shape for multiplication.
 
 ### 2026-05-08 complex64 multiply interleaved SIMD
 
-The next refreshed complex slice ranked the live deficits as:
+Next, I refreshed the complex slice ranked the live deficits as:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.922 | 1.953 | 1.501x |
-| `complex/interop/array_copy_complex128` | 3.679 | 2.463 | 1.491x |
-| `complex/views/reversed_add_complex64` | 4.209 | 3.065 | 1.371x |
-| `complex/elementwise/binary_mul_complex64` | 3.497 | 2.547 | 1.368x |
+| row                                        | monpy us | numpy us |  ratio |
+| ------------------------------------------ | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`        |    2.922 |    1.953 | 1.501x |
+| `complex/interop/array_copy_complex128`    |    3.679 |    2.463 | 1.491x |
+| `complex/views/reversed_add_complex64`     |    4.209 |    3.065 | 1.371x |
+| `complex/elementwise/binary_mul_complex64` |    3.497 |    2.547 | 1.368x |
 
 The multiply row was the useful kernel target. It was still using the scalar
 contiguous complex loop: two loads from each input, four multiplies, two
 add/sub operations, and two stores per complex element. That is correct, but it
-does not use the fact that complex64 storage is interleaved float lanes.
+leaves unused the fact that complex64 storage is interleaved float lanes.
 
 `src/elementwise/kernels/complex.mojo` now adds a `float32x4` path for
 contiguous complex multiply. Each vector load covers two complex values:
@@ -1212,9 +1211,9 @@ is untouched.
 
 `src/elementwise/binary_dispatch.mojo` now also marks the non-Accelerate
 contiguous complex path as `BackendKind.FUSED`, so benchmark/profile manifests
-report the native fused kernel instead of the default backend code.
+report the native fused kernel as fused backend code.
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
@@ -1223,10 +1222,10 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/elementwise/binary_mul_complex64 --types complex --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-complex-mul-simd-fused --sample --no-perf-stat
 ```
 
-Post-fix benchmark results:
+After the patch:
 
-| row | before | after | delta |
-| --- | ---: | ---: | ---: |
+| row                                        |           before |            after |        delta |
+| ------------------------------------------ | ---------------: | ---------------: | -----------: |
 | `complex/elementwise/binary_mul_complex64` | 3.497 us, 1.368x | 3.210 us, 1.180x | 1.09x faster |
 
 The post-fix profile manifest reports `used_fused=True`, `backend_code=2`, no
@@ -1235,22 +1234,21 @@ The profile loop moved from 3.593 us/call to 3.275 us/call; the `sample` child
 loop moved from 3.745 us/call to 3.424 us/call. Hardware PMU counters were not
 collected in this run because `--no-perf-stat` was used.
 
-The remaining complex frontier after this slice:
+Remaining complex frontier:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/array_copy_complex128` | 3.849 | 2.590 | 1.454x |
-| `complex/interop/asarray_complex64` | 3.002 | 2.078 | 1.449x |
-| `complex/views/reversed_add_complex64` | 4.324 | 3.169 | 1.356x |
-| `complex/casts/astype_complex64_to_complex128` | 3.387 | 2.704 | 1.272x |
-| `complex/elementwise/binary_add_complex64` | 3.270 | 2.575 | 1.255x |
-| `complex/elementwise/binary_add_complex128` | 3.330 | 2.751 | 1.211x |
-| `complex/elementwise/binary_mul_complex64` | 3.210 | 2.638 | 1.180x |
-| `complex/matmul_64_complex64` | 7.355 | 7.147 | 1.055x |
+| row                                            | monpy us | numpy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/array_copy_complex128`        |    3.849 |    2.590 | 1.454x |
+| `complex/interop/asarray_complex64`            |    3.002 |    2.078 | 1.449x |
+| `complex/views/reversed_add_complex64`         |    4.324 |    3.169 | 1.356x |
+| `complex/casts/astype_complex64_to_complex128` |    3.387 |    2.704 | 1.272x |
+| `complex/elementwise/binary_add_complex64`     |    3.270 |    2.575 | 1.255x |
+| `complex/elementwise/binary_add_complex128`    |    3.330 |    2.751 | 1.211x |
+| `complex/elementwise/binary_mul_complex64`     |    3.210 |    2.638 | 1.180x |
+| `complex/matmul_64_complex64`                  |    7.355 |    7.147 | 1.055x |
 
-Next target should move back to the interop/copy cluster, but the likely owner
-is allocation and Python/native wrapper overhead rather than another SIMD
-kernel. The useful question is whether `array(copy=True)` can call a narrower
+Next target: the interop/copy cluster, but the likely owner
+is allocation and Python/native wrapper overhead over another SIMD kernel. The useful question is whether `array(copy=True)` can call a narrower
 native copy entrypoint that combines buffer import, allocation, and memcpy with
 fewer Python object transitions.
 
@@ -1259,23 +1257,23 @@ fewer Python object transitions.
 The refreshed complex slice ranked `array_copy_complex128` and
 `asarray_complex64` above the arithmetic rows:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/array_copy_complex128` | 3.603 | 2.438 | 1.477x |
-| `complex/interop/asarray_complex64` | 2.885 | 1.990 | 1.450x |
-| `complex/views/reversed_add_complex64` | 4.142 | 3.039 | 1.364x |
-| `complex/elementwise/binary_add_complex64` | 3.083 | 2.516 | 1.245x |
-| `complex/elementwise/binary_add_complex128` | 3.271 | 2.673 | 1.238x |
-| `complex/elementwise/binary_mul_complex64` | 3.085 | 2.543 | 1.204x |
+| row                                         | monpy us | numpy us |  ratio |
+| ------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/array_copy_complex128`     |    3.603 |    2.438 | 1.477x |
+| `complex/interop/asarray_complex64`         |    2.885 |    1.990 | 1.450x |
+| `complex/views/reversed_add_complex64`      |    4.142 |    3.039 | 1.364x |
+| `complex/elementwise/binary_add_complex64`  |    3.083 |    2.516 | 1.245x |
+| `complex/elementwise/binary_add_complex128` |    3.271 |    2.673 | 1.238x |
+| `complex/elementwise/binary_mul_complex64`  |    3.085 |    2.543 | 1.204x |
 
-The first fix keeps same-dtype C-contiguous buffer copies inside
+First, I kept same-dtype C-contiguous buffer copies inside
 `asarray_from_buffer_ops`: allocate the destination array, compute the storage
 byte count, and `memcpy` directly from `Py_buffer.buf`. The old path wrapped the
 source as an external `Array`, cloned shape/stride metadata, then called
 `copy_c_contiguous`. The direct copy leaf preserves the fallback path for
 strided inputs, dtype conversion, and readonly/copy policy failures.
 
-The second fix changes the small complex ADD/SUB cost model. Contiguous
+Second, I changed the small complex ADD/SUB cost model. Contiguous
 complex64/complex128 ADD/SUB was going through Accelerate vDSP even for the
 1024-element benchmark row. At that size the framework call toll is larger than
 the existing typed SIMD loop, so `maybe_complex_binary_contiguous_accelerate`
@@ -1283,7 +1281,7 @@ now only uses vDSP at 4096 complex elements and above. The 1024-element row
 stays in the Mojo fused kernel (`backend_code=2`, `used_fused=True`,
 `used_accelerate=False`).
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
@@ -1293,14 +1291,14 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case com
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/elementwise/binary_add_complex64 --types complex --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-binary-add-complex64-numpy --sample --no-perf-stat
 ```
 
-Post-fix benchmark results:
+After the patch:
 
-| row | before | after | delta |
-| --- | ---: | ---: | ---: |
-| `complex/interop/array_copy_complex128` | 3.603 us, 1.477x | 3.539 us, 1.421x | 1.02x faster |
-| `complex/elementwise/binary_add_complex64` | 3.083 us, 1.245x | 2.981 us, 1.216x | 1.03x faster |
+| row                                         |           before |            after |        delta |
+| ------------------------------------------- | ---------------: | ---------------: | -----------: |
+| `complex/interop/array_copy_complex128`     | 3.603 us, 1.477x | 3.539 us, 1.421x | 1.02x faster |
+| `complex/elementwise/binary_add_complex64`  | 3.083 us, 1.245x | 2.981 us, 1.216x | 1.03x faster |
 | `complex/elementwise/binary_add_complex128` | 3.271 us, 1.238x | 3.227 us, 1.226x | 1.01x faster |
-| `complex/elementwise/binary_mul_complex64` | 3.085 us, 1.204x | 3.067 us, 1.196x | flat/noise |
+| `complex/elementwise/binary_mul_complex64`  | 3.085 us, 1.204x | 3.067 us, 1.196x |   flat/noise |
 
 Direct microbenchmarks show the copy leaf moving even though the full
 benchmark is mostly wrapper-bound: native complex128 buffer copy moved from
@@ -1309,46 +1307,46 @@ to 1.313 us. NumPy stayed around 0.42 us for the same copy.
 
 The profile comparison for `complex/elementwise/binary_add_complex64` reports:
 
-| candidate | us/call | max RSS | traced peak | backend |
-| --- | ---: | ---: | ---: | --- |
-| monpy | 3.200 | 49.7 MB | 1,590 B | fused Mojo, no Accelerate |
-| numpy | 2.643 | 49.5 MB | 17,608 B | n/a |
+| candidate | us/call | max RSS | traced peak | backend                   |
+| --------- | ------: | ------: | ----------: | ------------------------- |
+| monpy     |   3.200 | 49.7 MB |     1,590 B | fused Mojo, no Accelerate |
+| numpy     |   2.643 | 49.5 MB |    17,608 B | n/a                       |
 
 No PMU counters were collected in this run because `--no-perf-stat` was used.
 The macOS `sample(1)` stacks were written under
 `results/local-profile-20260509-binary-add-complex64-*`; they mostly show the
 benchmark harness and Python call/attribute machinery, so the next useful
-profile pass should use Instruments CPU Counters or a Linux `perf stat` run
+I would use Instruments CPU Counters or a Linux `perf stat` run
 when we want instruction/cache ratios rather than wall-clock deltas.
 
-Remaining frontier after this slice:
+Remaining frontier:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.896 | 1.972 | 1.484x |
-| `complex/interop/array_copy_complex128` | 3.539 | 2.481 | 1.421x |
-| `complex/views/reversed_add_complex64` | 4.167 | 3.068 | 1.361x |
-| `complex/casts/astype_complex64_to_complex128` | 3.267 | 2.576 | 1.265x |
-| `complex/elementwise/binary_add_complex128` | 3.227 | 2.636 | 1.226x |
-| `complex/elementwise/binary_add_complex64` | 2.981 | 2.451 | 1.216x |
-| `complex/elementwise/binary_mul_complex64` | 3.067 | 2.571 | 1.196x |
-| `complex/matmul_64_complex64` | 7.576 | 7.161 | 1.061x |
+| row                                            | monpy us | numpy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`            |    2.896 |    1.972 | 1.484x |
+| `complex/interop/array_copy_complex128`        |    3.539 |    2.481 | 1.421x |
+| `complex/views/reversed_add_complex64`         |    4.167 |    3.068 | 1.361x |
+| `complex/casts/astype_complex64_to_complex128` |    3.267 |    2.576 | 1.265x |
+| `complex/elementwise/binary_add_complex128`    |    3.227 |    2.636 | 1.226x |
+| `complex/elementwise/binary_add_complex64`     |    2.981 |    2.451 | 1.216x |
+| `complex/elementwise/binary_mul_complex64`     |    3.067 |    2.571 | 1.196x |
+| `complex/matmul_64_complex64`                  |    7.576 |    7.161 | 1.061x |
 
-Next target should stay on the interop cluster. The direct copy leaf helped the
+Next target: the interop cluster. The direct copy leaf helped the
 native portion, but the row is still 1.42x NumPy because object creation and
 buffer classification dominate the remaining cost.
 
 ### 2026-05-09 specialized complex buffer wrappers
 
-The next pass kept the existing benchmark harness fixed and refreshed the
+Next, I kept the existing benchmark harness fixed and refreshed the
 complex slice:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.911 | 1.963 | 1.484x |
-| `complex/interop/array_copy_complex128` | 3.479 | 2.456 | 1.420x |
-| `complex/views/reversed_add_complex64` | 4.134 | 3.044 | 1.358x |
-| `complex/casts/astype_complex64_to_complex128` | 3.258 | 2.557 | 1.270x |
+| row                                            | monpy us | numpy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`            |    2.911 |    1.963 | 1.484x |
+| `complex/interop/array_copy_complex128`        |    3.479 |    2.456 | 1.420x |
+| `complex/views/reversed_add_complex64`         |    4.134 |    3.044 | 1.358x |
+| `complex/casts/astype_complex64_to_complex128` |    3.258 |    2.557 | 1.270x |
 
 One important measurement wrinkle: `time_call()` still enters
 `warnings.catch_warnings()` through `call_bench_fn()` for every timed loop
@@ -1359,14 +1357,14 @@ are better for isolating the actual ingress leaf.
 
 The raw ingress timings showed the target clearly:
 
-| path | before | after |
-| --- | ---: | ---: |
-| generic native complex64 view | 0.461 us | 0.461 us |
-| specialized native complex64 view | n/a | 0.366 us |
+| path                                          |   before |    after |
+| --------------------------------------------- | -------: | -------: |
+| generic native complex64 view                 | 0.461 us | 0.461 us |
+| specialized native complex64 view             |      n/a | 0.366 us |
 | `monumpy.asarray(..., complex64, copy=False)` | 0.838 us | 0.665 us |
-| generic native complex128 copy | 0.828 us | 0.828 us |
-| specialized native complex128 copy | n/a | 0.729 us |
-| `monumpy.array(..., complex128, copy=True)` | 1.277 us | 1.051 us |
+| generic native complex128 copy                | 0.828 us | 0.828 us |
+| specialized native complex128 copy            |      n/a | 0.729 us |
+| `monumpy.array(..., complex128, copy=True)`   | 1.277 us | 1.051 us |
 
 `src/buffer.mojo` now splits the old Python-object argument decoder from the
 actual buffer implementation. The generic public function still accepts
@@ -1383,7 +1381,7 @@ used by the benchmark. Everything else falls back to the generic buffer bridge,
 so dtype conversion, readonly handling, strided copies, and exotic dtype errors
 stay centralized.
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
@@ -1393,11 +1391,11 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case com
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/interop/array_copy_complex128 --types complex --candidate monpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-array-copy-complex128-specialized-buffer --sample --no-perf-stat
 ```
 
-Official post-fix benchmark results:
+Official result after the patch:
 
-| row | before | after | delta |
-| --- | ---: | ---: | ---: |
-| `complex/interop/asarray_complex64` | 2.911 us, 1.484x | 2.817 us, 1.417x | 1.03x faster |
+| row                                     |           before |            after |        delta |
+| --------------------------------------- | ---------------: | ---------------: | -----------: |
+| `complex/interop/asarray_complex64`     | 2.911 us, 1.484x | 2.817 us, 1.417x | 1.03x faster |
 | `complex/interop/array_copy_complex128` | 3.479 us, 1.420x | 3.312 us, 1.318x | 1.05x faster |
 
 The profile manifests reported `complex/interop/asarray_complex64` at 2.996
@@ -1407,17 +1405,17 @@ and default backend metadata. No hardware PMU counters were collected because
 `--no-perf-stat` was used; the `sample(1)` stacks were captured under the two
 `results/local-profile-20260509-*-specialized-buffer` directories.
 
-Remaining frontier after this slice:
+Remaining frontier:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.817 | 1.999 | 1.417x |
-| `complex/views/reversed_add_complex64` | 4.131 | 3.121 | 1.359x |
-| `complex/interop/array_copy_complex128` | 3.312 | 2.547 | 1.318x |
-| `complex/casts/astype_complex64_to_complex128` | 3.355 | 2.613 | 1.282x |
-| `complex/elementwise/binary_add_complex128` | 3.446 | 2.687 | 1.258x |
+| row                                            | monpy us | numpy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`            |    2.817 |    1.999 | 1.417x |
+| `complex/views/reversed_add_complex64`         |    4.131 |    3.121 | 1.359x |
+| `complex/interop/array_copy_complex128`        |    3.312 |    2.547 | 1.318x |
+| `complex/casts/astype_complex64_to_complex128` |    3.355 |    2.613 | 1.282x |
+| `complex/elementwise/binary_add_complex128`    |    3.446 |    2.687 | 1.258x |
 
-Next target should probably be `complex/views/reversed_add_complex64` again.
+Next target: `complex/views/reversed_add_complex64` again.
 The interop rows still lead, but their remaining raw leaf is already
 sub-microsecond; the official row is now dominated by harness and Python wrapper
 constant factors. The reversed-add row has real native work left in negative
@@ -1425,8 +1423,8 @@ stride handling and may have more actual loot per line changed.
 
 ### 2026-05-09 reverse view wrapper fast path
 
-This pass started by trying a four-complex unroll inside the negative-stride
-`complex64` ADD/SUB kernel. That did not move the leaf: presliced monpy add
+I started by trying a four-complex unroll inside the negative-stride
+`complex64` ADD/SUB kernel. That stayed flat the leaf: presliced monpy add
 stayed around 0.94 us and the official `reversed_add_complex64` ratio stayed at
 1.359x. The patch was reverted before landing. The useful deficit was still the
 view creation path around the already-fused native kernel.
@@ -1439,21 +1437,21 @@ Python dispatch and wrapper construction.
 `src/array/accessors.mojo` now owns the bound `Array.reverse_1d_method()` path
 directly. The public module-level `_native.reverse_1d()` function still uses the
 generic shape helper, but the method used by `ndarray.__getitem__` builds the
-rank-1 reverse view from the receiver fields without re-entering the generic
+rank-1 reverse view from the receiver fields directly, outside the generic
 factory. `python/monpy/__init__.py` also inlines the wrapper construction for
-the exact `[::-1]` case, avoiding the extra `ndarray._wrap(...)` staticmethod
+the exact `[::-1]` case, skipping the extra `ndarray._wrap(...)` staticmethod
 dispatch in this tiny hot path.
 
 Raw post-fix timing:
 
-| path | before | after |
-| --- | ---: | ---: |
-| native `reverse_1d_method()` | 0.230 us | 0.228 us |
+| path                                 |   before |    after |
+| ------------------------------------ | -------: | -------: |
+| native `reverse_1d_method()`         | 0.230 us | 0.228 us |
 | `ndarray._wrap(reverse_1d_method())` | 0.342 us | 0.337 us |
-| `z[::-1]` | 0.456 us | 0.409 us |
-| `z[::-1] + w[::-1]` | 1.932 us | 1.819 us |
+| `z[::-1]`                            | 0.456 us | 0.409 us |
+| `z[::-1] + w[::-1]`                  | 1.932 us | 1.819 us |
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
@@ -1465,10 +1463,10 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case com
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/views/reversed_add_complex64 --types complex --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-reversed-add-wrapper-fastpath-numpy --sample --no-perf-stat
 ```
 
-Official post-fix benchmark results:
+Official result after the patch:
 
-| row | before | after | delta |
-| --- | ---: | ---: | ---: |
+| row                                    |           before |            after |        delta |
+| -------------------------------------- | ---------------: | ---------------: | -----------: |
 | `complex/views/reversed_add_complex64` | 4.131 us, 1.359x | 4.076 us, 1.335x | 1.01x faster |
 
 The profile manifests reported `complex/views/reversed_add_complex64` at 4.210
@@ -1481,33 +1479,33 @@ macOS `sample(1)` captures were written under
 stacks are still dominated by CPython frame evaluation, attribute lookup, and
 benchmark harness work around the native kernel.
 
-Remaining frontier after this slice:
+Remaining frontier:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.790 | 1.971 | 1.408x |
-| `complex/interop/array_copy_complex128` | 3.280 | 2.441 | 1.339x |
-| `complex/views/reversed_add_complex64` | 4.076 | 3.054 | 1.335x |
-| `complex/casts/astype_complex64_to_complex128` | 3.301 | 2.582 | 1.279x |
-| `complex/elementwise/binary_add_complex128` | 3.225 | 2.684 | 1.225x |
+| row                                            | monpy us | numpy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`            |    2.790 |    1.971 | 1.408x |
+| `complex/interop/array_copy_complex128`        |    3.280 |    2.441 | 1.339x |
+| `complex/views/reversed_add_complex64`         |    4.076 |    3.054 | 1.335x |
+| `complex/casts/astype_complex64_to_complex128` |    3.301 |    2.582 | 1.279x |
+| `complex/elementwise/binary_add_complex128`    |    3.225 |    2.684 | 1.225x |
 
-Next target should move to `complex/interop/array_copy_complex128` or the
+Next target: `complex/interop/array_copy_complex128` or the
 attention rows. For complex reverse views, the easy wrapper win is spent and the
 remaining ratio is mostly Python object overhead around two view creations plus
 one already-fused native add.
 
 ### 2026-05-09 direct `array(..., complex128, copy=True)` buffer path
 
-The next live refresh included both complex and attention rows:
+Next, I refreshed included both complex and attention rows:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.815 | 1.996 | 1.409x |
-| `complex/interop/array_copy_complex128` | 3.271 | 2.478 | 1.324x |
-| `complex/views/reversed_add_complex64` | 4.078 | 3.110 | 1.312x |
-| `attention/attention/causal_attention_t32_d32_f32` | 20.488 | 21.857 | 0.937x |
-| `attention/softmax/causal_scores_t32_f32` | 7.995 | 10.007 | 0.799x |
-| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 78.485 | 107.275 | 0.733x |
+| row                                                | monpy us | numpy us |  ratio |
+| -------------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`                |    2.815 |    1.996 | 1.409x |
+| `complex/interop/array_copy_complex128`            |    3.271 |    2.478 | 1.324x |
+| `complex/views/reversed_add_complex64`             |    4.078 |    3.110 | 1.312x |
+| `attention/attention/causal_attention_t32_d32_f32` |   20.488 |   21.857 | 0.937x |
+| `attention/softmax/causal_scores_t32_f32`          |    7.995 |   10.007 | 0.799x |
+| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32`   |   78.485 |  107.275 | 0.733x |
 
 The attention rows are already ahead of NumPy in this slice, so this pass stayed
 on `complex/interop/array_copy_complex128`. The raw copy leaf showed a facade
@@ -1523,15 +1521,15 @@ general object-coercion paths.
 
 Raw post-fix timing:
 
-| path | before | after |
-| --- | ---: | ---: |
-| native complex128 copy wrapper | 0.711 us | 0.705 us |
-| `ndarray(native complex128 copy)` | 0.808 us | 0.801 us |
+| path                                        |   before |    after |
+| ------------------------------------------- | -------: | -------: |
+| native complex128 copy wrapper              | 0.711 us | 0.705 us |
+| `ndarray(native complex128 copy)`           | 0.808 us | 0.801 us |
 | `monpy.asarray(..., complex128, copy=True)` | 1.025 us | 1.029 us |
-| `monpy.array(..., complex128, copy=True)` | 1.051 us | 0.876 us |
-| `numpy.array(..., complex128, copy=True)` | 0.461 us | 0.453 us |
+| `monpy.array(..., complex128, copy=True)`   | 1.051 us | 0.876 us |
+| `numpy.array(..., complex128, copy=True)`   | 0.461 us | 0.453 us |
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_round_trip tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_copy_true_detaches_storage tests/python/numpy_compat/test_array_coercion.py::test_numpy_array_copy_true_detaches_storage tests/python/numpy_compat/test_array_coercion.py::test_array_and_asarray_copy_rules_for_existing_monpy_arrays -q
@@ -1542,10 +1540,10 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case com
 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/python -m monpy._bench.mojo_sweep --format json --sort ratio --output-dir results/local-sweep-20260509-mojo-stdlib-refresh --no-stdout --timeout 300
 ```
 
-Official post-fix benchmark results:
+Official result after the patch:
 
-| row | before | after | delta |
-| --- | ---: | ---: | ---: |
+| row                                     |           before |            after |        delta |
+| --------------------------------------- | ---------------: | ---------------: | -----------: |
 | `complex/interop/array_copy_complex128` | 3.271 us, 1.324x | 3.115 us, 1.268x | 1.05x faster |
 
 The profile manifests reported `complex/interop/array_copy_complex128` at 3.245
@@ -1558,52 +1556,51 @@ collected because `--no-perf-stat` was used; the `sample(1)` captures live under
 The pure-Mojo stdlib sweep also completed. The largest candidate/stdlib ratios
 were small: `small_matmul_f32_8` at 1.078x, `add_f32_1m` at 1.068x,
 `sum_f32_1k` at 1.044x, and `prod_f64_64k` at 1.044x. That says the current
-high-ratio NumPy-facing rows are mostly facade/object-bound, not a clear signal
-that a production kernel should be replaced with a stdlib primitive today.
+high-ratio NumPy-facing rows are mostly facade/object-bound, a sign that the public ratios are facade-bound.
 
-Remaining frontier after this slice:
+Remaining frontier:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.793 | 1.963 | 1.419x |
-| `complex/views/reversed_add_complex64` | 4.086 | 3.072 | 1.329x |
-| `complex/casts/astype_complex64_to_complex128` | 3.323 | 2.588 | 1.286x |
-| `complex/interop/array_copy_complex128` | 3.115 | 2.468 | 1.268x |
-| `complex/elementwise/binary_add_complex128` | 3.253 | 2.658 | 1.224x |
+| row                                            | monpy us | numpy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`            |    2.793 |    1.963 | 1.419x |
+| `complex/views/reversed_add_complex64`         |    4.086 |    3.072 | 1.329x |
+| `complex/casts/astype_complex64_to_complex128` |    3.323 |    2.588 | 1.286x |
+| `complex/interop/array_copy_complex128`        |    3.115 |    2.468 | 1.268x |
+| `complex/elementwise/binary_add_complex128`    |    3.253 |    2.658 | 1.224x |
 
-Next target should be `complex/interop/asarray_complex64`. It remains the top
-ratio row, and the stdlib sweep does not point to a lower-level Mojo kernel as
+Next target: `complex/interop/asarray_complex64`. It remains the top
+ratio row, and the stdlib sweep points away from a lower-level Mojo kernel as
 the immediate blocker.
 
 ### 2026-05-09 direct complex64 copy-false buffer entry
 
-The next refresh kept `complex/interop/asarray_complex64` at the top of the
+Next, I kept `complex/interop/asarray_complex64` at the top of the
 complex frontier:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.841 | 2.063 | 1.410x |
-| `complex/views/reversed_add_complex64` | 4.257 | 3.252 | 1.312x |
-| `complex/casts/astype_complex64_to_complex128` | 3.437 | 2.737 | 1.258x |
-| `complex/interop/array_copy_complex128` | 3.203 | 2.592 | 1.233x |
-| `complex/elementwise/binary_add_complex128` | 3.398 | 2.780 | 1.220x |
+| row                                            | monpy us | numpy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`            |    2.841 |    2.063 | 1.410x |
+| `complex/views/reversed_add_complex64`         |    4.257 |    3.252 | 1.312x |
+| `complex/casts/astype_complex64_to_complex128` |    3.437 |    2.737 | 1.258x |
+| `complex/interop/array_copy_complex128`        |    3.203 |    2.592 | 1.233x |
+| `complex/elementwise/binary_add_complex128`    |    3.398 |    2.780 | 1.220x |
 
 Raw split before the patch:
 
-| path | time |
-| --- | ---: |
-| `_is_numpy_array(src)` | 0.077 us |
-| native complex64 view wrapper | 0.349 us |
-| `ndarray(native, owner=src)` | 0.487 us |
+| path                                        |     time |
+| ------------------------------------------- | -------: |
+| `_is_numpy_array(src)`                      | 0.077 us |
+| native complex64 view wrapper               | 0.349 us |
+| `ndarray(native, owner=src)`                | 0.487 us |
 | `monpy.asarray(..., complex64, copy=False)` | 0.665 us |
-| `numpy.asarray(..., complex64)` | 0.073 us |
+| `numpy.asarray(..., complex64)`             | 0.073 us |
 
 I first tried specializing `asarray_complex64_view_from_buffer_ops` in Mojo so
-the wrapper would skip generic copy/cast branch machinery. That did not help:
+the wrapper would skip generic copy/cast branch machinery. The native wrapper stayed flat:
 the native wrapper stayed around 0.35 us and public `asarray` regressed to about
 0.684 us. The patch was reverted before landing.
 
-The useful change is in `python/monpy/__init__.py`: exact
+The useful change was in `python/monpy/__init__.py`: exact
 `asarray(obj, dtype=complex64, copy=False)` now tries the complex64 native
 buffer view before asking whether `obj` is a NumPy array. For the benchmark's
 NumPy input this removes the `_is_numpy_array(...)` detector from the hot
@@ -1612,14 +1609,14 @@ and unsupported NumPy dtypes.
 
 Raw post-fix timing:
 
-| path | before | after |
-| --- | ---: | ---: |
-| native complex64 view wrapper | 0.349 us | 0.350 us |
-| `ndarray(native, owner=src)` | 0.487 us | 0.487 us |
+| path                                        |   before |    after |
+| ------------------------------------------- | -------: | -------: |
+| native complex64 view wrapper               | 0.349 us | 0.350 us |
+| `ndarray(native, owner=src)`                | 0.487 us | 0.487 us |
 | `monpy.asarray(..., complex64, copy=False)` | 0.665 us | 0.587 us |
-| `numpy.asarray(..., complex64)` | 0.073 us | 0.074 us |
+| `numpy.asarray(..., complex64)`             | 0.073 us | 0.074 us |
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
@@ -1630,10 +1627,10 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case com
 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/python -m monpy._bench.mojo_sweep --format json --sort ratio --output-dir results/local-sweep-20260509-mojo-stdlib-after-asarray-c64 --no-stdout --timeout 300
 ```
 
-Official post-fix benchmark results:
+Official result after the patch:
 
-| row | before | after | delta |
-| --- | ---: | ---: | ---: |
+| row                                 |           before |            after |        delta |
+| ----------------------------------- | ---------------: | ---------------: | -----------: |
 | `complex/interop/asarray_complex64` | 2.841 us, 1.410x | 2.632 us, 1.365x | 1.08x faster |
 
 The profile manifests reported `complex/interop/asarray_complex64` at 2.797
@@ -1643,55 +1640,54 @@ was 1,406 bytes. No hardware PMU counters were collected because
 `--no-perf-stat` was used; the `sample(1)` captures live under
 `results/local-profile-20260509-asarray-complex64-direct-buffer-*`.
 
-The pure-Mojo stdlib sweep still does not implicate a production kernel. Its top
+The pure-Mojo stdlib sweep still points away from a production kernel. Its top
 candidate/stdlib ratios were `small_matmul_f32_8` at 1.076x,
 `small_matmul_f64_8` at 1.042x, and `min_f64_64k` at 1.040x.
 
-Remaining frontier after this slice:
+Remaining frontier:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.632 | 1.947 | 1.365x |
-| `complex/views/reversed_add_complex64` | 4.036 | 2.994 | 1.342x |
-| `complex/casts/astype_complex64_to_complex128` | 3.263 | 2.534 | 1.287x |
-| `complex/interop/array_copy_complex128` | 3.024 | 2.405 | 1.254x |
-| `complex/elementwise/binary_add_complex128` | 3.203 | 2.597 | 1.231x |
+| row                                            | monpy us | numpy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`            |    2.632 |    1.947 | 1.365x |
+| `complex/views/reversed_add_complex64`         |    4.036 |    2.994 | 1.342x |
+| `complex/casts/astype_complex64_to_complex128` |    3.263 |    2.534 | 1.287x |
+| `complex/interop/array_copy_complex128`        |    3.024 |    2.405 | 1.254x |
+| `complex/elementwise/binary_add_complex128`    |    3.203 |    2.597 | 1.231x |
 
-Next target should move back to `complex/views/reversed_add_complex64` or
+Next target: `complex/views/reversed_add_complex64` or
 `complex/casts/astype_complex64_to_complex128`. The remaining asarray gap is now
 mostly wrapper construction versus NumPy returning its input object.
 
 ### 2026-05-09 cached native reverse views
 
-The next complex refresh put `asarray_complex64` and `reversed_add_complex64`
+Next, I refreshed put `asarray_complex64` and `reversed_add_complex64`
 near the top again:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.808 | 2.060 | 1.365x |
-| `complex/views/reversed_add_complex64` | 4.308 | 3.216 | 1.330x |
-| `complex/casts/astype_complex64_to_complex128` | 3.457 | 2.681 | 1.282x |
-| `complex/interop/array_copy_complex128` | 3.246 | 2.643 | 1.241x |
-| `complex/elementwise/binary_add_complex64` | 3.207 | 2.625 | 1.222x |
+| row                                            | monpy us | numpy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`            |    2.808 |    2.060 | 1.365x |
+| `complex/views/reversed_add_complex64`         |    4.308 |    3.216 | 1.330x |
+| `complex/casts/astype_complex64_to_complex128` |    3.457 |    2.681 | 1.282x |
+| `complex/interop/array_copy_complex128`        |    3.246 |    2.643 | 1.241x |
+| `complex/elementwise/binary_add_complex64`     |    3.207 |    2.625 | 1.222x |
 
-The remaining reverse-add cost was not the fused complex64 add. A raw split
+The remaining reverse-add cost sat around view construction. A raw split
 showed presliced monpy add around 0.96 us, while the full expression paid for
 two `[::-1]` calls every iteration. `ndarray` now caches the native reverse view
 object in a private `_reverse_native` slot, but still returns a fresh Python
-wrapper for each `a[::-1]` call. That avoids the repeated Mojo view construction
-without making `a[::-1] is a[::-1]` true.
+wrapper for each `a[::-1]` call. That reuses the native view construction. Each call still returns a fresh wrapper, so `a[::-1] is a[::-1]` stays false.
 
 Raw post-fix timing:
 
-| path | before | after |
-| --- | ---: | ---: |
-| `z[::-1]` | 0.409 us | 0.185 us |
-| `z[::-1] is z[::-1]` | false | false |
-| presliced monpy add | 0.948 us | 0.961 us |
-| `z[::-1] + w[::-1]` | 1.819 us | 1.361 us |
+| path                      |   before |    after |
+| ------------------------- | -------: | -------: |
+| `z[::-1]`                 | 0.409 us | 0.185 us |
+| `z[::-1] is z[::-1]`      |    false |    false |
+| presliced monpy add       | 0.948 us | 0.961 us |
+| `z[::-1] + w[::-1]`       | 1.819 us | 1.361 us |
 | NumPy `z[::-1] + w[::-1]` | 0.971 us | 0.983 us |
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_indexing.py tests/python/numpy_compat/test_complex.py::test_complex_strided_arithmetic_preserves_imaginary_part tests/python/numpy_compat/test_array_coercion.py::test_astype_supported_cast_matrix_matches_numpy -q
@@ -1701,10 +1697,10 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case com
 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/python -m monpy._bench.mojo_sweep --format json --sort ratio --output-dir results/local-sweep-20260509-mojo-stdlib-refresh-0244 --no-stdout --timeout 300
 ```
 
-Official post-fix benchmark results:
+Official result after the patch:
 
-| row | before | after | delta |
-| --- | ---: | ---: | ---: |
+| row                                    |           before |            after |        delta |
+| -------------------------------------- | ---------------: | ---------------: | -----------: |
 | `complex/views/reversed_add_complex64` | 4.308 us, 1.330x | 3.591 us, 1.172x | 1.20x faster |
 
 The profile manifests reported `complex/views/reversed_add_complex64` at 3.728
@@ -1718,33 +1714,33 @@ The pure-Mojo stdlib sweep stayed quiet. The largest candidate/stdlib ratios
 were `small_matmul_f32_8` at 1.077x, `small_matmul_f64_8` at 1.035x,
 `sum_f64_1k` at 1.022x, and `sum_f32_1k` at 1.016x.
 
-Remaining frontier after this slice:
+Remaining frontier:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.708 | 1.975 | 1.369x |
-| `complex/casts/astype_complex64_to_complex128` | 3.322 | 2.574 | 1.283x |
-| `complex/interop/array_copy_complex128` | 3.132 | 2.487 | 1.255x |
-| `complex/elementwise/binary_add_complex64` | 3.042 | 2.485 | 1.224x |
-| `complex/elementwise/binary_add_complex128` | 3.278 | 2.678 | 1.223x |
-| `complex/views/reversed_add_complex64` | 3.591 | 3.057 | 1.172x |
+| row                                            | monpy us | numpy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`            |    2.708 |    1.975 | 1.369x |
+| `complex/casts/astype_complex64_to_complex128` |    3.322 |    2.574 | 1.283x |
+| `complex/interop/array_copy_complex128`        |    3.132 |    2.487 | 1.255x |
+| `complex/elementwise/binary_add_complex64`     |    3.042 |    2.485 | 1.224x |
+| `complex/elementwise/binary_add_complex128`    |    3.278 |    2.678 | 1.223x |
+| `complex/views/reversed_add_complex64`         |    3.591 |    3.057 | 1.172x |
 
-Next target should be `complex/casts/astype_complex64_to_complex128` or another
+Next target: `complex/casts/astype_complex64_to_complex128` or another
 interop facade cut. `asarray_complex64` is still the top ratio, but most of its
 remaining gap is the unavoidable wrapper around a zero-copy external buffer.
 
 ### 2026-05-09 exact-DType `astype` facade fast path
 
-The next complex refresh made the cast row the best target with actual native
+Next, I refreshed made the cast row the best target with actual native
 work behind it:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.853 | 2.074 | 1.361x |
-| `complex/casts/astype_complex64_to_complex128` | 3.511 | 2.763 | 1.281x |
-| `complex/interop/array_copy_complex128` | 3.432 | 2.608 | 1.280x |
-| `complex/elementwise/binary_add_complex64` | 3.186 | 2.590 | 1.231x |
-| `complex/elementwise/binary_add_complex128` | 3.448 | 2.809 | 1.228x |
+| row                                            | monpy us | numpy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`            |    2.853 |    2.074 | 1.361x |
+| `complex/casts/astype_complex64_to_complex128` |    3.511 |    2.763 | 1.281x |
+| `complex/interop/array_copy_complex128`        |    3.432 |    2.608 | 1.280x |
+| `complex/elementwise/binary_add_complex64`     |    3.186 |    2.590 | 1.231x |
+| `complex/elementwise/binary_add_complex128`    |    3.448 |    2.809 | 1.228x |
 
 The raw split showed the interleaved-lane cast was already close to NumPy:
 native monpy `astype` was about 0.645 us and NumPy's cast was about 0.543 us.
@@ -1760,15 +1756,15 @@ and strings.
 
 Raw post-fix timing:
 
-| path | before | after |
-| --- | ---: | ---: |
+| path                                     |   before |    after |
+| ---------------------------------------- | -------: | -------: |
 | native `_native.astype(..., complex128)` | 0.645 us | 0.671 us |
-| `ndarray(native astype)` | 0.744 us | 0.759 us |
-| `z.astype(complex128)` | 1.067 us | 0.898 us |
-| `z.astype(complex128, copy=False)` | n/a | 1.011 us |
-| NumPy `z.astype(complex128)` | 0.543 us | 0.540 us |
+| `ndarray(native astype)`                 | 0.744 us | 0.759 us |
+| `z.astype(complex128)`                   | 1.067 us | 0.898 us |
+| `z.astype(complex128, copy=False)`       |      n/a | 1.011 us |
+| NumPy `z.astype(complex128)`             | 0.543 us | 0.540 us |
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_complex.py::test_complex_astype_between_widths_matches_numpy tests/python/numpy_compat/test_complex.py::test_complex_astype_drops_imag_to_real_target tests/python/numpy_compat/test_array_coercion.py::test_astype_supported_cast_matrix_matches_numpy tests/python/numpy_compat/test_array_coercion.py::test_astype_copy_false_keeps_identity_for_same_dtype -q
@@ -1778,10 +1774,10 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case com
 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/python -m monpy._bench.mojo_sweep --format json --sort ratio --output-dir results/local-sweep-20260509-mojo-stdlib-refresh-0304 --no-stdout --timeout 300
 ```
 
-Official post-fix benchmark results:
+Official result after the patch:
 
-| row | before | after | delta |
-| --- | ---: | ---: | ---: |
+| row                                            |           before |            after |        delta |
+| ---------------------------------------------- | ---------------: | ---------------: | -----------: |
 | `complex/casts/astype_complex64_to_complex128` | 3.511 us, 1.281x | 3.035 us, 1.178x | 1.16x faster |
 
 The profile manifests reported `complex/casts/astype_complex64_to_complex128`
@@ -1793,46 +1789,45 @@ traced peak was 33,992 bytes. No hardware PMU counters were collected because
 
 The pure-Mojo stdlib sweep's largest candidate/stdlib ratio this pass was
 `scalar_mul_f64_64k` at 1.149x, followed by `small_matmul_f32_8` at 1.080x.
-That is worth a later kernel pass, but it is not the cause of this complex cast
-row: the cast row moved by removing Python facade work while the native
+That is worth a later kernel pass, but the complex cast row moved through facade work: the cast row moved by removing Python facade work while the native
 interleaved-lane cast stayed effectively flat.
 
-Remaining frontier after this slice:
+Remaining frontier:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.678 | 1.965 | 1.365x |
-| `complex/interop/array_copy_complex128` | 3.030 | 2.467 | 1.237x |
-| `complex/elementwise/binary_add_complex128` | 3.225 | 2.637 | 1.226x |
-| `complex/elementwise/binary_add_complex64` | 2.970 | 2.463 | 1.213x |
-| `complex/elementwise/binary_mul_complex64` | 3.070 | 2.557 | 1.193x |
-| `complex/casts/astype_complex64_to_complex128` | 3.035 | 2.576 | 1.178x |
-| `complex/views/reversed_add_complex64` | 3.525 | 3.011 | 1.172x |
+| row                                            | monpy us | numpy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`            |    2.678 |    1.965 | 1.365x |
+| `complex/interop/array_copy_complex128`        |    3.030 |    2.467 | 1.237x |
+| `complex/elementwise/binary_add_complex128`    |    3.225 |    2.637 | 1.226x |
+| `complex/elementwise/binary_add_complex64`     |    2.970 |    2.463 | 1.213x |
+| `complex/elementwise/binary_mul_complex64`     |    3.070 |    2.557 | 1.193x |
+| `complex/casts/astype_complex64_to_complex128` |    3.035 |    2.576 | 1.178x |
+| `complex/views/reversed_add_complex64`         |    3.525 |    3.011 | 1.172x |
 
-Next target should move off the complex view/cast rows and either revisit
+Next target: move off the complex view/cast rows and either revisit
 interop copy/view facade costs or investigate the pure-Mojo `scalar_mul_f64_64k`
 stdlib deficit as a separate kernel-level pass.
 
 ### 2026-05-09 direct static typed elementwise ops
 
-The next refresh split the frontier into two different problems. The public
+Next, I split the frontier into two different problems. The public
 complex rows were still led by facade and complex-buffer cases:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.667 | 1.951 | 1.370x |
-| `complex/interop/array_copy_complex128` | 3.087 | 2.427 | 1.268x |
-| `complex/elementwise/binary_add_complex64` | 2.975 | 2.418 | 1.229x |
-| `complex/elementwise/binary_add_complex128` | 3.234 | 2.643 | 1.224x |
-| `complex/elementwise/binary_mul_complex64` | 3.072 | 2.531 | 1.206x |
+| row                                         | monpy us | numpy us |  ratio |
+| ------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`         |    2.667 |    1.951 | 1.370x |
+| `complex/interop/array_copy_complex128`     |    3.087 |    2.427 | 1.268x |
+| `complex/elementwise/binary_add_complex64`  |    2.975 |    2.418 | 1.229x |
+| `complex/elementwise/binary_add_complex128` |    3.234 |    2.643 | 1.224x |
+| `complex/elementwise/binary_mul_complex64`  |    3.072 |    2.531 | 1.206x |
 
 The pure-Mojo stdlib comparison exposed a cleaner kernel-level miss:
 
-| row | candidate | stdlib | ratio |
-| --- | --------: | -----: | ----: |
-| `elementwise/add_f64_64k` | 13.79 us | 12.30 us | 1.121x |
-| `reductions/prod_f32_64k` | 3.24 us | 3.07 us | 1.057x |
-| `elementwise/sin_f64_1k` | 2.58 us | 2.48 us | 1.040x |
+| row                       | candidate |   stdlib |  ratio |
+| ------------------------- | --------: | -------: | -----: |
+| `elementwise/add_f64_64k` |  13.79 us | 12.30 us | 1.121x |
+| `reductions/prod_f32_64k` |   3.24 us |  3.07 us | 1.057x |
+| `elementwise/sin_f64_1k`  |   2.58 us |  2.48 us | 1.040x |
 
 The static typed binary kernels were still going through
 `apply_binary_typed_vec_static` inside the SIMD loop. Even though `op` is a
@@ -1840,9 +1835,9 @@ comptime parameter, the stdlib baseline was spelling the ADD loop directly:
 `load[width]`, add, `store`. The kernel now emits direct SIMD loops for static
 ADD/SUB/MUL/DIV in `binary_same_shape_contig_typed_static`, plus direct scalar
 ADD/MUL loops in `binary_scalar_contig_typed_static` where operand order does
-not affect the result. The generic helper remains for the wider binary-op set.
+leaves the result unchanged. The generic helper remains for the wider binary-op set.
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/elementwise/kernels/typed.mojo
@@ -1855,10 +1850,10 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case com
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/elementwise/binary_add_complex64 --types complex --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-binary-add-complex64-static-direct-numpy --sample --no-perf-stat
 ```
 
-Post-fix pure-Mojo stdlib result:
+After the patch, pure Mojo:
 
-| row | before | after | delta |
-| --- | -----: | ----: | ----: |
+| row                       |                       before |                        after |             delta |
+| ------------------------- | ---------------------------: | ---------------------------: | ----------------: |
 | `elementwise/add_f64_64k` | 13.79 us vs 12.30 us, 1.121x | 16.21 us vs 16.18 us, 1.002x | ratio gap removed |
 
 The absolute nanoseconds moved with machine noise on this run, but the
@@ -1868,12 +1863,12 @@ the same generated Mojo binary.
 
 Public complex refresh after rebuilding:
 
-| row | before | after | delta |
-| --- | -----: | ----: | ----: |
+| row                                        |                       before |                        after |                   delta |
+| ------------------------------------------ | ---------------------------: | ---------------------------: | ----------------------: |
 | `complex/elementwise/binary_add_complex64` | 2.975 us vs 2.418 us, 1.229x | 2.988 us vs 2.484 us, 1.201x | 1.02x ratio improvement |
-| `complex/interop/array_copy_complex128` | 3.087 us vs 2.427 us, 1.268x | 3.057 us vs 2.473 us, 1.235x | 1.03x ratio improvement |
+| `complex/interop/array_copy_complex128`    | 3.087 us vs 2.427 us, 1.268x | 3.057 us vs 2.473 us, 1.235x | 1.03x ratio improvement |
 
-The public array slice did not show a real-valued elementwise fallout. The
+The public array slice kept the real-valued elementwise guardrail clean. The
 bandwidth-size `array/bandwidth/binary_add_65536_f32` row stayed comfortably
 ahead of NumPy at 6.930 us vs 11.633 us, 0.607x. The wrapper-size
 `array/elementwise/binary_add_f32` row was 3.036 us vs 2.407 us, 1.263x, which
@@ -1888,32 +1883,32 @@ collected because the profile command used `--no-perf-stat`; the `sample(1)`
 captures live under
 `results/local-profile-20260509-binary-add-complex64-static-direct-*`.
 
-Remaining frontier after this slice:
+Remaining frontier:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.671 | 1.974 | 1.354x |
-| `complex/interop/array_copy_complex128` | 3.057 | 2.473 | 1.235x |
-| `complex/elementwise/binary_add_complex128` | 3.239 | 2.649 | 1.232x |
-| `complex/elementwise/binary_add_complex64` | 2.988 | 2.484 | 1.201x |
-| `complex/elementwise/binary_mul_complex64` | 3.080 | 2.567 | 1.197x |
+| row                                         | monpy us | numpy us |  ratio |
+| ------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`         |    2.671 |    1.974 | 1.354x |
+| `complex/interop/array_copy_complex128`     |    3.057 |    2.473 | 1.235x |
+| `complex/elementwise/binary_add_complex128` |    3.239 |    2.649 | 1.232x |
+| `complex/elementwise/binary_add_complex64`  |    2.988 |    2.484 | 1.201x |
+| `complex/elementwise/binary_mul_complex64`  |    3.080 |    2.567 | 1.197x |
 
-Next target should either specialize complex128 add/mul at the fused-kernel
+Next target: either specialize complex128 add/mul at the fused-kernel
 level, or attack the `asarray_complex64` facade only if a profile shows more
 than wrapper creation and dtype lookup left to remove.
 
 ### 2026-05-09 specialized complex64 zero-copy buffer view
 
-The next live refresh put `asarray_complex64` back at the top of the public
+Next, I refreshed put `asarray_complex64` back at the top of the public
 complex frontier:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 3.063 | 2.123 | 1.443x |
-| `complex/interop/array_copy_complex128` | 3.378 | 2.814 | 1.251x |
-| `complex/elementwise/binary_add_complex64` | 3.270 | 2.647 | 1.228x |
-| `complex/elementwise/binary_mul_complex64` | 3.345 | 2.753 | 1.212x |
-| `complex/elementwise/binary_add_complex128` | 3.519 | 2.866 | 1.209x |
+| row                                         | monpy us | numpy us |  ratio |
+| ------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`         |    3.063 |    2.123 | 1.443x |
+| `complex/interop/array_copy_complex128`     |    3.378 |    2.814 | 1.251x |
+| `complex/elementwise/binary_add_complex64`  |    3.270 |    2.647 | 1.228x |
+| `complex/elementwise/binary_mul_complex64`  |    3.345 |    2.753 | 1.212x |
+| `complex/elementwise/binary_add_complex128` |    3.519 |    2.866 | 1.209x |
 
 The same pass refreshed the pure-Mojo stdlib comparison. The largest
 candidate/stdlib ratio was `elementwise/scalar_mul_f32_64k` at 1.095x, followed
@@ -1932,11 +1927,11 @@ copy/cast bookkeeping for an exact zero-copy complex64 view.
 - guaranteed `PyBuffer_Release` before returning or raising on validation
   failures.
 
-This avoids the generic `requested_code`/`copy_flag` branch tree, dtype decode,
+This skips the generic `requested_code`/`copy_flag` branch tree, dtype decode,
 `must_copy` calculation, and copy/cast fallback setup in the hot
 `copy=False, dtype=complex64` path.
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/buffer.mojo
@@ -1947,10 +1942,10 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case com
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/interop/asarray_complex64 --types complex --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-asarray-complex64-format-fastcheck-numpy --sample --no-perf-stat
 ```
 
-Post-fix public complex result:
+After the patch:
 
-| row | before | after | delta |
-| --- | -----: | ----: | ----: |
+| row                                 |                       before |                        after |                   delta |
+| ----------------------------------- | ---------------------------: | ---------------------------: | ----------------------: |
 | `complex/interop/asarray_complex64` | 3.063 us vs 2.123 us, 1.443x | 2.681 us vs 1.973 us, 1.360x | 1.14x faster monpy side |
 
 The final profiles reported `asarray_complex64` at 2.742 us/call for monpy and
@@ -1961,31 +1956,31 @@ No hardware PMU counters were collected because the profile command used
 `--no-perf-stat`; the `sample(1)` captures live under
 `results/local-profile-20260509-asarray-complex64-format-fastcheck-*`.
 
-Remaining frontier after this slice:
+Remaining frontier:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.681 | 1.973 | 1.360x |
-| `complex/elementwise/binary_add_complex128` | 3.290 | 2.668 | 1.248x |
-| `complex/interop/array_copy_complex128` | 3.070 | 2.478 | 1.247x |
-| `complex/elementwise/binary_add_complex64` | 2.998 | 2.459 | 1.220x |
-| `complex/elementwise/binary_mul_complex64` | 3.094 | 2.552 | 1.210x |
+| row                                         | monpy us | numpy us |  ratio |
+| ------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`         |    2.681 |    1.973 | 1.360x |
+| `complex/elementwise/binary_add_complex128` |    3.290 |    2.668 | 1.248x |
+| `complex/interop/array_copy_complex128`     |    3.070 |    2.478 | 1.247x |
+| `complex/elementwise/binary_add_complex64`  |    2.998 |    2.459 | 1.220x |
+| `complex/elementwise/binary_mul_complex64`  |    3.094 |    2.552 | 1.210x |
 
-Next target should move back to complex128 add/copy. The remaining
+Next target: complex128 add/copy. The remaining
 `asarray_complex64` gap is now mostly the cost of allocating a monpy wrapper
 around a borrowed Python buffer; there is less generic bridge code left to cut.
 
 ### 2026-05-09 specialized complex128 copy buffer path
 
-The next refresh kept the public interop and complex128 rows at the top:
+Next, I kept the public interop and complex128 rows at the top:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.657 | 1.961 | 1.355x |
-| `complex/interop/array_copy_complex128` | 3.046 | 2.441 | 1.253x |
-| `complex/elementwise/binary_add_complex128` | 3.221 | 2.619 | 1.228x |
-| `complex/elementwise/binary_add_complex64` | 2.968 | 2.423 | 1.222x |
-| `complex/elementwise/binary_mul_complex64` | 3.056 | 2.552 | 1.200x |
+| row                                         | monpy us | numpy us |  ratio |
+| ------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`         |    2.657 |    1.961 | 1.355x |
+| `complex/interop/array_copy_complex128`     |    3.046 |    2.441 | 1.253x |
+| `complex/elementwise/binary_add_complex128` |    3.221 |    2.619 | 1.228x |
+| `complex/elementwise/binary_add_complex64`  |    2.968 |    2.423 | 1.222x |
+| `complex/elementwise/binary_mul_complex64`  |    3.056 |    2.552 | 1.200x |
 
 The pure-Mojo stdlib refresh was quieter than the public facade rows:
 `small_matmul_f32_8` led at 1.073x, `sin_f64_1k` was 1.064x, and the previous
@@ -2002,7 +1997,7 @@ f64 accessor, which preserved only the real lane and zeroed the imaginary lane.
 The shared copy fallback now copies complex64 and complex128 with their
 dedicated interleaved real/imag accessors.
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/buffer.mojo src/array/cast.mojo
@@ -2013,10 +2008,10 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case com
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/interop/array_copy_complex128 --types complex --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-array-copy-complex128-specialized-final-numpy --sample --no-perf-stat
 ```
 
-Post-fix public complex result:
+After the patch:
 
-| row | before | after | delta |
-| --- | -----: | ----: | ----: |
+| row                                     |                       before |                        after |                   delta |
+| --------------------------------------- | ---------------------------: | ---------------------------: | ----------------------: |
 | `complex/interop/array_copy_complex128` | 3.046 us vs 2.441 us, 1.253x | 2.961 us vs 2.429 us, 1.220x | 1.03x faster monpy side |
 
 The final profiles reported `array_copy_complex128` at 3.140 us/call for monpy
@@ -2027,17 +2022,17 @@ were collected because the profile command used `--no-perf-stat`; the
 `sample(1)` captures live under
 `results/local-profile-20260509-array-copy-complex128-specialized-final-*`.
 
-Remaining frontier after this slice:
+Remaining frontier:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.660 | 1.939 | 1.359x |
-| `complex/elementwise/binary_add_complex128` | 3.221 | 2.595 | 1.241x |
-| `complex/interop/array_copy_complex128` | 2.961 | 2.429 | 1.220x |
-| `complex/elementwise/binary_add_complex64` | 2.948 | 2.424 | 1.216x |
-| `complex/elementwise/binary_mul_complex64` | 3.057 | 2.523 | 1.204x |
+| row                                         | monpy us | numpy us |  ratio |
+| ------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`         |    2.660 |    1.939 | 1.359x |
+| `complex/elementwise/binary_add_complex128` |    3.221 |    2.595 | 1.241x |
+| `complex/interop/array_copy_complex128`     |    2.961 |    2.429 | 1.220x |
+| `complex/elementwise/binary_add_complex64`  |    2.948 |    2.424 | 1.216x |
+| `complex/elementwise/binary_mul_complex64`  |    3.057 |    2.523 | 1.204x |
 
-Next target should be the complex128 ADD fused path. The copy bridge has less
+Next target: the complex128 ADD fused path. The copy bridge has less
 generic machinery left, and the live add row now sits above it.
 
 ### 2026-05-09 Float32 softmax row kernel
@@ -2046,23 +2041,23 @@ The first refresh for this heartbeat checked both the public complex frontier
 and the attention slice. The complex rows were still slower than NumPy, led by
 `asarray_complex64` and the complex add/copy cluster:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.653 | 1.945 | 1.363x |
-| `complex/elementwise/binary_add_complex64` | 2.977 | 2.444 | 1.230x |
-| `complex/elementwise/binary_add_complex128` | 3.198 | 2.607 | 1.223x |
-| `complex/elementwise/binary_mul_complex64` | 3.042 | 2.512 | 1.217x |
-| `complex/interop/array_copy_complex128` | 2.952 | 2.443 | 1.216x |
+| row                                         | monpy us | numpy us |  ratio |
+| ------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`         |    2.653 |    1.945 | 1.363x |
+| `complex/elementwise/binary_add_complex64`  |    2.977 |    2.444 | 1.230x |
+| `complex/elementwise/binary_add_complex128` |    3.198 |    2.607 | 1.223x |
+| `complex/elementwise/binary_mul_complex64`  |    3.042 |    2.512 | 1.217x |
+| `complex/interop/array_copy_complex128`     |    2.952 |    2.443 | 1.216x |
 
 The attention rows, however, were all already ahead of NumPy:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `attention/attention/causal_attention_t32_d32_f32` | 20.681 | 22.056 | 0.931x |
-| `attention/softmax/causal_scores_t32_f32` | 8.506 | 10.500 | 0.807x |
-| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 81.256 | 105.450 | 0.777x |
+| row                                                | monpy us | numpy us |  ratio |
+| -------------------------------------------------- | -------: | -------: | -----: |
+| `attention/attention/causal_attention_t32_d32_f32` |   20.681 |   22.056 | 0.931x |
+| `attention/softmax/causal_scores_t32_f32`          |    8.506 |   10.500 | 0.807x |
+| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32`   |   81.256 |  105.450 | 0.777x |
 
-The useful attention miss was still local: the f32 softmax kernels were doing
+The useful attention miss I found was still local: the f32 softmax kernels were doing
 row max, exp, denominator accumulation, and normalization through `Float64`.
 The local Mojo stdlib `std.math.exp` overload returns the same floating type it
 receives, so the float32 row kernel can stay in `Float32` end to end. This
@@ -2073,7 +2068,7 @@ lane in the hot row loops.
 last-axis softmax and scaled masked last-axis softmax. Float64 keeps the
 previous accumulation path.
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/elementwise/kernels/nn.mojo
@@ -2084,13 +2079,13 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case att
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case attention/softmax/causal_scores_t32_f32 --types attention --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-attention-softmax-f32-numpy --sample --no-perf-stat
 ```
 
-Post-fix attention result:
+After the patch:
 
-| row | before | after | delta |
-| --- | -----: | ----: | ----: |
-| `attention/softmax/causal_scores_t32_f32` | 8.506 us vs 10.500 us, 0.807x | 6.869 us vs 10.052 us, 0.683x | 1.24x faster monpy side |
-| `attention/attention/causal_attention_t32_d32_f32` | 20.681 us vs 22.056 us, 0.931x | 19.256 us vs 22.242 us, 0.864x | 1.07x faster monpy side |
-| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 81.256 us vs 105.450 us, 0.777x | 80.921 us vs 108.756 us, 0.745x | 1.00x wall-clock, better ratio |
+| row                                                |                          before |                           after |                          delta |
+| -------------------------------------------------- | ------------------------------: | ------------------------------: | -----------------------------: |
+| `attention/softmax/causal_scores_t32_f32`          |   8.506 us vs 10.500 us, 0.807x |   6.869 us vs 10.052 us, 0.683x |        1.24x faster monpy side |
+| `attention/attention/causal_attention_t32_d32_f32` |  20.681 us vs 22.056 us, 0.931x |  19.256 us vs 22.242 us, 0.864x |        1.07x faster monpy side |
+| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32`   | 81.256 us vs 105.450 us, 0.777x | 80.921 us vs 108.756 us, 0.745x | 1.00x wall-clock, better ratio |
 
 The profile manifests reported `attention/softmax/causal_scores_t32_f32` at
 6.978 us/call for monpy and 10.278 us/call for NumPy. Monpy used backend code
@@ -2103,38 +2098,38 @@ most softmax time in ufunc reduction machinery (`PyUFunc_Reduce`,
 because the profile command used `--no-perf-stat`; the `sample(1)` captures live
 under `results/local-profile-20260509-attention-softmax-f32-*`.
 
-Next target should return to complex128 add/mul, or add a larger attention
+Next target: complex128 add/mul, or add a larger attention
 matrix-size row so the attention benchmark can expose when softmax stops being
 wrapper-sized and starts becoming cache/bandwidth sized.
 
 ### 2026-05-09 static unary typed kernels
 
-The next refresh split the frontier again. The public NumPy-facing complex
+Next, I split the frontier again. The public NumPy-facing complex
 slice was still led by small wrapper/facade rows:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `complex/interop/asarray_complex64` | 2.880 | 2.129 | 1.348x |
-| `complex/elementwise/binary_add_complex64` | 3.306 | 2.512 | 1.258x |
-| `complex/elementwise/binary_add_complex128` | 3.249 | 2.969 | 1.223x |
-| `complex/interop/array_copy_complex128` | 3.390 | 2.661 | 1.207x |
-| `complex/elementwise/binary_mul_complex64` | 3.075 | 2.550 | 1.207x |
+| row                                         | monpy us | numpy us |  ratio |
+| ------------------------------------------- | -------: | -------: | -----: |
+| `complex/interop/asarray_complex64`         |    2.880 |    2.129 | 1.348x |
+| `complex/elementwise/binary_add_complex64`  |    3.306 |    2.512 | 1.258x |
+| `complex/elementwise/binary_add_complex128` |    3.249 |    2.969 | 1.223x |
+| `complex/interop/array_copy_complex128`     |    3.390 |    2.661 | 1.207x |
+| `complex/elementwise/binary_mul_complex64`  |    3.075 |    2.550 | 1.207x |
 
 The attention slice stayed ahead of NumPy after the Float32 softmax patch:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `attention/attention/causal_attention_t32_d32_f32` | 20.904 | 22.658 | 0.887x |
-| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 81.802 | 107.356 | 0.750x |
-| `attention/softmax/causal_scores_t32_f32` | 7.181 | 10.331 | 0.694x |
+| row                                                | monpy us | numpy us |  ratio |
+| -------------------------------------------------- | -------: | -------: | -----: |
+| `attention/attention/causal_attention_t32_d32_f32` |   20.904 |   22.658 | 0.887x |
+| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32`   |   81.802 |  107.356 | 0.750x |
+| `attention/softmax/causal_scores_t32_f32`          |    7.181 |   10.331 | 0.694x |
 
 The pure-Mojo stdlib comparison exposed the real leaf-level miss:
 
-| row | candidate | stdlib | ratio |
-| --- | --------: | -----: | ----: |
-| `elementwise/sin_f64_64k` | 394342 ns | 187974 ns | 2.098x |
-| `elementwise/add_f64_1k` | 222.7 ns | 185.0 ns | 1.204x |
-| `matmul/small_matmul_f32_16` | 452.9 ns | 401.5 ns | 1.128x |
+| row                          | candidate |    stdlib |  ratio |
+| ---------------------------- | --------: | --------: | -----: |
+| `elementwise/sin_f64_64k`    | 394342 ns | 187974 ns | 2.098x |
+| `elementwise/add_f64_1k`     |  222.7 ns |  185.0 ns | 1.204x |
+| `matmul/small_matmul_f32_16` |  452.9 ns |  401.5 ns | 1.128x |
 
 `unary_contig_typed` was still calling `apply_unary_typed_vec(..., op)` inside
 the vector loop. For common unary ops that means each SIMD chunk entered the
@@ -2145,7 +2140,7 @@ routes common ops (`SIN`, `COS`, `EXP`, `LOG`, `TANH`, `SQRT`, `NEGATE`,
 `POSITIVE`, `SQUARE`) into a comptime-`op` static loop, removing the per-vector
 runtime branch.
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/elementwise/kernels/typed.mojo
@@ -2157,12 +2152,12 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case arr
 MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case array/bandwidth/unary_sin_65536_f32 --types array --vector-sizes 65536 --matrix-sizes 64 --linalg-sizes 8 --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-unary-sin-static-numpy --sample --no-perf-stat
 ```
 
-Post-fix pure-Mojo stdlib result:
+After the patch, pure Mojo:
 
-| row | before | after | delta |
-| --- | -----: | ----: | ----: |
-| `elementwise/sin_f64_64k` | 394342 ns vs 187974 ns, 2.098x | 167833 ns vs 167000 ns, 1.005x | ratio gap removed |
-| `elementwise/sin_f32_64k` | 118877 ns vs 116339 ns, 1.022x | below top deficits | no visible remaining gap |
+| row                       |                         before |                          after |                    delta |
+| ------------------------- | -----------------------------: | -----------------------------: | -----------------------: |
+| `elementwise/sin_f64_64k` | 394342 ns vs 187974 ns, 2.098x | 167833 ns vs 167000 ns, 1.005x |        ratio gap removed |
+| `elementwise/sin_f32_64k` | 118877 ns vs 116339 ns, 1.022x |             below top deficits | no visible remaining gap |
 
 The remaining stdlib frontier is much flatter: `scalar_mul_f64_64k` leads at
 1.086x, `sum_f32_1k` is 1.033x, and `small_matmul_f32_16` is 1.029x. That is a
@@ -2170,14 +2165,14 @@ clean drop from a 2.10x top leaf to low-single-digit misses.
 
 The public NumPy-facing array sweep still uses the macOS Accelerate path for
 large f32 sine (`backend_code = 1` in profile), so this patch mainly closes the
-pure Mojo leaf gap rather than the public facade row. The post-fix public
+pure Mojo leaf gap more than the public facade row. The post-fix public
 bandwidth row was still comfortably ahead of NumPy:
 
-| row | monpy us | numpy us | ratio |
-| --- | -------: | -------: | ----: |
-| `array/bandwidth/unary_sin_65536_f32` | 32.139 | 101.894 | 0.313x |
-| `array/bandwidth/fused_sin_add_mul_65536_f32` | 39.788 | 115.449 | 0.347x |
-| `array/elementwise/unary_sin_f32` | 4.523 | 3.792 | 1.191x |
+| row                                           | monpy us | numpy us |  ratio |
+| --------------------------------------------- | -------: | -------: | -----: |
+| `array/bandwidth/unary_sin_65536_f32`         |   32.139 |  101.894 | 0.313x |
+| `array/bandwidth/fused_sin_add_mul_65536_f32` |   39.788 |  115.449 | 0.347x |
+| `array/elementwise/unary_sin_f32`             |    4.523 |    3.792 | 1.191x |
 
 The sample profile for `array/bandwidth/unary_sin_65536_f32` reported monpy at
 32.483 us/call and NumPy at 102.304 us/call. Monpy used backend code 1, the
@@ -2188,7 +2183,7 @@ hot path in `_multiarray_umath`'s `simd_sincos_f32` ufunc loop. No PMU counters
 were collected because the profile command used `--no-perf-stat`; captures live
 under `results/local-profile-20260509-unary-sin-static-*`.
 
-Next target should be the new pure-Mojo `scalar_mul_f64_64k` stdlib gap or the
+Next target: the new pure-Mojo `scalar_mul_f64_64k` stdlib gap or the
 public complex64 add/asarray wrapper cluster. The former is a cleaner leaf
 kernel target; the latter is the larger NumPy-facing ratio.
 
@@ -2197,13 +2192,13 @@ kernel target; the latter is the larger NumPy-facing ratio.
 Refresh before editing showed attention still ahead of NumPy and the pure-Mojo
 stdlib comparison led by scalar multiply:
 
-| slice | row | candidate | baseline | ratio |
-| --- | --- | --------: | -------: | ----: |
-| attention | `attention/attention/causal_attention_t32_d32_f32` | 20.483 us | 23.750 us | 0.843x |
-| attention | `attention/softmax/causal_scores_t32_f32` | 7.846 us | 11.367 us | 0.690x |
-| attention | `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 71.900 us | 113.706 us | 0.619x |
-| pure Mojo | `elementwise/scalar_mul_f64_64k` | 11843.5 ns | 10464.7 ns | 1.132x |
-| pure Mojo | `elementwise/add_f32_1m` | 131810 ns | 120804 ns | 1.091x |
+| slice     | row                                                |  candidate |   baseline |  ratio |
+| --------- | -------------------------------------------------- | ---------: | ---------: | -----: |
+| attention | `attention/attention/causal_attention_t32_d32_f32` |  20.483 us |  23.750 us | 0.843x |
+| attention | `attention/softmax/causal_scores_t32_f32`          |   7.846 us |  11.367 us | 0.690x |
+| attention | `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32`   |  71.900 us | 113.706 us | 0.619x |
+| pure Mojo | `elementwise/scalar_mul_f64_64k`                   | 11843.5 ns | 10464.7 ns | 1.132x |
+| pure Mojo | `elementwise/add_f32_1m`                           |  131810 ns |  120804 ns | 1.091x |
 
 `binary_scalar_contig_typed_static` already specialized ADD/MUL with comptime
 branches, but those branches lived inside the shared scalar-left-aware kernel
@@ -2212,7 +2207,7 @@ store, tail loop. I split ADD and MUL into compile-time early-return loops so
 the commutative hot path has no `scalar_on_left` branch or fallback
 `apply_binary_typed_vec_static` scaffolding in its body.
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/elementwise/kernels/typed.mojo
@@ -2226,25 +2221,24 @@ MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case arr
 ```
 
 The first post-patch pure-Mojo sweep moved `scalar_mul_f64_64k` from 1.132x to
-0.987x. The rerun put it at 1.002x, so the practical conclusion is "closed to
-parity" rather than "reliably faster":
+0.987x. The rerun put it at 1.002x, so the practical conclusion is "closed to parity":
 
-| row | before | after | rerun |
-| --- | -----: | ----: | ----: |
+| row                              |                           before |                            after |                            rerun |
+| -------------------------------- | -------------------------------: | -------------------------------: | -------------------------------: |
 | `elementwise/scalar_mul_f64_64k` | 11843.5 ns vs 10464.7 ns, 1.132x | 10527.7 ns vs 10663.8 ns, 0.987x | 11772.2 ns vs 11753.8 ns, 1.002x |
-| `elementwise/scalar_mul_f32_64k` | 5932.2 ns vs 5831.3 ns, 1.017x | 5583.4 ns vs 5503.7 ns, 1.014x | 5857.9 ns vs 5544.1 ns, 1.057x |
+| `elementwise/scalar_mul_f32_64k` |   5932.2 ns vs 5831.3 ns, 1.017x |   5583.4 ns vs 5503.7 ns, 1.014x |   5857.9 ns vs 5544.1 ns, 1.057x |
 
 One sweep produced a false-looking `sum_f32_1m` spike at 4.965x; the immediate
 rerun put the same row back at 0.994x. That row is unrelated to the scalar patch
-and should be treated as benchmark noise unless it reproduces in a third run
+and I would treat as benchmark noise unless it reproduces in a third run
 with a longer minimum runtime.
 
 The NumPy-facing guardrail stayed healthy for the bandwidth row:
 
-| row | monpy | NumPy | ratio |
-| --- | ----: | ----: | ----: |
-| `array/bandwidth/binary_add_65536_f32` | 7.334 us | 11.278 us | 0.670x |
-| `array/bandwidth/reversed_add_65536_f32` | 13.884 us | 30.888 us | 0.450x |
+| row                                           |     monpy |      NumPy |  ratio |
+| --------------------------------------------- | --------: | ---------: | -----: |
+| `array/bandwidth/binary_add_65536_f32`        |  7.334 us |  11.278 us | 0.670x |
+| `array/bandwidth/reversed_add_65536_f32`      | 13.884 us |  30.888 us | 0.450x |
 | `array/bandwidth/fused_sin_add_mul_65536_f32` | 39.779 us | 116.539 us | 0.342x |
 
 The `sample(1)` CPU profile for `array/bandwidth/binary_add_65536_f32` showed
@@ -2257,7 +2251,7 @@ ratio. No PMU counters were collected on macOS because this run used
 `--no-perf-stat`; the stack samples and manifests live under
 `results/local-profile-20260509-binary-add-static-*`.
 
-Next target should be either the pure-Mojo `add_f32_64k`/`add_f32_1m` variance
+Next target: either the pure-Mojo `add_f32_64k`/`add_f32_1m` variance
 with a longer stdlib harness runtime, or the larger public wrapper cluster
 (`moveaxis_f32`, `empty_like_shape_override_f32`, `transpose_add_f32`) where the
 NumPy-facing ratios are still 1.7x-1.9x.
@@ -2289,22 +2283,22 @@ That third split was not cosmetic. The first implementation used only
 `worker_count_for_rows(rows)`, which let the 32-row attention benchmark spawn
 two workers. The smoke result immediately regressed:
 
-| smoke | row | monpy us | NumPy us | ratio |
-| --- | --- | -------: | -------: | ----: |
-| row-only policy | `attention/softmax/causal_scores_t32_f32` | 18.300 | 12.438 | 1.466x |
-| row-only policy | `attention/attention/causal_attention_t32_d32_f32` | 38.654 | 27.550 | 1.412x |
-| row-only policy | `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 139.608 | 116.442 | 1.199x |
+| smoke           | row                                                | monpy us | NumPy us |  ratio |
+| --------------- | -------------------------------------------------- | -------: | -------: | -----: |
+| row-only policy | `attention/softmax/causal_scores_t32_f32`          |   18.300 |   12.438 | 1.466x |
+| row-only policy | `attention/attention/causal_attention_t32_d32_f32` |   38.654 |   27.550 | 1.412x |
+| row-only policy | `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32`   |  139.608 |  116.442 | 1.199x |
 
 After adding the row-element budget, the same small attention rows stayed on the
 serial f32 row kernels and returned below NumPy:
 
-| smoke | row | monpy us | NumPy us | ratio |
-| --- | --- | -------: | -------: | ----: |
-| row-element policy | `attention/softmax/causal_scores_t32_f32` | 9.387 | 13.142 | 0.711x |
-| row-element policy | `attention/attention/causal_attention_t32_d32_f32` | 23.342 | 26.450 | 0.886x |
-| row-element policy | `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 72.921 | 117.988 | 0.619x |
+| smoke              | row                                                | monpy us | NumPy us |  ratio |
+| ------------------ | -------------------------------------------------- | -------: | -------: | -----: |
+| row-element policy | `attention/softmax/causal_scores_t32_f32`          |    9.387 |   13.142 | 0.711x |
+| row-element policy | `attention/attention/causal_attention_t32_d32_f32` |   23.342 |   26.450 | 0.886x |
+| row-element policy | `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32`   |   72.921 |  117.988 | 0.619x |
 
-Focused verification:
+Verification:
 
 ```text
 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/elementwise/kernels/parallel.mojo src/elementwise/kernels/nn.mojo src/elementwise/kernels/__init__.mojo src/elementwise/kernels/reduce.mojo
@@ -2320,8 +2314,7 @@ The pure-Mojo sweep had visible system noise in unrelated raw-kernel rows. One
 run reported `reductions/sum_f64_1m` at 2.197x against `std.algorithm.sum`, but
 the forced-serial pass put the same raw `reduce_sum_typed` row at 1.057x and an
 immediate normal rerun put it at 1.006x. Since `bench_mojo_sweep.mojo` calls
-`reduce_sum_typed` directly, not the new worker policy, that spike is not
-evidence for changing reduction grain yet. It needs a longer minimum-runtime
+`reduce_sum_typed` directly, not the new worker policy, I would treat that spike as noise for reduction grain. It needs a longer minimum-runtime
 harness before we treat it as a kernel signal.
 
 Next target: add a larger attention-size sweep so the row-element policy can be
