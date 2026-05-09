@@ -1812,3 +1812,92 @@ Remaining frontier after this slice:
 Next target should move off the complex view/cast rows and either revisit
 interop copy/view facade costs or investigate the pure-Mojo `scalar_mul_f64_64k`
 stdlib deficit as a separate kernel-level pass.
+
+### 2026-05-09 direct static typed elementwise ops
+
+The next refresh split the frontier into two different problems. The public
+complex rows were still led by facade and complex-buffer cases:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.667 | 1.951 | 1.370x |
+| `complex/interop/array_copy_complex128` | 3.087 | 2.427 | 1.268x |
+| `complex/elementwise/binary_add_complex64` | 2.975 | 2.418 | 1.229x |
+| `complex/elementwise/binary_add_complex128` | 3.234 | 2.643 | 1.224x |
+| `complex/elementwise/binary_mul_complex64` | 3.072 | 2.531 | 1.206x |
+
+The pure-Mojo stdlib comparison exposed a cleaner kernel-level miss:
+
+| row | candidate | stdlib | ratio |
+| --- | --------: | -----: | ----: |
+| `elementwise/add_f64_64k` | 13.79 us | 12.30 us | 1.121x |
+| `reductions/prod_f32_64k` | 3.24 us | 3.07 us | 1.057x |
+| `elementwise/sin_f64_1k` | 2.58 us | 2.48 us | 1.040x |
+
+The static typed binary kernels were still going through
+`apply_binary_typed_vec_static` inside the SIMD loop. Even though `op` is a
+comptime parameter, the stdlib baseline was spelling the ADD loop directly:
+`load[width]`, add, `store`. The kernel now emits direct SIMD loops for static
+ADD/SUB/MUL/DIV in `binary_same_shape_contig_typed_static`, plus direct scalar
+ADD/MUL loops in `binary_scalar_contig_typed_static` where operand order does
+not affect the result. The generic helper remains for the wider binary-op set.
+
+Focused verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/elementwise/kernels/typed.mojo
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/python -m monpy._bench.mojo_sweep --format json --sort ratio --output-dir results/local-sweep-20260509-mojo-static-direct-0324 --no-stdout --timeout 300
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_numeric.py::test_broadcasted_binary_ops_match_numpy tests/python/numpy_compat/test_numeric.py::test_scalar_binary_ops_match_numpy tests/python/numpy_compat/test_numeric.py::test_binary_out_writes_existing_destination tests/python/numpy_compat/test_ufunc.py::test_power_scalar_square_and_cube_match_numpy tests/python/numpy_compat/test_complex.py::test_complex_arithmetic_add_sub_mul_div_match_numpy -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --repeats 7 --rounds 5 --matrix-sizes 64 --format json --sort ratio --output-dir results/local-sweep-20260509-complex-static-direct-0324 --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types array --loops 50 --repeats 7 --rounds 5 --vector-sizes 65536 --matrix-sizes 64 --linalg-sizes 8 --format json --sort ratio --output-dir results/local-sweep-20260509-array-static-direct-0324 --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/elementwise/binary_add_complex64 --types complex --candidate monpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-binary-add-complex64-static-direct-monpy --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/elementwise/binary_add_complex64 --types complex --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-binary-add-complex64-static-direct-numpy --sample --no-perf-stat
+```
+
+Post-fix pure-Mojo stdlib result:
+
+| row | before | after | delta |
+| --- | -----: | ----: | ----: |
+| `elementwise/add_f64_64k` | 13.79 us vs 12.30 us, 1.121x | 16.21 us vs 16.18 us, 1.002x | ratio gap removed |
+
+The absolute nanoseconds moved with machine noise on this run, but the
+candidate and stdlib paths now track each other at the row level. This is the
+right signal for this harness because both sides are measured back-to-back in
+the same generated Mojo binary.
+
+Public complex refresh after rebuilding:
+
+| row | before | after | delta |
+| --- | -----: | ----: | ----: |
+| `complex/elementwise/binary_add_complex64` | 2.975 us vs 2.418 us, 1.229x | 2.988 us vs 2.484 us, 1.201x | 1.02x ratio improvement |
+| `complex/interop/array_copy_complex128` | 3.087 us vs 2.427 us, 1.268x | 3.057 us vs 2.473 us, 1.235x | 1.03x ratio improvement |
+
+The public array slice did not show a real-valued elementwise fallout. The
+bandwidth-size `array/bandwidth/binary_add_65536_f32` row stayed comfortably
+ahead of NumPy at 6.930 us vs 11.633 us, 0.607x. The wrapper-size
+`array/elementwise/binary_add_f32` row was 3.036 us vs 2.407 us, 1.263x, which
+keeps the next public array target in facade/orchestration territory rather
+than this SIMD loop.
+
+The `complex/elementwise/binary_add_complex64` profiles reported 3.146 us/call
+for monpy and 2.616 us/call for NumPy. Monpy used backend code 2, the fused
+native path, with max RSS about 49.3 MB and a traced allocation peak of 1,598
+bytes. NumPy's traced allocation peak was 17,608 bytes. No PMU counters were
+collected because the profile command used `--no-perf-stat`; the `sample(1)`
+captures live under
+`results/local-profile-20260509-binary-add-complex64-static-direct-*`.
+
+Remaining frontier after this slice:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.671 | 1.974 | 1.354x |
+| `complex/interop/array_copy_complex128` | 3.057 | 2.473 | 1.235x |
+| `complex/elementwise/binary_add_complex128` | 3.239 | 2.649 | 1.232x |
+| `complex/elementwise/binary_add_complex64` | 2.988 | 2.484 | 1.201x |
+| `complex/elementwise/binary_mul_complex64` | 3.080 | 2.567 | 1.197x |
+
+Next target should either specialize complex128 add/mul at the fused-kernel
+level, or attack the `asarray_complex64` facade only if a profile shows more
+than wrapper creation and dtype lookup left to remove.

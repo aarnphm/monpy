@@ -184,18 +184,40 @@ def binary_same_shape_contig_typed_static[
     comptime width = simd_width_of[dtype]()
     var i = 0
     while i + width <= size:
-        out_ptr.store(
-            i,
-            apply_binary_typed_vec_static[dtype, width, op](
-                lhs_ptr.load[width=width](i),
-                rhs_ptr.load[width=width](i),
-            ),
-        )
+        var lhs_vec = lhs_ptr.load[width=width](i)
+        var rhs_vec = rhs_ptr.load[width=width](i)
+        comptime if op == BinaryOp.ADD.value:
+            out_ptr.store(i, lhs_vec + rhs_vec)
+        else:
+            comptime if op == BinaryOp.SUB.value:
+                out_ptr.store(i, lhs_vec - rhs_vec)
+            else:
+                comptime if op == BinaryOp.MUL.value:
+                    out_ptr.store(i, lhs_vec * rhs_vec)
+                else:
+                    comptime if op == BinaryOp.DIV.value:
+                        out_ptr.store(i, lhs_vec / rhs_vec)
+                    else:
+                        out_ptr.store(i, apply_binary_typed_vec_static[dtype, width, op](lhs_vec, rhs_vec))
         i += width
     while i < size:
-        out_ptr[i] = apply_binary_typed_vec_static[dtype, 1, op](
-            SIMD[dtype, 1](lhs_ptr[i]), SIMD[dtype, 1](rhs_ptr[i])
-        )[0]
+        var lhs = lhs_ptr[i]
+        var rhs = rhs_ptr[i]
+        comptime if op == BinaryOp.ADD.value:
+            out_ptr[i] = lhs + rhs
+        else:
+            comptime if op == BinaryOp.SUB.value:
+                out_ptr[i] = lhs - rhs
+            else:
+                comptime if op == BinaryOp.MUL.value:
+                    out_ptr[i] = lhs * rhs
+                else:
+                    comptime if op == BinaryOp.DIV.value:
+                        out_ptr[i] = lhs / rhs
+                    else:
+                        out_ptr[i] = apply_binary_typed_vec_static[dtype, 1, op](
+                            SIMD[dtype, 1](lhs), SIMD[dtype, 1](rhs)
+                        )[0]
         i += 1
 
 
@@ -269,18 +291,31 @@ def binary_scalar_contig_typed_static[
     var i = 0
     while i + width <= size:
         var array_vec = array_ptr.load[width=width](i)
-        if scalar_on_left:
-            out_ptr.store(i, apply_binary_typed_vec_static[dtype, width, op](scalar_vec, array_vec))
+        comptime if op == BinaryOp.ADD.value:
+            out_ptr.store(i, array_vec + scalar_vec)
         else:
-            out_ptr.store(i, apply_binary_typed_vec_static[dtype, width, op](array_vec, scalar_vec))
+            comptime if op == BinaryOp.MUL.value:
+                out_ptr.store(i, array_vec * scalar_vec)
+            else:
+                if scalar_on_left:
+                    out_ptr.store(i, apply_binary_typed_vec_static[dtype, width, op](scalar_vec, array_vec))
+                else:
+                    out_ptr.store(i, apply_binary_typed_vec_static[dtype, width, op](array_vec, scalar_vec))
         i += width
     while i < size:
-        var lhs_v = SIMD[dtype, 1](array_ptr[i])
-        var rhs_v = SIMD[dtype, 1](scalar_value)
-        if scalar_on_left:
-            out_ptr[i] = apply_binary_typed_vec_static[dtype, 1, op](rhs_v, lhs_v)[0]
+        var array = array_ptr[i]
+        comptime if op == BinaryOp.ADD.value:
+            out_ptr[i] = array + scalar_value
         else:
-            out_ptr[i] = apply_binary_typed_vec_static[dtype, 1, op](lhs_v, rhs_v)[0]
+            comptime if op == BinaryOp.MUL.value:
+                out_ptr[i] = array * scalar_value
+            else:
+                var lhs_v = SIMD[dtype, 1](array)
+                var rhs_v = SIMD[dtype, 1](scalar_value)
+                if scalar_on_left:
+                    out_ptr[i] = apply_binary_typed_vec_static[dtype, 1, op](rhs_v, lhs_v)[0]
+                else:
+                    out_ptr[i] = apply_binary_typed_vec_static[dtype, 1, op](lhs_v, rhs_v)[0]
         i += 1
 
 
