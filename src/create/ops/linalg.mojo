@@ -10,7 +10,7 @@ Why grouped: every op shares the same shape — unbox arrays, allocate
 result(s), call into elementwise, return a Python list-or-Array.
 """
 
-from std.math import sqrt as _sqrt
+from std.math import log as _log, sqrt as _sqrt
 from std.python import Python, PythonObject
 
 from array import (
@@ -174,6 +174,20 @@ def det_ops(array_obj: PythonObject) raises -> PythonObject:
     var result = make_empty_array(result_dtype_for_linalg(src[].dtype_code), shape^)
     lu_det_into(src[], result)
     return PythonObject(alloc=result^)
+
+
+def slogdet_ops(array_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var shape = List[Int]()
+    var det_result = make_empty_array(result_dtype_for_linalg(src[].dtype_code), shape^)
+    lu_det_into(src[], det_result)
+    var det_value = get_logical_as_f64(det_result, 0)
+    if det_value == 0.0:
+        return Python.list(PythonObject(0.0), PythonObject(_log(0.0)))
+    var sign = 1.0
+    if det_value < 0.0:
+        sign = -1.0
+    return Python.list(PythonObject(sign), PythonObject(_log(_abs_f64(det_value))))
 
 
 def qr_ops(array_obj: PythonObject, mode_obj: PythonObject) raises -> PythonObject:

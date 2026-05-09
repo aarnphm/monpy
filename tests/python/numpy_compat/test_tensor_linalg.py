@@ -263,3 +263,16 @@ def test_matrix_rank_matches_numpy() -> None:
   rk_mp = mp.linalg.matrix_rank(mp.asarray(a, dtype=mp.float64))
   rk_np = numpy.linalg.matrix_rank(a)
   assert rk_mp == rk_np
+
+
+def test_slogdet_matches_numpy_for_positive_negative_and_singular() -> None:
+  cases = [
+    numpy.asarray([[2.0, 0.0], [0.0, 3.0]]),
+    numpy.asarray([[-2.0, 0.0], [0.0, 3.0]]),
+    numpy.asarray([[1.0, 2.0], [2.0, 4.0]]),
+  ]
+  for a in cases:
+    sign_mp, logdet_mp = mp.linalg.slogdet(mp.asarray(a, dtype=mp.float64))
+    sign_np, logdet_np = numpy.linalg.slogdet(a)
+    assert sign_mp == sign_np
+    numpy.testing.assert_allclose(logdet_mp, logdet_np, rtol=1e-10, atol=1e-10)

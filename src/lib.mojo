@@ -73,6 +73,7 @@ from create import (
     sin_add_mul_ops,
     slice_1d_ops,
     slice_ops,
+    slogdet_ops,
     softmax_last_axis_ops,
     stack_axis0_ops,
     squeeze_axis_ops,
@@ -203,6 +204,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[solve_ops]("linalg_solve")
         module.def_function[inv_ops]("linalg_inv")
         module.def_function[det_ops]("linalg_det")
+        module.def_function[slogdet_ops]("linalg_slogdet")
         module.def_function[qr_ops]("linalg_qr")
         module.def_function[cholesky_ops]("linalg_cholesky")
         module.def_function[eigh_ops]("linalg_eigh")

@@ -1,8 +1,7 @@
 # fmt: off
 # ruff: noqa
 from __future__ import annotations
-import math as _math
-import typing
+import typing, math, builtins # used by einsum (zip, etc.)
 from . import (
   _native,
   asarray,
@@ -33,7 +32,9 @@ def _w(fn, *a):
   try:return fn(*a)
   except Exception as exc:raise LinAlgError(str(exc)) from exc
 
-def _prod(xs):return _math.prod(xs)
+_INF=float("inf")
+_NEG_INF=float("-inf")
+
 def _strides(sh):
   out=[1]*len(sh)
   for d in range(len(sh)-2, -1, -1):out[d]=out[d+1]*sh[d+1]
@@ -105,9 +106,9 @@ def tensordot(a, b, axes=2):
   b_kept=tuple(d for d in range(B.ndim) if d not in b_axes)
   A_perm=transpose(A, tuple(a_kept)+a_axes)
   B_perm=transpose(B, b_axes+b_kept)
-  a_kept_size=_prod(A.shape[d] for d in a_kept)
-  contract_size=_prod(A.shape[d] for d in a_axes)
-  b_kept_size=_prod(B.shape[d] for d in b_kept)
+  a_kept_size=math.prod(A.shape[d] for d in a_kept)
+  contract_size=math.prod(A.shape[d] for d in a_axes)
+  b_kept_size=math.prod(B.shape[d] for d in b_kept)
   A_mat=ascontiguousarray(A_perm).reshape((a_kept_size, contract_size))
   B_mat=ascontiguousarray(B_perm).reshape((contract_size, b_kept_size))
   out=matmul(A_mat, B_mat)
@@ -120,7 +121,7 @@ def kron(a, b):
   while A.ndim<B.ndim:A=expand_dims(A, 0)
   while B.ndim<A.ndim:B=expand_dims(B, 0)
   out_shape=tuple(s_a*s_b for s_a, s_b in zip(A.shape, B.shape, strict=True))
-  total=_prod(out_shape)
+  total=math.prod(out_shape)
   flat_a=[A._native.get_scalar(i) for i in range(A.size)]
   flat_b=[B._native.get_scalar(i) for i in range(B.size)]
   in_a_strides=_strides(A.shape)
@@ -184,10 +185,10 @@ def norm(x, ord=None, axis=None, keepdims=False):
     if ord==1:
       from . import absolute as _abs
       return _sum(_abs(X), axis=axis, keepdims=keepdims)
-    if ord==_math.inf:
+    if ord==_INF:
       from . import absolute as _abs
       return _abs(X).max(axis=axis) if not keepdims else _abs(X).max(axis=axis)
-    if ord==-_math.inf:
+    if ord==_NEG_INF:
       from . import absolute as _abs
       return _abs(X).min(axis=axis) if not keepdims else _abs(X).min(axis=axis)
     if ord==0:
@@ -230,9 +231,8 @@ def matrix_power(a, n):
 
 def slogdet(a):
   A=asarray(a)
-  d=det(A)
-  if d==0:return 0.0, float('-inf')
-  return (1.0 if d>0 else -1.0), _math.log(abs(d))
+  sign, logdet=_w(_native.linalg_slogdet, A._native)
+  return sign, logdet
 
 def multi_dot(arrays):
   arrs=[asarray(a) for a in arrays]
@@ -249,8 +249,8 @@ def tensorinv(a, ind=2):
   if A.ndim<ind:raise ValueError("tensorinv: ind must be < a.ndim")
   out_shape=A.shape[:ind]
   in_shape=A.shape[ind:]
-  out_size=_prod(out_shape)
-  in_size=_prod(in_shape)
+  out_size=math.prod(out_shape)
+  in_size=math.prod(in_shape)
   if out_size!=in_size:raise ValueError("tensorinv: outer / inner volumes must match")
   flat=A.reshape((out_size, in_size))
   inverse=inv(flat)
@@ -270,12 +270,12 @@ def tensorsolve(a, b, axes=None):
     for ax in sorted(axes, reverse=True):a_axes.pop(ax)
     a_axes+=list(axes)
     A=transpose(A, tuple(a_axes))
-  prod_b=_prod(B.shape)
+  prod_b=math.prod(B.shape)
   # Leading axes of A correspond to b's shape; trailing axes are x's shape.
   if A.ndim<B.ndim or A.shape[:B.ndim]!=B.shape:
     raise ValueError("tensorsolve: leading axes of a must match b.shape")
   x_shape=A.shape[B.ndim:]
-  prod_x=_prod(x_shape)
+  prod_x=math.prod(x_shape)
   if prod_b!=prod_x:raise ValueError("tensorsolve: square reshape required")
   flat_a=A.reshape((prod_b, prod_x))
   flat_b=ravel(B)
@@ -358,9 +358,6 @@ def _einsum_finalise(sub, arr, out_sub):
   perm=[sub.index(ch) for ch in out_sub]
   if perm!=list(range(len(perm))):arr=transpose(arr, tuple(perm))
   return arr
-
-
-import builtins  # used by einsum (zip, etc.)
 
 # Helpers for the LAPACK-backed paths below.
 _QR_MODES={"reduced":0, "complete":1, "r":2}

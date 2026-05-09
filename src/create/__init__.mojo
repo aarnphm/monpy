@@ -190,6 +190,7 @@ from .ops.linalg import (
     matmul_ops,
     pinv_ops,
     qr_ops,
+    slogdet_ops,
     solve_ops,
     svd_ops,
 )

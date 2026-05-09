@@ -3260,3 +3260,51 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 ```
 
 Artifact: `results/local-sweep-20260509-linalg-api-coverage`.
+
+### 2026-05-09 native slogdet scalar finish
+
+`python/monpy/linalg.py` still imported CPython `math` after the linalg API
+benchmark expansion. Most of that was not a data-path bug:
+
+- shape products in `tensorinv`, `tensorsolve`, and `tensordot` are Python
+  metadata over tuples;
+- `inf` checks in `norm` are scalar branch selection;
+- `slogdet` was different: it called native `det`, pulled the scalar back to
+  Python, then did `math.log(abs(det))`.
+
+Patch:
+
+- Added native `linalg_slogdet` at the Mojo extension boundary.
+- `slogdet` now computes determinant sign and log-absolute-determinant in
+  `src/create/ops/linalg.mojo`, then returns Python scalars.
+- Removed `math` from `python/monpy/linalg.py`; shape products use a tiny local
+  integer loop, and infinity sentinels are local constants.
+- Added coverage for positive, negative, and singular determinants.
+
+Micro row:
+
+| row | before us | after us | speedup |
+| --- | --------: | -------: | ------: |
+| `array/linalg_api/slogdet_16_f64` | 4.753 | 4.178 | 1.14:1 |
+
+Read:
+
+- This is not the big linalg win. It is boundary hygiene: a linalg numeric
+  result should not bounce through Python `math` when the native linalg layer is
+  already open.
+- The big rows are still `kron`, `tensordot`, `dot/vdot/inner`, and
+  `matvec/vecmat`; those need native kernels, not scalar cleanup.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/create/ops/linalg.mojo src/create/__init__.mojo src/lib.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py -q
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/python - <<'PY'
+from monpy._bench.core import build_cases, run_case
+cases = build_cases(vector_size=1024, vector_sizes=(16384,), matrix_sizes=(16,), linalg_sizes=(2,))
+case = next(c for c in cases if c.group == 'linalg_api' and c.name == 'slogdet_16_f64')
+print(run_case(case, loops=200, repeats=5, round_index=1))
+PY
+```
