@@ -54,6 +54,9 @@ def _has_vecdot_kernel(a:ndarray, b:ndarray)->bool:
 def _norm2_all(x:ndarray)->ndarray:
   return ndarray._wrap(_w(_native.linalg_norm2_all, x._native))
 
+def _norm1_all(x:ndarray)->ndarray:
+  return ndarray._wrap(_w(_native.linalg_norm1_all, x._native))
+
 def _norm2_last_axis(x:ndarray)->ndarray:
   return ndarray._wrap(_w(_native.linalg_norm2_last_axis, x._native))
 
@@ -206,6 +209,11 @@ def trace(a:object, offset:int=0, axis1:int=0, axis2:int=1, dtype:object=None)->
 
 def norm(x:object, ord:object=None, axis:object=None, keepdims:bool=False)->object:
   X=_array(x)
+  if _has_norm2_kernel(X) and not keepdims and ord==1:
+    if axis is None and X.ndim==1:return _norm1_all(X)
+    if isinstance(axis, int):
+      ax=_normalize_axis(axis, X.ndim)
+      if X.ndim==1 and ax==0:return _norm1_all(X)
   if _has_norm2_kernel(X) and not keepdims and (ord is None or ord==2):
     if axis is None and X.ndim in(1, 2):return _norm2_all(X)
     if isinstance(axis, int):

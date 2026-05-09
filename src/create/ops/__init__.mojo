@@ -57,6 +57,7 @@ from .linalg import (
     kron_ops,
     lstsq_ops,
     matmul_ops,
+    norm1_all_ops,
     norm2_all_ops,
     norm2_last_axis_ops,
     outer_ops,

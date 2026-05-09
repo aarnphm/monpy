@@ -313,6 +313,42 @@ def norm2_sumsq_contiguous_typed[
     return acc
 
 
+def _simd_abs[
+    dtype: DType, width: Int
+](value: SIMD[dtype, width]) -> SIMD[dtype, width] where dtype.is_floating_point():
+    var zero = SIMD[dtype, width](0)
+    return value.lt(zero).select(zero - value, value)
+
+
+def norm1_sumabs_contiguous_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
+) raises -> Float64 where dtype.is_floating_point():
+    comptime width = simd_width_of[dtype]()
+    var a0 = SIMD[dtype, width](0)
+    var a1 = SIMD[dtype, width](0)
+    var a2 = SIMD[dtype, width](0)
+    var a3 = SIMD[dtype, width](0)
+    var i = 0
+    comptime block = width * 4
+    while i + block <= size:
+        a0 += _simd_abs[dtype, width](src_ptr.load[width=width](i))
+        a1 += _simd_abs[dtype, width](src_ptr.load[width=width](i + width))
+        a2 += _simd_abs[dtype, width](src_ptr.load[width=width](i + 2 * width))
+        a3 += _simd_abs[dtype, width](src_ptr.load[width=width](i + 3 * width))
+        i += block
+    var acc_vec = (a0 + a1) + (a2 + a3)
+    while i + width <= size:
+        acc_vec += _simd_abs[dtype, width](src_ptr.load[width=width](i))
+        i += width
+    var acc = Float64(acc_vec.reduce_add()[0])
+    while i < size:
+        acc += _abs_f64(Float64(src_ptr[i]))
+        i += 1
+    return acc
+
+
 def norm2_all_ops(array_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
     var shape = List[Int]()
@@ -341,6 +377,32 @@ def norm2_all_ops(array_obj: PythonObject) raises -> PythonObject:
         var v = get_logical_as_f64(src[], i)
         acc += v * v
     set_logical_from_f64(result, 0, _sqrt(acc))
+    return PythonObject(alloc=result^)
+
+
+def norm1_all_ops(array_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var shape = List[Int]()
+    var result = make_empty_array(src[].dtype_code, shape^)
+    if is_c_contiguous(src[]):
+        if src[].dtype_code == ArrayDType.FLOAT32.value:
+            set_logical_from_f64(
+                result,
+                0,
+                norm1_sumabs_contiguous_typed[DType.float32](contiguous_ptr[DType.float32](src[]), src[].size_value),
+            )
+            return PythonObject(alloc=result^)
+        if src[].dtype_code == ArrayDType.FLOAT64.value:
+            set_logical_from_f64(
+                result,
+                0,
+                norm1_sumabs_contiguous_typed[DType.float64](contiguous_ptr[DType.float64](src[]), src[].size_value),
+            )
+            return PythonObject(alloc=result^)
+    var acc = 0.0
+    for i in range(src[].size_value):
+        acc += _abs_f64(get_logical_as_f64(src[], i))
+    set_logical_from_f64(result, 0, acc)
     return PythonObject(alloc=result^)
 
 

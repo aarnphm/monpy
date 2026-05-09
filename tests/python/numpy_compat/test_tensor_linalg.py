@@ -161,6 +161,12 @@ def test_norm_l1_and_inf() -> None:
   assert float(mp.linalg.norm(a, ord=math.inf)) == 3.0
 
 
+def test_norm_l1_strided_matches_numpy() -> None:
+  a_np = numpy.asarray([1.0, -2.0, 3.0, -4.0], dtype=numpy.float64)[::-1]
+  a = mp.asarray([1.0, -2.0, 3.0, -4.0], dtype=mp.float64)[::-1]
+  numpy.testing.assert_allclose(float(mp.linalg.norm(a, ord=1)), float(numpy.linalg.norm(a_np, ord=1)), rtol=1e-12)
+
+
 # ---------------------------------------------------------------------------
 # matrix_power / multi_dot
 # ---------------------------------------------------------------------------

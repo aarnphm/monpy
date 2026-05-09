@@ -3766,3 +3766,59 @@ MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarn
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py tests/python/numpy_compat/test_linalg.py -q
 ```
+
+### 2026-05-09 native vector L1 norm
+
+After the tensor wrappers landed, the next fresh array sweep left
+`norm_vec1_32_f64` as the cleanest non-scalar-return target:
+
+| row                                      | monpy us | numpy us | ratio  |
+| ---------------------------------------- | -------: | -------: | -----: |
+| `array/linalg_api/dot_1d_32_f64`         |    5.259 |    2.286 | 2.298x |
+| `array/linalg_api/inner_32_f64`          |    5.275 |    2.371 | 2.198x |
+| `array/linalg_api/vecdot_axis1_8x4_f64`  |    5.798 |    2.712 | 2.146x |
+| `array/linalg_api/vdot_32_f64`           |    4.949 |    2.313 | 2.144x |
+| `array/linalg_api/norm_vec1_32_f64`      |    7.029 |    3.391 | 2.073x |
+
+Patch:
+
+- Added `_native.linalg_norm1_all`.
+- The contiguous float32/float64 path does `sum(abs(x))` in one Mojo pass,
+  using four SIMD accumulators and a vector select for the absolute value.
+- The strided fallback walks logical indices and accumulates absolute values
+  without materializing an intermediate array.
+- `monpy.linalg.norm(x, ord=1)` now routes rank-1 float arrays through the
+  native path when `keepdims=False`.
+
+Post-patch array rerun:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-array-20260509-native-norm1 --no-progress --no-stdout
+```
+
+Key movement:
+
+| row                                 | before us | after us | before ratio | after ratio | speedup |
+| ----------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/linalg_api/norm_vec1_32_f64` |     7.029 |    3.059 |       2.073x |      0.902x |  2.30:1 |
+
+Read:
+
+- The row moved from 2.07x slower than NumPy to faster than NumPy. Median
+  times put monpy at roughly 1.11:1 faster than NumPy for this tiny vector.
+- The win is from deleting the `absolute` temporary and the second reduction
+  dispatch. For 32 elements, the allocation and crossing cost was larger than
+  the arithmetic.
+- The scalar dot family is still the top cluster: `dot_1d_32_f64` at 2.281x,
+  `inner_32_f64` at 2.214x, `vecdot_axis1_8x4_f64` at 2.149x, and
+  `vdot_32_f64` at 2.142x.
+- The next serious target is the scalar-return facade around dot/vdot/inner,
+  or a policy change that returns a native scalar with less Python wrapping.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/create/ops/linalg.mojo src/create/ops/__init__.mojo src/create/__init__.mojo src/lib.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py tests/python/numpy_compat/test_linalg.py -q
+```
