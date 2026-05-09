@@ -30,7 +30,9 @@ f32 1k; 8-way → 133 GB/s f32 1k; std.algorithm.sum → 130 GB/s. The
 `simd-vectorisation.md §6`.
 """
 
-from std.math import min as _simd_min, max as _simd_max
+from std.algorithm import sync_parallelize
+from std.math import ceildiv, min as _simd_min, max as _simd_max
+from std.memory.unsafe_pointer import alloc
 from std.sys import simd_width_of
 
 from array import (
@@ -47,6 +49,11 @@ from array import (
 from cute.iter import LayoutIter
 from domain import ArrayDType, BackendKind, ReduceOp
 
+from elementwise.kernels.parallel import (
+    REDUCE_GRAIN,
+    should_parallelize_bytes,
+    worker_count,
+)
 from elementwise.predicates import is_contiguous_float_array
 
 
@@ -103,6 +110,50 @@ def reduce_sum_typed[
         acc += Float64(src_ptr[i])
         i += 1
     return acc
+
+
+def reduce_sum_par_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
+) raises -> Float64 where dtype.is_floating_point():
+    # Multi-thread sum: chunk across `worker_count(...)` P-cores, each
+    # worker calls `reduce_sum_typed` (the 8-way SIMD kernel) on its
+    # slice into a Float64 partial. Master thread combines partials at
+    # the end (small, scalar — irrelevant cost).
+    #
+    # Validated in `benches/bench_reduce.mojo`:
+    #   - 16M f32: 61 → 117 GB/s (1.9x, hits M3 Pro DRAM ceiling)
+    #   - 1M f64 cache-resident: 82 → 374 GB/s (4.6x, L2 ceiling)
+    #
+    # The caller is expected to gate on `should_parallelize_bytes` —
+    # this function does not check and will fan out for tiny inputs
+    # if asked. See `maybe_reduce_contiguous` for the production gate.
+    var nworkers = worker_count(size)
+    if nworkers <= 1:
+        return reduce_sum_typed[dtype](src_ptr, size)
+
+    var partials = alloc[Float64](nworkers)
+    var chunk = ceildiv(size, nworkers)
+
+    @parameter
+    def worker(i: Int) raises:
+        var start = i * chunk
+        var end = start + chunk
+        if end > size:
+            end = size
+        if start >= size:
+            partials[i] = 0.0
+            return
+        partials[i] = reduce_sum_typed[dtype](src_ptr + start, end - start)
+
+    sync_parallelize[worker](nworkers)
+
+    var total = Float64(0)
+    for i in range(nworkers):
+        total += partials[i]
+    partials.free()
+    return total
 
 
 def reduce_min_typed[
@@ -577,9 +628,17 @@ def maybe_reduce_contiguous(src: Array, mut result: Array, op: Int) raises -> Bo
     if op == ReduceOp.SUM.value or op == ReduceOp.MEAN.value:
         var acc: Float64
         if src.dtype_code == ArrayDType.FLOAT32.value:
-            acc = reduce_sum_typed[DType.float32](contiguous_ptr[DType.float32](src), src.size_value)
+            var ptr = contiguous_ptr[DType.float32](src)
+            if should_parallelize_bytes(src.size_value * 4, REDUCE_GRAIN):
+                acc = reduce_sum_par_typed[DType.float32](ptr, src.size_value)
+            else:
+                acc = reduce_sum_typed[DType.float32](ptr, src.size_value)
         elif src.dtype_code == ArrayDType.FLOAT64.value:
-            acc = reduce_sum_typed[DType.float64](contiguous_ptr[DType.float64](src), src.size_value)
+            var ptr = contiguous_ptr[DType.float64](src)
+            if should_parallelize_bytes(src.size_value * 8, REDUCE_GRAIN):
+                acc = reduce_sum_par_typed[DType.float64](ptr, src.size_value)
+            else:
+                acc = reduce_sum_typed[DType.float64](ptr, src.size_value)
         else:
             return False
         if op == ReduceOp.MEAN.value:
