@@ -199,6 +199,8 @@ from .ops.linalg import (
     slogdet_ops,
     solve_ops,
     svd_ops,
+    tensorinv_ops,
+    tensorsolve_ops,
     vecdot_last_axis_ops,
 )
 from .ops.nn import (

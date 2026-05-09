@@ -18,13 +18,17 @@ from array import (
     Array,
     clone_int_list,
     contiguous_ptr,
+    copy_c_contiguous,
     get_logical_as_f64,
     is_c_contiguous,
+    make_c_strides,
     make_empty_array,
+    make_view_array_unchecked,
     result_dtype_for_binary,
     result_dtype_for_linalg,
     result_dtype_for_linalg_binary,
     set_logical_from_f64,
+    shape_size,
 )
 from domain import ArrayDType, BinaryOp
 from elementwise import (
@@ -639,6 +643,92 @@ def inv_ops(array_obj: PythonObject) raises -> PythonObject:
     shape.append(src[].shape[1])
     var result = make_empty_array(result_dtype_for_linalg(src[].dtype_code), shape^)
     lu_inverse_into(src[], result)
+    return PythonObject(alloc=result^)
+
+
+def _shape_slice(shape: List[Int], start: Int, stop: Int) -> List[Int]:
+    var out = List[Int]()
+    for axis in range(start, stop):
+        out.append(shape[axis])
+    return out^
+
+
+def _shape_product(shape: List[Int]) raises -> Int:
+    return shape_size(clone_int_list(shape))
+
+
+def _reshape_row_major_view_or_copy(src: Array, var shape: List[Int]) raises -> Array:
+    var size = shape_size(shape)
+    var strides = make_c_strides(clone_int_list(shape))
+    if is_c_contiguous(src):
+        return make_view_array_unchecked(src, shape^, strides^, size, src.offset_elems)
+    var copied = copy_c_contiguous(src)
+    return make_view_array_unchecked(copied, shape^, strides^, copied.size_value, copied.offset_elems)
+
+
+def _flat_matrix_view(src: Array, rows: Int, cols: Int) raises -> Array:
+    var shape = List[Int]()
+    shape.append(rows)
+    shape.append(cols)
+    return _reshape_row_major_view_or_copy(src, shape^)
+
+
+def _flat_vector_view(src: Array, size: Int) raises -> Array:
+    var shape = List[Int]()
+    shape.append(size)
+    return _reshape_row_major_view_or_copy(src, shape^)
+
+
+def _append_shape(mut dst: List[Int], values: List[Int]):
+    for i in range(len(values)):
+        dst.append(values[i])
+
+
+def tensorinv_ops(array_obj: PythonObject, ind_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var ind = Int(py=ind_obj)
+    var ndim = len(src[].shape)
+    if ind < 0 or ndim < ind:
+        raise Error("tensorinv: ind must be between 0 and a.ndim")
+    var out_shape = _shape_slice(src[].shape, 0, ind)
+    var in_shape = _shape_slice(src[].shape, ind, ndim)
+    var out_size = _shape_product(out_shape)
+    var in_size = _shape_product(in_shape)
+    if out_size != in_size:
+        raise Error("tensorinv: outer / inner volumes must match")
+    var flat = _flat_matrix_view(src[], out_size, in_size)
+    var inverse_shape = List[Int]()
+    inverse_shape.append(out_size)
+    inverse_shape.append(in_size)
+    var inverse = make_empty_array(result_dtype_for_linalg(flat.dtype_code), inverse_shape^)
+    lu_inverse_into(flat, inverse)
+    var result_shape = clone_int_list(in_shape)
+    _append_shape(result_shape, out_shape)
+    var result = _reshape_row_major_view_or_copy(inverse, result_shape^)
+    return PythonObject(alloc=result^)
+
+
+def tensorsolve_ops(a_obj: PythonObject, b_obj: PythonObject) raises -> PythonObject:
+    var a = a_obj.downcast_value_ptr[Array]()
+    var b = b_obj.downcast_value_ptr[Array]()
+    var b_ndim = len(b[].shape)
+    if len(a[].shape) < b_ndim:
+        raise Error("tensorsolve: leading axes of a must match b.shape")
+    for axis in range(b_ndim):
+        if a[].shape[axis] != b[].shape[axis]:
+            raise Error("tensorsolve: leading axes of a must match b.shape")
+    var x_shape = _shape_slice(a[].shape, b_ndim, len(a[].shape))
+    var prod_b = _shape_product(b[].shape)
+    var prod_x = _shape_product(x_shape)
+    if prod_b != prod_x:
+        raise Error("tensorsolve: square reshape required")
+    var flat_a = _flat_matrix_view(a[], prod_b, prod_x)
+    var flat_b = _flat_vector_view(b[], prod_b)
+    var solved_shape = List[Int]()
+    solved_shape.append(prod_x)
+    var solved = make_empty_array(result_dtype_for_linalg_binary(a[].dtype_code, b[].dtype_code), solved_shape^)
+    lu_solve_into(flat_a, flat_b, solved)
+    var result = _reshape_row_major_view_or_copy(solved, x_shape^)
     return PythonObject(alloc=result^)
 
 

@@ -88,6 +88,8 @@ from create import (
     solve_ops,
     swapaxes_ops,
     svd_ops,
+    tensorinv_ops,
+    tensorsolve_ops,
     trace_ops,
     transpose_full_reverse_ops,
     transpose_ops,
@@ -217,6 +219,8 @@ def PyInit__native() -> PythonObject:
         module.def_function[vecdot_last_axis_ops]("linalg_vecdot_last_axis")
         module.def_function[solve_ops]("linalg_solve")
         module.def_function[inv_ops]("linalg_inv")
+        module.def_function[tensorinv_ops]("linalg_tensorinv")
+        module.def_function[tensorsolve_ops]("linalg_tensorsolve")
         module.def_function[det_ops]("linalg_det")
         module.def_function[slogdet_ops]("linalg_slogdet")
         module.def_function[qr_ops]("linalg_qr")

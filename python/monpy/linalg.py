@@ -283,19 +283,8 @@ def multi_dot(arrays:typing.Sequence[object])->object:
   return out
 
 def tensorinv(a:object, ind:int=2)->ndarray:
-  # numpy.linalg.tensorinv: reshape A as a (prod(in_shape), prod(out_shape))
-  # matrix where in_shape = a.shape[ind:], out_shape = a.shape[:ind].
-  # Solve for B such that A @ B = I, then reshape B to (in_shape + out_shape).
   A=_array(a)
-  if A.ndim<ind:raise ValueError("tensorinv: ind must be < a.ndim")
-  out_shape=A.shape[:ind]
-  in_shape=A.shape[ind:]
-  out_size=_prod(out_shape)
-  in_size=_prod(in_shape)
-  if out_size!=in_size:raise ValueError("tensorinv: outer / inner volumes must match")
-  flat=A.reshape((out_size, in_size))
-  inverse=inv(flat)
-  return inverse.reshape(in_shape+out_shape)
+  return ndarray._wrap(_w(_native.linalg_tensorinv, A._native, ind))
 
 def tensorsolve(a:object, b:object, axes:typing.Sequence[int]|None=None)->ndarray:
   # numpy.linalg.tensorsolve: like solve but with general-rank tensors.
@@ -311,6 +300,7 @@ def tensorsolve(a:object, b:object, axes:typing.Sequence[int]|None=None)->ndarra
     for ax in sorted(axes, reverse=True):a_axes.pop(ax)
     a_axes+=list(axes)
     A=transpose(A, tuple(a_axes))
+  if axes is None:return ndarray._wrap(_w(_native.linalg_tensorsolve, A._native, B._native))
   prod_b=_prod(B.shape)
   # Leading axes of A correspond to b's shape; trailing axes are x's shape.
   if A.ndim<B.ndim or A.shape[:B.ndim]!=B.shape:

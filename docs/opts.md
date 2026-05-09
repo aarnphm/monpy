@@ -3713,3 +3713,56 @@ MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarn
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py tests/python/numpy_compat/test_linalg.py -q
 ```
+
+### 2026-05-09 native tensor solve/inverse wrappers
+
+After native Kronecker, the next fresh sweep put the tensor linalg wrappers
+right behind the small scalar-dot wall:
+
+| row                                        | monpy us | numpy us | ratio  |
+| ------------------------------------------ | -------: | -------: | -----: |
+| `array/linalg_api/dot_1d_32_f64`           |    5.700 |    2.339 | 2.437x |
+| `array/linalg_api/tensorinv_2x2x2x2_f64`   |   13.171 |    5.565 | 2.364x |
+| `array/linalg_api/tensorsolve_2x3x2x3_f64` |   14.825 |    6.266 | 2.329x |
+
+Patch:
+
+- Added `_native.linalg_tensorinv` and `_native.linalg_tensorsolve`.
+- `tensorinv` now does the shape split, square reshape, LU inverse, and final
+  reshape in Mojo.
+- `tensorsolve` now validates `a.shape == b.shape + x.shape`, flattens both
+  operands, calls the existing LU solve, then reshapes `x`.
+- Non-contiguous inputs are copied before the row-major reshape. That preserves
+  the existing `reshape_ops` behavior instead of inventing a stride lie.
+
+Post-patch array rerun:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-array-20260509-native-tensor-wrappers --no-progress --no-stdout
+```
+
+Key movement:
+
+| row                                        | before us | after us | before ratio | after ratio | speedup |
+| ------------------------------------------ | --------: | -------: | -----------: | ----------: | ------: |
+| `array/linalg_api/tensorinv_2x2x2x2_f64`   |    13.171 |    4.993 |       2.364x |      0.871x |  2.64:1 |
+| `array/linalg_api/tensorsolve_2x3x2x3_f64` |    14.825 |    4.970 |       2.329x |      0.749x |  2.98:1 |
+
+Read:
+
+- Both tensor rows left the top cluster and now beat NumPy on this machine.
+  `tensorinv` is about 1.15:1 faster than NumPy; `tensorsolve` is about 1.34:1
+  faster.
+- The new top row is back to `dot_1d_32_f64` at 2.274x. That row is mostly a
+  Python scalar-return tax now, not a kernel problem.
+- The next tractable target is probably `norm_vec1_32_f64` or
+  `matrix_power_2_n3_f64`. `norm_vec1` still composes `abs + sum`; `matrix_power`
+  still loops in Python over tiny matmul calls.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/create/ops/linalg.mojo src/create/ops/__init__.mojo src/create/__init__.mojo src/lib.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py tests/python/numpy_compat/test_linalg.py -q
+```

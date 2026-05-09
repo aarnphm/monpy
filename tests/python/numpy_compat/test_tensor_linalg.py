@@ -186,6 +186,19 @@ def test_multi_dot_chained_matmul() -> None:
   numpy.testing.assert_array_equal(numpy.asarray(out), [[55]])
 
 
+def test_tensorinv_matches_numpy() -> None:
+  a_np = numpy.eye(4, dtype=numpy.float64).reshape(2, 2, 2, 2)
+  out = mp.linalg.tensorinv(mp.asarray(a_np, dtype=mp.float64))
+  numpy.testing.assert_allclose(numpy.asarray(out), numpy.linalg.tensorinv(a_np), rtol=1e-12)
+
+
+def test_tensorsolve_matches_numpy() -> None:
+  a_np = numpy.eye(4, dtype=numpy.float64).reshape(2, 2, 2, 2)
+  b_np = numpy.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=numpy.float64)
+  out = mp.linalg.tensorsolve(mp.asarray(a_np, dtype=mp.float64), mp.asarray(b_np, dtype=mp.float64))
+  numpy.testing.assert_allclose(numpy.asarray(out), numpy.linalg.tensorsolve(a_np, b_np), rtol=1e-12)
+
+
 # ---------------------------------------------------------------------------
 # LAPACK-backed decompositions: qr / cholesky / eigh / eig / svd / lstsq / pinv
 # ---------------------------------------------------------------------------
