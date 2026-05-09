@@ -56,6 +56,13 @@ def test_inner_1d() -> None:
   assert float(mp.inner(a, b)) == 32.0
 
 
+def test_vecdot_axis1_matches_numpy() -> None:
+  a_np = numpy.asarray([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=numpy.float64)
+  b_np = numpy.asarray([[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]], dtype=numpy.float64)
+  out = mp.linalg.vecdot(mp.asarray(a_np, dtype=mp.float64), mp.asarray(b_np, dtype=mp.float64), axis=1)
+  numpy.testing.assert_allclose(numpy.asarray(out), numpy.linalg.vecdot(a_np, b_np, axis=1), rtol=1e-12)
+
+
 # ---------------------------------------------------------------------------
 # tensordot
 # ---------------------------------------------------------------------------

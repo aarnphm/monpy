@@ -93,6 +93,7 @@ from create import (
     triu_ops,
     unary_ops,
     unary_preserve_ops,
+    vecdot_last_axis_ops,
     where_ops,
 )
 from array import Array
@@ -207,6 +208,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[norm2_all_ops]("linalg_norm2_all")
         module.def_function[norm2_last_axis_ops]("linalg_norm2_last_axis")
         module.def_function[outer_ops]("linalg_outer")
+        module.def_function[vecdot_last_axis_ops]("linalg_vecdot_last_axis")
         module.def_function[solve_ops]("linalg_solve")
         module.def_function[inv_ops]("linalg_inv")
         module.def_function[det_ops]("linalg_det")

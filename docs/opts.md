@@ -3492,3 +3492,53 @@ MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarn
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py -q
 ```
+
+### 2026-05-09 native row-wise vecdot
+
+After the native L2 pass, the next loud row was `vecdot_axis1_8x4_f64`.
+
+| row                                     | monpy us | numpy us | ratio  |
+| --------------------------------------- | -------: | -------: | -----: |
+| `array/linalg_api/vecdot_axis1_8x4_f64` |    7.973 |    2.819 | 2.828x |
+
+Patch:
+
+- Added `_native.linalg_vecdot_last_axis` for matching rank-2 float32/float64
+  inputs.
+- The contiguous path fuses multiply and row reduction into one SIMD pass over
+  each row. That removes the temporary `multiply(A, B)` array and the generic
+  `sum(axis=1)` reduction.
+- Kept the Python route intentionally narrow. `np.linalg.vecdot` conjugates the
+  left operand for complex inputs, while the old monpy fallback does not, so
+  this fast path only claims real float32/float64 rows.
+
+Post-patch array rerun:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-array-20260509-native-vecdot --no-progress --no-stdout
+```
+
+Key movement:
+
+| row                                     | before us | after us | before ratio | after ratio | speedup |
+| --------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/linalg_api/vecdot_axis1_8x4_f64` |     7.973 |    6.143 |       2.828x |      2.117x |  1.30:1 |
+
+Read:
+
+- The row moved, but it did not disappear. At this size, one Python facade call
+  plus one native call is still a large fraction of the measurement.
+- The top row is now `array/linalg_api/dot_1d_32_f64` at 2.418x slower
+  (`5.921 us` vs `2.454 us`).
+- The cluster is obvious: `dot_1d_32_f64`, `inner_32_f64`, and `vdot_32_f64`
+  all do the same 32-element real dot and return a scalar. The next patch
+  should expose one native scalar dot leaf and route all three facades through
+  it.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/create/ops/linalg.mojo src/create/ops/__init__.mojo src/create/__init__.mojo src/lib.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py -q
+```

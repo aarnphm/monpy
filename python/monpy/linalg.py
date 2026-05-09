@@ -46,11 +46,17 @@ def _matmul(a:ndarray, b:ndarray)->ndarray:
 def _has_norm2_kernel(x:ndarray)->bool:
   return x.dtype in(float32, float64)
 
+def _has_vecdot_kernel(a:ndarray, b:ndarray)->bool:
+  return a.dtype==b.dtype and a.dtype in(float32, float64)
+
 def _norm2_all(x:ndarray)->ndarray:
   return ndarray._wrap(_w(_native.linalg_norm2_all, x._native))
 
 def _norm2_last_axis(x:ndarray)->ndarray:
   return ndarray._wrap(_w(_native.linalg_norm2_last_axis, x._native))
+
+def _vecdot_last_axis(a:ndarray, b:ndarray)->ndarray:
+  return ndarray._wrap(_w(_native.linalg_vecdot_last_axis, a._native, b._native))
 
 def _normalize_axis(axis:int, ndim:int)->int:
   ax=axis+ndim if axis<0 else axis
@@ -197,6 +203,9 @@ def vecmat(a:object, b:object)->ndarray:
 def vecdot(a:object, b:object, axis:int=-1)->object:
   A=_array(a)
   B=_array(b)
+  if A.ndim==2 and B.ndim==2 and A.shape==B.shape and _has_vecdot_kernel(A, B):
+    ax=_normalize_axis(axis, A.ndim)
+    if ax==1:return _vecdot_last_axis(A, B)
   return _sum(multiply(A, B), axis=axis)
 
 def trace(a:object, offset:int=0, axis1:int=0, axis2:int=1, dtype:object=None)->object:

@@ -62,6 +62,7 @@ from .linalg import (
     qr_ops,
     solve_ops,
     svd_ops,
+    vecdot_last_axis_ops,
 )
 from .nn import layer_norm_last_axis_ops, scaled_masked_softmax_last_axis_ops, softmax_last_axis_ops
 from .reduction import reduce_axis_ops, reduce_ops

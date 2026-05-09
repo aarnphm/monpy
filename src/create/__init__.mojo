@@ -196,6 +196,7 @@ from .ops.linalg import (
     slogdet_ops,
     solve_ops,
     svd_ops,
+    vecdot_last_axis_ops,
 )
 from .ops.nn import (
     layer_norm_last_axis_ops,
