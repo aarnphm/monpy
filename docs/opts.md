@@ -1732,3 +1732,83 @@ Remaining frontier after this slice:
 Next target should be `complex/casts/astype_complex64_to_complex128` or another
 interop facade cut. `asarray_complex64` is still the top ratio, but most of its
 remaining gap is the unavoidable wrapper around a zero-copy external buffer.
+
+### 2026-05-09 exact-DType `astype` facade fast path
+
+The next complex refresh made the cast row the best target with actual native
+work behind it:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.853 | 2.074 | 1.361x |
+| `complex/casts/astype_complex64_to_complex128` | 3.511 | 2.763 | 1.281x |
+| `complex/interop/array_copy_complex128` | 3.432 | 2.608 | 1.280x |
+| `complex/elementwise/binary_add_complex64` | 3.186 | 2.590 | 1.231x |
+| `complex/elementwise/binary_add_complex128` | 3.448 | 2.809 | 1.228x |
+
+The raw split showed the interleaved-lane cast was already close to NumPy:
+native monpy `astype` was about 0.645 us and NumPy's cast was about 0.543 us.
+The public method was 1.067 us because `ndarray.astype(...)` always resolved the
+dtype and then read `self.dtype`, even when `copy=True` meant the identity check
+could not return.
+
+`ndarray.astype` now special-cases exact monpy `DType` objects. For
+`copy=True`, it dispatches straight to `_native.astype(self._native, dtype.code)`.
+For `copy=False`, it still returns `self` when the source dtype already matches.
+The generic resolver path remains for NumPy dtype aliases, Python scalar types,
+and strings.
+
+Raw post-fix timing:
+
+| path | before | after |
+| --- | ---: | ---: |
+| native `_native.astype(..., complex128)` | 0.645 us | 0.671 us |
+| `ndarray(native astype)` | 0.744 us | 0.759 us |
+| `z.astype(complex128)` | 1.067 us | 0.898 us |
+| `z.astype(complex128, copy=False)` | n/a | 1.011 us |
+| NumPy `z.astype(complex128)` | 0.543 us | 0.540 us |
+
+Focused verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_complex.py::test_complex_astype_between_widths_matches_numpy tests/python/numpy_compat/test_complex.py::test_complex_astype_drops_imag_to_real_target tests/python/numpy_compat/test_array_coercion.py::test_astype_supported_cast_matrix_matches_numpy tests/python/numpy_compat/test_array_coercion.py::test_astype_copy_false_keeps_identity_for_same_dtype -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --repeats 7 --rounds 5 --matrix-sizes 64 --format json --sort ratio --output-dir results/local-sweep-20260509-complex-astype-dtype-fastpath --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/casts/astype_complex64_to_complex128 --types complex --candidate monpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-astype-complex64-to-complex128-dtype-fastpath-monpy --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/casts/astype_complex64_to_complex128 --types complex --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-astype-complex64-to-complex128-dtype-fastpath-numpy --sample --no-perf-stat
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/python -m monpy._bench.mojo_sweep --format json --sort ratio --output-dir results/local-sweep-20260509-mojo-stdlib-refresh-0304 --no-stdout --timeout 300
+```
+
+Official post-fix benchmark results:
+
+| row | before | after | delta |
+| --- | ---: | ---: | ---: |
+| `complex/casts/astype_complex64_to_complex128` | 3.511 us, 1.281x | 3.035 us, 1.178x | 1.16x faster |
+
+The profile manifests reported `complex/casts/astype_complex64_to_complex128`
+at 3.253 us/call for monpy and 2.774 us/call for NumPy. Monpy used backend code
+0, max RSS was about 49.5 MB, and the traced peak was 1,598 bytes. NumPy's
+traced peak was 33,992 bytes. No hardware PMU counters were collected because
+`--no-perf-stat` was used; the `sample(1)` captures live under
+`results/local-profile-20260509-astype-complex64-to-complex128-dtype-fastpath-*`.
+
+The pure-Mojo stdlib sweep's largest candidate/stdlib ratio this pass was
+`scalar_mul_f64_64k` at 1.149x, followed by `small_matmul_f32_8` at 1.080x.
+That is worth a later kernel pass, but it is not the cause of this complex cast
+row: the cast row moved by removing Python facade work while the native
+interleaved-lane cast stayed effectively flat.
+
+Remaining frontier after this slice:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.678 | 1.965 | 1.365x |
+| `complex/interop/array_copy_complex128` | 3.030 | 2.467 | 1.237x |
+| `complex/elementwise/binary_add_complex128` | 3.225 | 2.637 | 1.226x |
+| `complex/elementwise/binary_add_complex64` | 2.970 | 2.463 | 1.213x |
+| `complex/elementwise/binary_mul_complex64` | 3.070 | 2.557 | 1.193x |
+| `complex/casts/astype_complex64_to_complex128` | 3.035 | 2.576 | 1.178x |
+| `complex/views/reversed_add_complex64` | 3.525 | 3.011 | 1.172x |
+
+Next target should move off the complex view/cast rows and either revisit
+interop copy/view facade costs or investigate the pure-Mojo `scalar_mul_f64_64k`
+stdlib deficit as a separate kernel-level pass.

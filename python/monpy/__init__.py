@@ -601,9 +601,13 @@ class ndarray:
     if axes is None:axes=tuple(range(self.ndim-1, -1, -1))
     return ndarray(_native.transpose(self._native, _norm_axes(axes, self.ndim)), base=self)
   def astype(self, dtype:object, *, copy:builtins.bool=True, device:object=None)->ndarray:
-    _check_cpu(device)
+    if device is not None and device!="cpu":raise NotImplementedError("monpy v1 only supports cpu arrays")
+    if type(dtype) is DType:
+      t=typing.cast(DType, dtype)
+      if not copy and builtins.int(self._native.dtype_code())==t.code:return self
+      return ndarray(_native.astype(self._native, t.code))
     t=_resolve_dtype(dtype)
-    if t==self.dtype and not copy:return self
+    if not copy and t==self.dtype:return self
     return ndarray(_native.astype(self._native, t.code))
   def tolist(self)->object:return _unflat([self._native.get_scalar(i) for i in range(self.size)], self.shape)
   def sum(self, axis:object=None)->object:return sum(self, axis=axis)
