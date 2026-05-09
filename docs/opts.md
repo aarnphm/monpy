@@ -3153,3 +3153,32 @@ for name, arr, dtype in [
 PY
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-sweep-20260509-linalg-list-builder --no-progress --no-stdout
 ```
+
+Post-iteration full sweep:
+
+| slice | slow rows | >1.25x | >1.5x | median ratio |
+| ----- | --------: | -----: | ----: | -----------: |
+| before | 154 | 67 | 21 | 1.092x |
+| after  | 145 | 55 | 17 | 1.083x |
+
+Key full-sweep deltas:
+
+| row | before us | after us | speedup |
+| --- | --------: | -------: | ------: |
+| `array/decomp/eigh_2_f64` | 9.590 | 5.766 | 1.66:1 |
+| `array/decomp/eigh_2_f32` | 9.560 | 5.705 | 1.68:1 |
+| `array/decomp/eigh_4_f64` | 10.382 | 6.841 | 1.52:1 |
+| `array/decomp/svd_2_f64` | 9.157 | 5.390 | 1.70:1 |
+| `array/decomp/svd_4_f64` | 10.221 | 6.255 | 1.63:1 |
+| `array/views/transpose_add_f32` | 4.826 | 4.522 | 1.07:1 |
+
+The remaining top rows after both iterations:
+
+| row | monpy us | NumPy us | ratio |
+| --- | -------: | -------: | ----: |
+| `array/creation/empty_like_shape_override_f32` | 4.494 | 2.308 | 1.948x |
+| `array/interop/asarray_squeeze_axis0_f32` | 4.241 | 2.298 | 1.845x |
+| `array/views/transpose_add_f32` | 4.522 | 2.493 | 1.793x |
+| `strides/elementwise/rank3_transpose_add_f32` | 13.970 | 8.166 | 1.711x |
+
+Artifact: `results/local-full-20260509-post-linalg`.
