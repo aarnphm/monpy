@@ -49,12 +49,12 @@ def test_complex_strided_arithmetic_preserves_imaginary_part() -> None:
   b_np = numpy.asarray([2 - 1j, 4 + 3j, -5 + 9j, 6 - 7j], dtype=numpy.complex64)
   a_mp = mp.asarray(a_np, dtype=mp.complex64)
   b_mp = mp.asarray(b_np, dtype=mp.complex64)
-  numpy.testing.assert_allclose(
-    numpy.asarray(a_mp[::-1] + b_mp[::-1]), a_np[::-1] + b_np[::-1], rtol=1e-6
-  )
-  numpy.testing.assert_allclose(
-    numpy.asarray(a_mp[::-1] - b_mp[::-1]), a_np[::-1] - b_np[::-1], rtol=1e-6
-  )
+  add = a_mp[::-1] + b_mp[::-1]
+  assert add._native.used_fused()
+  numpy.testing.assert_allclose(numpy.asarray(add), a_np[::-1] + b_np[::-1], rtol=1e-6)
+  numpy.testing.assert_allclose(numpy.asarray(a_mp[::-1] - b_mp[::-1]), a_np[::-1] - b_np[::-1], rtol=1e-6)
+  numpy.testing.assert_allclose(numpy.asarray(a_mp[::-1] * b_mp[::-1]), a_np[::-1] * b_np[::-1], rtol=1e-6)
+  numpy.testing.assert_allclose(numpy.asarray(a_mp[::-1] / b_mp[::-1]), a_np[::-1] / b_np[::-1], rtol=1e-6)
 
 
 def test_complex_negate_preserves_imaginary_part() -> None:

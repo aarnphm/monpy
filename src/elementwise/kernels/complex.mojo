@@ -6,8 +6,10 @@ Hosts:
   - `complex_binary_same_shape_strided_typed[dt]` — ADD/SUB/MUL/DIV with
     Smith division for the DIV branch (avoids overflow when |c|, |d|
     differ in magnitude). Walks via `physical_offset` per element.
+  - `complex_binary_rank1_strided_typed[dt]` — 1-D incremental-index
+    variant for negative-stride views, avoiding two small strided vDSP calls.
   - `maybe_complex_binary_same_shape_strided` — c64 / c128 dispatch into
-    the strided typed kernel (with vDSP rank-1 fast path first).
+    rank-1 native/vDSP fast paths or the generic strided typed kernel.
   - `complex_scalar_complex_contig_typed[dt]` — full complex×complex-scalar
     broadcast (ADD/SUB/MUL/DIV).
   - `complex_scalar_real_contig_typed[dt]` — complex×real-scalar broadcast
@@ -32,6 +34,7 @@ Also hosts:
 """
 
 from std.sys import CompilationTarget
+from std.sys import simd_width_of
 
 from accelerate import call_vdsp_binary_f32, call_vdsp_binary_f64
 from array import (
@@ -123,6 +126,116 @@ def complex_binary_same_shape_strided_typed[
             raise Error("unsupported op for complex strided binary kernel")
 
 
+def complex_binary_rank1_strided_typed[
+    dtype: DType
+](lhs: Array, rhs: Array, mut result: Array, op: Int) raises where dtype.is_floating_point():
+    var lhs_ptr = lhs.data.bitcast[Scalar[dtype]]()
+    var rhs_ptr = rhs.data.bitcast[Scalar[dtype]]()
+    var out_ptr = result.data.bitcast[Scalar[dtype]]() + result.offset_elems * 2
+    var lhs_index = lhs.offset_elems
+    var rhs_index = rhs.offset_elems
+    var lhs_stride = lhs.strides[0]
+    var rhs_stride = rhs.strides[0]
+    comptime width = simd_width_of[dtype]()
+    comptime if dtype == DType.float32 and width == 4:
+        if lhs_stride == -1 and rhs_stride == -1 and (op == BinaryOp.ADD.value or op == BinaryOp.SUB.value):
+            var lhs_lane = lhs.offset_elems * 2
+            var rhs_lane = rhs.offset_elems * 2
+            var i = 0
+            while i + 2 <= result.size_value:
+                var lvec = (lhs_ptr + lhs_lane - 2).load[width=4](0).reversed().shuffle[1, 0, 3, 2]()
+                var rvec = (rhs_ptr + rhs_lane - 2).load[width=4](0).reversed().shuffle[1, 0, 3, 2]()
+                if op == BinaryOp.ADD.value:
+                    out_ptr.store(i * 2, lvec + rvec)
+                else:
+                    out_ptr.store(i * 2, lvec - rvec)
+                lhs_lane -= 4
+                rhs_lane -= 4
+                i += 2
+            if i < result.size_value:
+                if op == BinaryOp.ADD.value:
+                    out_ptr[i * 2] = lhs_ptr[lhs_lane] + rhs_ptr[rhs_lane]
+                    out_ptr[i * 2 + 1] = lhs_ptr[lhs_lane + 1] + rhs_ptr[rhs_lane + 1]
+                else:
+                    out_ptr[i * 2] = lhs_ptr[lhs_lane] - rhs_ptr[rhs_lane]
+                    out_ptr[i * 2 + 1] = lhs_ptr[lhs_lane + 1] - rhs_ptr[rhs_lane + 1]
+            return
+    if op == BinaryOp.ADD.value:
+        for i in range(result.size_value):
+            var lhs_base = lhs_index * 2
+            var rhs_base = rhs_index * 2
+            out_ptr[i * 2] = lhs_ptr[lhs_base] + rhs_ptr[rhs_base]
+            out_ptr[i * 2 + 1] = lhs_ptr[lhs_base + 1] + rhs_ptr[rhs_base + 1]
+            lhs_index += lhs_stride
+            rhs_index += rhs_stride
+        return
+    if op == BinaryOp.SUB.value:
+        for i in range(result.size_value):
+            var lhs_base = lhs_index * 2
+            var rhs_base = rhs_index * 2
+            out_ptr[i * 2] = lhs_ptr[lhs_base] - rhs_ptr[rhs_base]
+            out_ptr[i * 2 + 1] = lhs_ptr[lhs_base + 1] - rhs_ptr[rhs_base + 1]
+            lhs_index += lhs_stride
+            rhs_index += rhs_stride
+        return
+    if op == BinaryOp.MUL.value:
+        for i in range(result.size_value):
+            var lhs_base = lhs_index * 2
+            var rhs_base = rhs_index * 2
+            var a = lhs_ptr[lhs_base]
+            var b = lhs_ptr[lhs_base + 1]
+            var c = rhs_ptr[rhs_base]
+            var d = rhs_ptr[rhs_base + 1]
+            out_ptr[i * 2] = a * c - b * d
+            out_ptr[i * 2 + 1] = a * d + b * c
+            lhs_index += lhs_stride
+            rhs_index += rhs_stride
+        return
+    if op == BinaryOp.DIV.value:
+        for i in range(result.size_value):
+            var lhs_base = lhs_index * 2
+            var rhs_base = rhs_index * 2
+            var a = lhs_ptr[lhs_base]
+            var b = lhs_ptr[lhs_base + 1]
+            var c = rhs_ptr[rhs_base]
+            var d = rhs_ptr[rhs_base + 1]
+            var abs_c = c if c >= Scalar[dtype](0) else -c
+            var abs_d = d if d >= Scalar[dtype](0) else -d
+            if abs_c >= abs_d:
+                var r = d / c
+                var den = c + d * r
+                out_ptr[i * 2] = (a + b * r) / den
+                out_ptr[i * 2 + 1] = (b - a * r) / den
+            else:
+                var r = c / d
+                var den = c * r + d
+                out_ptr[i * 2] = (a * r + b) / den
+                out_ptr[i * 2 + 1] = (b * r - a) / den
+            lhs_index += lhs_stride
+            rhs_index += rhs_stride
+        return
+    raise Error("unsupported op for complex rank-1 strided binary kernel")
+
+
+def maybe_complex_binary_rank1_strided_typed(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
+    if len(lhs.shape) != 1:
+        return False
+    if op != BinaryOp.ADD.value and op != BinaryOp.SUB.value and op != BinaryOp.MUL.value and op != BinaryOp.DIV.value:
+        return False
+    if op == BinaryOp.ADD.value or op == BinaryOp.SUB.value:
+        if lhs.strides[0] >= 0 and rhs.strides[0] >= 0:
+            return False
+    if lhs.dtype_code == ArrayDType.COMPLEX64.value:
+        complex_binary_rank1_strided_typed[DType.float32](lhs, rhs, result, op)
+        result.backend_code = BackendKind.FUSED.value
+        return True
+    if lhs.dtype_code == ArrayDType.COMPLEX128.value:
+        complex_binary_rank1_strided_typed[DType.float64](lhs, rhs, result, op)
+        result.backend_code = BackendKind.FUSED.value
+        return True
+    return False
+
+
 def maybe_complex_binary_same_shape_strided(lhs: Array, rhs: Array, mut result: Array, op: Int) raises -> Bool:
     if (
         not same_shape(lhs.shape, rhs.shape)
@@ -132,6 +245,8 @@ def maybe_complex_binary_same_shape_strided(lhs: Array, rhs: Array, mut result: 
         or rhs.dtype_code != result.dtype_code
     ):
         return False
+    if maybe_complex_binary_rank1_strided_typed(lhs, rhs, result, op):
+        return True
     if maybe_complex_binary_rank1_strided_accelerate(lhs, rhs, result, op):
         return True
     if lhs.dtype_code == ArrayDType.COMPLEX64.value:

@@ -504,10 +504,12 @@ class ndarray:
         and builtins.int(self._native.ndim())==2
       ):return ndarray._wrap(_native.expand_dims(self._native, 1), base=self)
     if isinstance(k, slice):
+      if k.start is None and k.stop is None and k.step==-1:
+        try:return ndarray._wrap(self._native.reverse_1d_method(), base=self)
+        except Exception as exc:
+          if "requires a rank-1 array" not in str(exc):raise
       ndim=builtins.int(self._native.ndim())
       if ndim==1:
-        if k.start is None and k.stop is None and k.step==-1:
-          return ndarray._wrap(self._native.reverse_1d_method(), base=self)
         d=builtins.int(self._native.shape_at(0))
         step=1 if k.step is None else builtins.int(k.step)
         if step==0:raise ValueError("slice step cannot be zero")

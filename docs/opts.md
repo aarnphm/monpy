@@ -1061,3 +1061,73 @@ faults, and a 1,590 byte traced allocation peak. The sample now puts the hot
 native frame in `_complex_contig_lane_cast[f32,f64]`, which is the expected
 storage-level path. The new top complex deficit is `reversed_add_complex64` at
 1.891x, then complex ingress/copy rows around 1.5x.
+
+### 2026-05-08 reversed complex add native rank-1 path
+
+The next complex slice kept `complex/views/reversed_add_complex64` as the most
+visible view/kernel row:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/views/reversed_add_complex64` | 5.807 | 3.011 | 1.929x |
+| `complex/interop/array_copy_complex128` | 3.791 | 2.443 | 1.551x |
+| `complex/interop/asarray_complex64` | 3.023 | 1.958 | 1.543x |
+| `complex/elementwise/binary_mul_complex64` | 3.488 | 2.547 | 1.369x |
+
+The pre-fix backend probe reported `used_accelerate=True`; the sample made the
+problem concrete. For a 1024-element `complex64[::-1] + complex64[::-1]`, monpy
+was issuing two small strided `vDSP_vadd` calls, one for real lanes and one for
+imaginary lanes. At this size the library-call and strided-dispatch overhead
+beat the useful arithmetic. The scalar generic fallback was not the right shape
+either, because it pays `physical_offset` per complex element.
+
+`src/elementwise/kernels/complex.mojo` now has a rank-1 strided complex kernel
+that walks physical indexes incrementally. For the hot `complex64` reversed
+ADD/SUB case it uses a small SIMD pair-reversal path: load two adjacent complex
+values from the reversed physical span, reverse pair order in-register, then
+store four float lanes to the contiguous result. MUL/DIV also use the
+incremental-index rank-1 path, with the existing Smith division logic, so
+negative-stride complex arithmetic no longer falls back to `physical_offset`.
+
+`python/monpy/__init__.py` also trims the exact one-dimensional `[::-1]` path:
+it calls the native `reverse_1d_method()` directly before the extra `ndim()`
+probe, and only falls back to the general slice machinery when the native method
+reports a non-rank-1 array. This preserves the multidimensional `a[::-1]`
+behavior while shaving the benchmark's two view constructions.
+
+Focused verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_complex.py::test_complex_strided_arithmetic_preserves_imaginary_part tests/python/numpy_compat/test_indexing.py::test_rank1_full_reverse_slice_matches_numpy_and_shares_storage -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --repeats 7 --rounds 5 --matrix-sizes 64 --format json --sort ratio --output-dir results/local-sweep-20260509-complex-reversed-simd-fast-slice --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/views/reversed_add_complex64 --types complex --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-reversed-add-simd-fast-slice --sample --no-perf-stat
+```
+
+Post-fix benchmark results:
+
+| row | before | after | delta |
+| --- | ---: | ---: | ---: |
+| `complex/views/reversed_add_complex64` | 5.807 us, 1.929x | 4.387 us, 1.361x | 1.32x faster |
+
+The profile loop measured 4.277 us/call, 49.6 MB max RSS, no major faults, and
+a 1,728 byte traced allocation peak. Backend reporting flipped from Accelerate
+to FUSED for the result, which is expected: the hot path now avoids the two
+strided vDSP calls. A direct local timing split also showed the slice change:
+one `complex64` reverse view fell from about 0.639 us to 0.499 us, and the full
+`a[::-1] + b[::-1]` expression fell from about 2.58 us to 1.99 us in the
+micro-timer.
+
+The updated complex frontier is now the ingress/copy cluster plus one arithmetic
+kernel:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/array_copy_complex128` | 4.036 | 2.659 | 1.518x |
+| `complex/interop/asarray_complex64` | 3.104 | 2.055 | 1.511x |
+| `complex/elementwise/binary_mul_complex64` | 3.577 | 2.615 | 1.368x |
+| `complex/views/reversed_add_complex64` | 4.387 | 3.224 | 1.361x |
+
+Next target should be complex ingress/copy. The likely win is keeping NumPy
+complex buffers on a narrow typed copy path instead of round-tripping through
+generic scalar extraction.
