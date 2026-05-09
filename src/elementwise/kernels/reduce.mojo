@@ -308,6 +308,129 @@ def reduce_prod_typed[
     return acc
 
 
+# ===-----------------------------------------------------------------------===
+# Multi-thread variants: chunk across P-cores, combine partials at end.
+# Same per-chunk SIMD kernel as the serial path; just stitched.
+# ===-----------------------------------------------------------------------===
+
+def reduce_min_par_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
+) raises -> Scalar[dtype] where dtype.is_floating_point():
+    # Worker scheme mirrors reduce_sum_par_typed. Each chunk runs the
+    # serial reduce_min_typed (8-way SIMD) on its slice; partials live
+    # in a heap Float64 array (so we don't need a Scalar[dtype] heap
+    # allocator); master combines via scalar < walk.
+    if size == 0:
+        raise Error("reduce_min_par_typed: empty source")
+    var nworkers = worker_count(size)
+    if nworkers <= 1:
+        return reduce_min_typed[dtype](src_ptr, size)
+
+    var partials = alloc[Float64](nworkers)
+    var chunk = ceildiv(size, nworkers)
+    var live_workers = 0
+
+    @parameter
+    def worker(i: Int) raises:
+        var start = i * chunk
+        var end = start + chunk
+        if end > size:
+            end = size
+        if start >= size:
+            # Sentinel: any +inf-ish value the master will skip via live_workers.
+            partials[i] = 0.0
+            return
+        partials[i] = Float64(reduce_min_typed[dtype](src_ptr + start, end - start))
+
+    sync_parallelize[worker](nworkers)
+
+    # Count live workers so we know which partials are valid. Equivalent
+    # to ceildiv(size, chunk).
+    live_workers = ceildiv(size, chunk)
+    var acc = partials[0]
+    for i in range(1, live_workers):
+        var v = partials[i]
+        if v < acc:
+            acc = v
+    partials.free()
+    return Scalar[dtype](acc)
+
+
+def reduce_max_par_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
+) raises -> Scalar[dtype] where dtype.is_floating_point():
+    # Symmetric to reduce_min_par_typed.
+    if size == 0:
+        raise Error("reduce_max_par_typed: empty source")
+    var nworkers = worker_count(size)
+    if nworkers <= 1:
+        return reduce_max_typed[dtype](src_ptr, size)
+
+    var partials = alloc[Float64](nworkers)
+    var chunk = ceildiv(size, nworkers)
+
+    @parameter
+    def worker(i: Int) raises:
+        var start = i * chunk
+        var end = start + chunk
+        if end > size:
+            end = size
+        if start >= size:
+            partials[i] = 0.0
+            return
+        partials[i] = Float64(reduce_max_typed[dtype](src_ptr + start, end - start))
+
+    sync_parallelize[worker](nworkers)
+
+    var live_workers = ceildiv(size, chunk)
+    var acc = partials[0]
+    for i in range(1, live_workers):
+        var v = partials[i]
+        if v > acc:
+            acc = v
+    partials.free()
+    return Scalar[dtype](acc)
+
+
+def reduce_prod_par_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
+) raises -> Scalar[dtype] where dtype.is_floating_point():
+    # Worker partials accumulate in Float64 to bound the f32 catastrophic-
+    # cancellation surface, mirroring reduce_sum_par_typed. Empty chunks
+    # contribute the identity element (1.0) — safe to multiply across.
+    var nworkers = worker_count(size)
+    if nworkers <= 1:
+        return reduce_prod_typed[dtype](src_ptr, size)
+
+    var partials = alloc[Float64](nworkers)
+    var chunk = ceildiv(size, nworkers)
+
+    @parameter
+    def worker(i: Int) raises:
+        var start = i * chunk
+        var end = start + chunk
+        if end > size:
+            end = size
+        if start >= size:
+            partials[i] = 1.0
+            return
+        partials[i] = Float64(reduce_prod_typed[dtype](src_ptr + start, end - start))
+
+    sync_parallelize[worker](nworkers)
+
+    var total = Float64(1)
+    for i in range(nworkers):
+        total *= partials[i]
+    partials.free()
+    return Scalar[dtype](total)
+
+
 def reduce_strided_typed[dtype: DType](src: Array, op: Int) raises -> Float64:
     # Strided reduction via typed-pointer scalar walk. Two paths:
     #   1. linearly-addressable (transpose / swapaxes of c-contig):

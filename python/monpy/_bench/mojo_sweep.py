@@ -50,6 +50,13 @@ class MojoBenchRow:
   flops: int
 
 
+@dataclass(frozen=True, slots=True)
+class MojoBenchCollection:
+  rows: list[MojoBenchRow]
+  commands: list[list[str]]
+  warnings: list[str]
+
+
 def repo_root_from_package() -> Path:
   return Path(__file__).resolve().parents[3]
 
@@ -168,6 +175,16 @@ def run_mojo_command(command: Sequence[str], *, timeout: int) -> str:
     details = "\n".join(part for part in (stdout, stderr) if part)
     raise RuntimeError(f"command failed: {shlex.join(command)}\n{details}") from exc
   return completed.stdout
+
+
+def summarize_failure(exc: BaseException, *, max_lines: int = 3) -> str:
+  lines = [line.strip() for line in str(exc).splitlines() if line.strip()]
+  if not lines:
+    return exc.__class__.__name__
+  diagnostic_lines = [line for line in lines if "error:" in line or "warning:" in line]
+  selected = diagnostic_lines[:max_lines] or lines[:max_lines]
+  suffix = "" if len(selected) == len(diagnostic_lines or lines) else " ..."
+  return "; ".join(selected) + suffix
 
 
 def prepend_env_path(env: dict[str, str], name: str, path: Path) -> None:
@@ -341,6 +358,7 @@ def mojo_sweep_config(args: argparse.Namespace) -> dict[str, object]:
     "comparison": "candidate_ns / baseline_ns",
     "include_numojo": args.include_numojo,
     "numojo_path": numojo_path,
+    "strict_numojo": getattr(args, "strict_numojo", False),
     "sort": args.sort,
     "format": args.format,
   }
@@ -356,6 +374,7 @@ def build_manifest(
   finished_at: datetime,
   invocation: Sequence[str],
   commands: Sequence[Sequence[str]],
+  warnings: Sequence[str],
   mojo: Path,
 ) -> dict[str, object]:
   return {
@@ -402,6 +421,7 @@ def build_manifest(
       "groups": group_counts(rows),
       "items": [row_record(row) for row in rows],
     },
+    "warnings": list(warnings),
     "outputs": {
       "manifest": {
         "path": display_path(manifest_path),
@@ -432,6 +452,7 @@ def write_run_outputs(
   finished_at: datetime,
   invocation: Sequence[str],
   commands: Sequence[Sequence[str]],
+  warnings: Sequence[str],
   mojo: Path,
 ) -> tuple[Path, Path]:
   output_dir = args.output_dir
@@ -448,6 +469,7 @@ def write_run_outputs(
     finished_at=finished_at,
     invocation=invocation,
     commands=commands,
+    warnings=warnings,
     mojo=mojo,
   )
   manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -460,9 +482,11 @@ def collect_rows(
   repo_root: Path,
   include_numojo: bool,
   numojo_path: Path | None,
+  strict_numojo: bool,
   timeout: int,
-) -> tuple[list[MojoBenchRow], list[list[str]]]:
+) -> MojoBenchCollection:
   commands: list[list[str]] = []
+  warnings: list[str] = []
   std_command = standard_command(mojo=mojo, repo_root=repo_root)
   commands.append(std_command)
   rows = parse_mojo_tsv(run_mojo_command(std_command, timeout=timeout))
@@ -472,9 +496,17 @@ def collect_rows(
       raise RuntimeError("NuMojo comparison requested but --numojo-path was not provided")
     nm_command = numojo_command(mojo=mojo, repo_root=repo_root, numojo_path=numojo_path)
     commands.append(nm_command)
-    rows.extend(parse_mojo_tsv(run_mojo_command(nm_command, timeout=timeout)))
+    try:
+      rows.extend(parse_mojo_tsv(run_mojo_command(nm_command, timeout=timeout)))
+    except (RuntimeError, ValueError) as exc:
+      if strict_numojo:
+        raise
+      warnings.append(
+        "skipping NuMojo comparison because the selected checkout did not run with "
+        f"this Mojo toolchain: {summarize_failure(exc)}"
+      )
 
-  return rows, commands
+  return MojoBenchCollection(rows=rows, commands=commands, warnings=warnings)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -502,6 +534,12 @@ def main(argv: Sequence[str] | None = None) -> None:
       "path to a NuMojo checkout or package root "
       "(default: NUMOJO_PATH, vendor/NuMojo, or ~/workspace/scratchpad/NuMojo)"
     ),
+  )
+  parser.add_argument(
+    "--strict-numojo",
+    action=argparse.BooleanOptionalAction,
+    default=False,
+    help="fail instead of warning when the optional NuMojo comparison cannot compile or run",
   )
   parser.add_argument("--timeout", type=positive_int, default=300, help="seconds per Mojo command")
   parser.add_argument("--format", choices=("table", "csv", "json", "markdown"), default="table")
@@ -541,13 +579,17 @@ def main(argv: Sequence[str] | None = None) -> None:
   try:
     mojo = find_mojo(args.mojo)
     started_at = local_now()
-    rows, commands = collect_rows(
+    collection = collect_rows(
       mojo=mojo,
       repo_root=args.repo_root,
       include_numojo=args.include_numojo,
       numojo_path=args.numojo_path,
+      strict_numojo=args.strict_numojo,
       timeout=args.timeout,
     )
+    for warning in collection.warnings:
+      print(warning, file=sys.stderr)
+    rows = collection.rows
     rendered = render_results(rows, args=args)
     finished_at = local_now()
     if args.save:
@@ -558,7 +600,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         started_at=started_at,
         finished_at=finished_at,
         invocation=invocation,
-        commands=commands,
+        commands=collection.commands,
+        warnings=collection.warnings,
         mojo=mojo,
       )
       print(f"wrote Mojo benchmark results to {display_path(results_path)}", file=sys.stderr)

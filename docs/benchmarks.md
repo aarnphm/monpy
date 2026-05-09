@@ -170,7 +170,7 @@ $MODULAR_DERIVED_PATH/build/bin/mojo run \
 
 `bench_numojo_sweep.mojo` compares NuMojo public NDArray operations against monpy raw kernels for add, `sin`, `sum`, and small matmul. That comparison is intentionally not identical to `bench_mojo_sweep.mojo`: NuMojo includes its array abstraction overhead, while monpy rows are kernel-level. Treat it as an external-library baseline, not as a stdlib replacement proof.
 
-NuMojo main currently tracks the Modular 0.26.x toolchain family. This checkout expects Mojo `1.0.0.dev0`, so the optional bench may fail at import time with stdlib API drift such as `std.os.atomic` moving or disappearing. That is a toolchain compatibility signal, not a monpy performance result.
+NuMojo main currently tracks the Modular 0.26.x toolchain family. This checkout expects Mojo `1.0.0.dev0`, so the optional bench can fail at import time with stdlib API drift such as `std.os.atomic` moving or disappearing. The CLI treats that as a skipped optional baseline by default: it still reports the monpy/stdlib Mojo rows and writes the attempted NuMojo command into the manifest. Use `--strict-numojo` when you want that compatibility failure to stop the run.
 
 ### `bench_reduce.mojo`
 

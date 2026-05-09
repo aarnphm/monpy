@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Sequence
 from pathlib import Path
+
+import pytest
+from pytest import MonkeyPatch
 
 from monpy._bench import mojo_sweep
 
@@ -98,5 +102,59 @@ def test_render_json_preserves_row_level_candidate_and_baseline() -> None:
   assert payload["config"]["suite"] == "mojo-kernel-sweep"
   assert payload["config"]["include_numojo"] is True
   assert payload["config"]["comparison"] == "candidate_ns / baseline_ns"
+  assert payload["config"]["strict_numojo"] is False
   assert payload["results"][0]["candidate"] == "numojo.sum"
   assert payload["results"][0]["baseline"] == "monpy.reduce_sum_typed"
+
+
+def _standard_tsv() -> str:
+  return "\n".join([
+    "\t".join(mojo_sweep.TSV_HEADER),
+    "elementwise\tadd_f32_1024\tmonpy.add\tstd.add\t12.5\t10.0\t1.25\t12288\t1024",
+  ])
+
+
+def _run_standard_then_fail_numojo(command: Sequence[str], *, timeout: int) -> str:
+  del timeout
+  if command[-1].endswith("bench_numojo_sweep.mojo"):
+    raise RuntimeError(
+      "command failed: mojo run bench_numojo_sweep.mojo\n"
+      "/deps/NuMojo/numojo/routines/math/sums.mojo:51:37: "
+      "error: unknown function effect 'unified'"
+    )
+  return _standard_tsv()
+
+
+def test_collect_rows_warns_and_keeps_standard_rows_when_numojo_fails(
+  monkeypatch: MonkeyPatch,
+) -> None:
+  monkeypatch.setattr(mojo_sweep, "run_mojo_command", _run_standard_then_fail_numojo)
+
+  collection = mojo_sweep.collect_rows(
+    mojo=Path("/toolchain/mojo"),
+    repo_root=Path("/repo/monpy"),
+    include_numojo=True,
+    numojo_path=Path("/deps/NuMojo"),
+    strict_numojo=False,
+    timeout=5,
+  )
+
+  assert [row.name for row in collection.rows] == ["add_f32_1024"]
+  assert len(collection.commands) == 2
+  assert len(collection.warnings) == 1
+  assert "skipping NuMojo comparison" in collection.warnings[0]
+  assert "unknown function effect 'unified'" in collection.warnings[0]
+
+
+def test_collect_rows_can_fail_strictly_for_numojo_failure(monkeypatch: MonkeyPatch) -> None:
+  monkeypatch.setattr(mojo_sweep, "run_mojo_command", _run_standard_then_fail_numojo)
+
+  with pytest.raises(RuntimeError, match="unknown function effect 'unified'"):
+    mojo_sweep.collect_rows(
+      mojo=Path("/toolchain/mojo"),
+      repo_root=Path("/repo/monpy"),
+      include_numojo=True,
+      numojo_path=Path("/deps/NuMojo"),
+      strict_numojo=True,
+      timeout=5,
+    )
