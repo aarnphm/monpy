@@ -9,13 +9,19 @@ path. `MONPY_THREADS=N` caps the worker count at N. Useful for debugging
 non-deterministic numerical results, NUMA experiments, or when monpy is
 called from a host-side thread pool that already saturates the CPU.
 
+Scope: this layer fans out per-row kernels (softmax, layernorm,
+axis-reduce) and element-wise binary/unary at the heavy/light grains.
+Whole-tensor reductions are NOT parallelized — `sync_parallelize`
+allocates a CPU context per call (~200us on Apple Silicon) which
+exceeds the per-thread reduction work for any tensor below ~16MB and
+produced 4x slowdowns + 3.5x variance in benches. The
+`reduce_*_par_typed` kernels were deleted; if Mojo's threading
+primitive grows a persistent worker pool, restore them from git.
+
 Grain sizes are per-worker work thresholds, not global "parallel yes/no"
-thresholds. Reductions currently stay serial until very large tensors because
-`sync_parallelize` creates and synchronizes a CPU context for each call; the
-local public path measured faster and steadier with `MONPY_THREADS=1` at 1M and
-16M f32 reductions. Element-wise heavy ops (exp/log/sin) amortise spawn cost
-earlier because per-element work is heavier; light ops (add/mul) need more
-bytes to break even.
+thresholds. Element-wise heavy ops (exp/log/sin) amortise spawn cost
+earlier because per-element work is heavier; light ops (add/mul) need
+more bytes to break even.
 
 Reference patterns:
   - `_Global` lazy singleton: `src/accelerate.mojo:445-449`
@@ -31,12 +37,14 @@ from std.sys import num_performance_cores
 
 
 # Grain-size constants. These are per-worker byte/row-element budgets,
-# not total-tensor gates. Reductions reach parity earliest because per-
-# worker Float64 partial accumulators are tiny and the combine is O(1).
+# not total-tensor gates. Reductions are deliberately absent: empirical
+# bench data showed `sync_parallelize` adds ~200us of CPU-context init
+# per call on Apple Silicon, which exceeds the per-thread reduction work
+# at any size below ~16MB and produced 4x slowdowns + 3.5x variance at
+# 1M f32 sum (see git history for `perf: drop par-reduce kernels`).
 # Element-wise light ops (add/mul/cmp) need more bytes because per-
 # element work is one SIMD instruction; element-wise heavy ops (exp/log/
 # sin) amortize earlier because per-element FLOPs are higher.
-comptime REDUCE_GRAIN = 1 << 30  # 1GB, serial until CPU worker setup is amortized
 comptime ELEMENTWISE_LIGHT_GRAIN = 1 << 21  # 2MB
 comptime ELEMENTWISE_HEAVY_GRAIN = 1 << 18  # 256KB
 comptime ROW_HEAVY_GRAIN_ELEMS = 1 << 13  # row elements per worker for softmax/layernorm
@@ -177,8 +185,8 @@ def should_parallelize_bytes(byte_count: Int, grain: Int) -> Bool:
 
     Args:
         byte_count: total bytes in the operand (size * sizeof(dtype)).
-        grain: grain-size constant — `REDUCE_GRAIN`, `ELEMENTWISE_LIGHT_GRAIN`,
-               or `ELEMENTWISE_HEAVY_GRAIN`.
+        grain: grain-size constant — `ELEMENTWISE_LIGHT_GRAIN` or
+               `ELEMENTWISE_HEAVY_GRAIN`.
 
     Returns: True if the work justifies thread fan-out.
     """

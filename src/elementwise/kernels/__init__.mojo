@@ -52,7 +52,6 @@ from .parallel import (
     ELEMENTWISE_HEAVY_GRAIN,
     ELEMENTWISE_LIGHT_GRAIN,
     PER_ROW_MIN,
-    REDUCE_GRAIN,
     ROW_HEAVY_GRAIN_ELEMS,
     is_serial_only,
     should_parallelize_bytes,

@@ -24,17 +24,14 @@ from std.benchmark import keep, run
 from std.math import sin as std_sin
 from std.memory import Span
 from std.memory.unsafe_pointer import alloc
-from std.sys import num_performance_cores, simd_width_of, size_of
+from std.sys import simd_width_of, size_of
 
 from domain import BinaryOp, UnaryOp
 from elementwise.kernels.matmul import matmul_small_typed
 from elementwise.kernels.reduce import (
-    reduce_max_par_typed,
     reduce_max_typed,
-    reduce_min_par_typed,
     reduce_min_typed,
     reduce_prod_typed,
-    reduce_sum_par_typed,
     reduce_sum_typed,
 )
 from elementwise.kernels.typed import (
@@ -427,93 +424,6 @@ def emit_prod[dtype: DType, n: Int]() raises where dtype.is_floating_point():
         "std.algorithm.product",
         bench_configured[monpy_call](),
         bench_configured[std_call](),
-        n * size_of[Scalar[dtype]](),
-        n,
-    )
-    src.free()
-
-
-def emit_sum_par[dtype: DType, n: Int]() raises where dtype.is_floating_point():
-    # Parallel sum vs serial 8-way SIMD baseline. Ratio < 1 means parallel
-    # wins; expected to drop sharply at sizes that blow past L2 (DRAM-bound
-    # at single thread, multi-channel DRAM at parallel).
-    var src = alloc[Scalar[dtype]](n)
-    fill_buffer[dtype](src, n)
-    var nw = num_performance_cores()
-
-    @parameter
-    def monpy_call() raises:
-        var result = reduce_sum_par_typed[dtype](src, n, nw)
-        keep(result)
-
-    @parameter
-    def baseline_call() raises:
-        var result = reduce_sum_typed[dtype](src, n)
-        keep(result)
-
-    emit_result(
-        "reductions",
-        String("sum_par_{}_{}").format(dtype_name[dtype](), size_name[n]()),
-        "monpy.reduce_sum_par_typed",
-        "monpy.reduce_sum_typed",
-        bench_configured[monpy_call](),
-        bench_configured[baseline_call](),
-        n * size_of[Scalar[dtype]](),
-        n,
-    )
-    src.free()
-
-
-def emit_min_par[dtype: DType, n: Int]() raises where dtype.is_floating_point():
-    var src = alloc[Scalar[dtype]](n)
-    fill_buffer[dtype](src, n)
-    var nw = num_performance_cores()
-
-    @parameter
-    def monpy_call() raises:
-        var result = reduce_min_par_typed[dtype](src, n, nw)
-        keep(result)
-
-    @parameter
-    def baseline_call() raises:
-        var result = reduce_min_typed[dtype](src, n)
-        keep(result)
-
-    emit_result(
-        "reductions",
-        String("min_par_{}_{}").format(dtype_name[dtype](), size_name[n]()),
-        "monpy.reduce_min_par_typed",
-        "monpy.reduce_min_typed",
-        bench_configured[monpy_call](),
-        bench_configured[baseline_call](),
-        n * size_of[Scalar[dtype]](),
-        n,
-    )
-    src.free()
-
-
-def emit_max_par[dtype: DType, n: Int]() raises where dtype.is_floating_point():
-    var src = alloc[Scalar[dtype]](n)
-    fill_buffer[dtype](src, n)
-    var nw = num_performance_cores()
-
-    @parameter
-    def monpy_call() raises:
-        var result = reduce_max_par_typed[dtype](src, n, nw)
-        keep(result)
-
-    @parameter
-    def baseline_call() raises:
-        var result = reduce_max_typed[dtype](src, n)
-        keep(result)
-
-    emit_result(
-        "reductions",
-        String("max_par_{}_{}").format(dtype_name[dtype](), size_name[n]()),
-        "monpy.reduce_max_par_typed",
-        "monpy.reduce_max_typed",
-        bench_configured[monpy_call](),
-        bench_configured[baseline_call](),
         n * size_of[Scalar[dtype]](),
         n,
     )
