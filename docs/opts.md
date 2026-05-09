@@ -2346,6 +2346,15 @@ Code changes:
   rows. Those belong in `bench_parallel.mojo` or `bench_reduce.mojo`; the default
   stdlib sweep should rank stdlib/kernel deficits, not non-production probes.
 
+Followup (same day): the `REDUCE_GRAIN=1GB` gate left the four `reduce_*_par_typed`
+kernels (sum/min/max/prod) unreachable from `maybe_reduce_contiguous`. Rather than
+keep ~150 lines of dead surface, the kernels were deleted along with the
+`REDUCE_GRAIN` constant itself, the unused `worker_count_for_bytes`/`alloc`
+imports in `reduce.mojo`, and the orphan `emit_*_par` helpers in
+`bench_mojo_sweep.mojo`. The `reduce_sum_typed`/`reduce_min_typed`/etc. serial
+kernels remain untouched. Restore from git if Mojo's threading primitive grows
+a persistent worker pool that makes the per-call overhead acceptable.
+
 Verification:
 
 ```text

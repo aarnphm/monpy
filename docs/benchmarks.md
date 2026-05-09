@@ -269,27 +269,46 @@ Applied directly to `src/elementwise/kernels/reduce.mojo`:
 
 Test status: full numpy-compat suite at 706 passes / 1 unrelated pre-existing failure (`test_complex_negate_preserves_imaginary_part` in test_complex.py — pre-existed before this change, confirmed by stashed checkout).
 
-### Multi-thread sum (`sum_par`)
+### Threading scope (current)
 
-Added a parallel sum kernel using `std.algorithm.sync_parallelize` over `num_performance_cores()` workers (8 on M3/M4 Pro). Per-thread strategy: each worker calls `sum8` on its slice into a heap-allocated `Float64` partials array; the master sums the partials at the end. Below the 1M-element grain size the kernel falls through to single-thread `sum8` to avoid thread setup cost.
+The `MONPY_THREADS` env knob controls these op classes:
 
-**Result on M3 Pro (8 P-core, 8MB shared L2, ~150 GB/s peak DRAM):**
+- **Row kernels** (softmax, layernorm, axis-reduce). Gated by
+  `worker_count_for_row_elements(rows, cols, ROW_HEAVY_GRAIN_ELEMS=8K)`,
+  so a 32×32 attention stays serial while a 32×4096 fans out.
+- **Element-wise heavy unary** (exp/log/sin/cos/sqrt/...). Gated at
+  256KB per worker via `unary_op_grain(op)`.
+- **Element-wise light binary/unary** (add/mul/neg/abs/...). Gated at
+  2MB per worker. Note that the production dispatch ladder lands on
+  comptime-static single-thread kernels for ADD/SUB/MUL/DIV and the
+  common unary ops, so in practice this gate fires only for less-common
+  ops (POWER, MAXIMUM, EXPM1, ATAN, etc.).
 
-| dtype | size | regime         | sum8 (1T) | sum_par (8T) |                        speedup |
-| ----- | ---- | -------------- | --------: | -----------: | -----------------------------: |
-| f32   | 1M   | shared-L2 fits |   85 GB/s | ~99–263 GB/s | **3–8×** (warm-cache variance) |
-| f32   | 16M  | DRAM-bound     |   61 GB/s | **117 GB/s** |                       **1.9×** |
-| f32   | 128M | DRAM-bound     |   61 GB/s | **117 GB/s** |                       **1.9×** |
-| f64   | 1M   | shared-L2 fits |   82 GB/s | **374 GB/s** |                       **4.6×** |
-| f64   | 16M  | DRAM-bound     |   61 GB/s | **112 GB/s** |                       **1.8×** |
+`MONPY_THREADS=1` forces every gate to fall back to single-thread.
+`MONPY_THREADS=N` caps automatic fanout at N workers.
 
-The 117 GB/s f32 / 112 GB/s f64 ceiling at 16M+ is the **actual M3 Pro DRAM bandwidth** — within 10% of the spec-sheet 150 GB/s. The kernel is now bandwidth-pinned; further gains require pinning to memory-controller-side techniques (large-page faulting in advance, NT stores on writes, prefetch tuning).
+### What threading does NOT do
 
-The 374 GB/s f64 1M figure exceeds DRAM bandwidth because the buffer (8MB) lives entirely in the M3 Pro's 16MB shared L2 — each worker streams from L2 not DRAM. That's the L2 ceiling, not a measurement error.
+Whole-tensor reductions (sum/min/max/prod/mean) are **single-thread
+regardless of `MONPY_THREADS`**. An earlier prototype using
+`std.algorithm.sync_parallelize` produced a 4× slowdown and 3.5× variance
+on macOS at 1M f32 sum:
 
-The "warm-cache variance" on f32 1M (99 vs 263 GB/s across two reps) is an artifact of running back-to-back: the second rep finds the buffer already in L2 from the first. The 99 GB/s figure is the cold-cache reality you'd see in a fresh hot path; 263 is the steady-state once the work is warm.
+| platform | sum size | serial | parallel | conclusion |
+| -------- | -------: | -----: | -------: | --: |
+| macOS M3 Pro |     1M f32 |  60 µs | **261 µs (range 84..292)** | parallel is loss + unstable |
+| Ubuntu CI 4-vCPU | 1M f32 |  69 µs | **96 µs** | parallel is loss |
+| macOS M3 Pro |    16M f32 |  ~280 µs | ~140 µs theoretical | win possible but variance kills it |
 
-**Gate behavior validation:** the 1M cell shows the gate working — if the gate were too aggressive, 1M would suffer from spawn overhead. Lowering it below 256K elements is probably ineffective (you'd burn ~1µs of thread setup to save ~3µs of work).
+The cost atom is `std.algorithm.sync_parallelize`: it allocates and
+synchronizes a CPU `DeviceContext` per call, ~200 µs on Apple Silicon.
+For any reduction below ~16MB total bytes, that overhead exceeds the
+per-thread compute. Until Mojo grows a persistent worker pool or a
+better reduction scheduler, reductions must stay serial.
+
+The `reduce_*_par_typed` kernels were deleted (commit
+`perf: drop par-reduce kernels and REDUCE_GRAIN`). Restore them from git
+if the upstream primitive improves.
 
 ### Next-tier improvements (not in this commit)
 

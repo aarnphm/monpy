@@ -115,8 +115,9 @@ def worker_count_for_bytes(work_units: Int, byte_count: Int, grain_per_worker: I
     """Resolve worker count by hardware cap and byte budget per worker.
 
     `work_units` is usually element count, while `byte_count` is
-    `work_units * sizeof(dtype)`. On a 64-core system a small reduction should
-    stay serial instead of becoming many cache-cold slices.
+    `work_units * sizeof(dtype)`. On a 64-core system a small element-wise
+    op should stay serial instead of becoming many cache-cold slices.
+    Used by `binary_same_shape_contig_typed` and `unary_contig_typed`.
     """
     if byte_count < grain_per_worker:
         return 1
