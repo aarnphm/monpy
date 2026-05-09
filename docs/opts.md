@@ -2522,3 +2522,66 @@ MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/m
 Next target: split `squeeze_axis0_f32` into a clean existing-array view row and
 an explicit asarray-from-NumPy row. Right now one benchmark name hides two
 costs, which makes it too easy to optimize the wrong atom.
+
+### 2026-05-09 split squeeze benchmark atom
+
+The old `squeeze_axis0_f32` row measured three atoms under one view name:
+
+- `np.zeros((1, 4, 1, 5), dtype=float32)` on both sides.
+- `mnp.asarray(...)` on the monpy side.
+- `squeeze(axis=0)` on both sides.
+
+That made the row look like a squeeze problem. It was an ingress-plus-view row.
+
+`python/monpy/_bench/core.py` now prebuilds `squeeze_np` and `squeeze_mp`, then
+emits two rows:
+
+- `array/views/squeeze_axis0_f32`: existing-array squeeze only.
+- `array/interop/asarray_squeeze_axis0_f32`: NumPy ndarray ingress followed by
+  the same squeeze.
+
+Direct timing on the benchmark shape:
+
+| call                         | monpy ns | NumPy ns | ratio |
+| ---------------------------- | -------: | -------: | ----: |
+| existing-array `squeeze`     |      918 |      238 | 3.86x |
+| `asarray` plus `squeeze`     |     2031 |      256 | 7.94x |
+| raw native `squeeze_axis`    |      713 |      n/a |   n/a |
+
+The saved array sweep moved the public rows like this:
+
+| row                                      | monpy us | NumPy us | ratio |
+| ---------------------------------------- | -------: | -------: | ----: |
+| old `views/squeeze_axis0_f32`            |    4.590 |    2.606 | 1.761x |
+| new `views/squeeze_axis0_f32`            |    3.238 |    2.375 | 1.363x |
+| new `interop/asarray_squeeze_axis0_f32`  |    4.335 |    2.352 | 1.843x |
+
+The split changes the target ranking. Existing-array squeeze is still slower
+than NumPy, but the native bridge is already 713 ns and the Python facade adds
+about 200 ns. The larger practical row is the NumPy-ingress path, where
+`mnp.asarray(existing_numpy)` adds roughly 1.1 us before squeeze even starts.
+
+The current array top rows after the split were noisy, but useful:
+
+- `creation/empty_like_shape_override_f32`: 5.727 us vs 2.319 us, 2.448x.
+- `casts/astype_f32_to_i64`: 6.354 us vs 2.808 us, 2.218x.
+- `interop/asarray_squeeze_axis0_f32`: 4.335 us vs 2.352 us, 1.843x.
+- `views/transpose_add_f32`: 4.729 us vs 2.942 us, 1.627x.
+
+The std-Mojo sweep stayed on the same frontier as the previous pass:
+`elementwise/scalar_mul_f32_1k` at 174.9 ns for monpy vs 90.1 ns for
+`stdlib.SIMD_loop`, a 1.941x ratio. The next rows were close to parity:
+`reductions/min_f32_64k` at 1.062x, `sum_f32_1k` at 1.035x, and `sum_f64_1k` at
+1.023x.
+
+Verification:
+
+```text
+.venv/bin/python -m py_compile python/monpy/_bench/core.py
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types array --loops 10 --repeats 3 --rounds 2 --vector-sizes 65536,1048576 --matrix-sizes 32 --linalg-sizes 8 --format json --sort ratio --output-dir results/local-sweep-20260509-squeeze-split-0953 --no-progress --no-stdout
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --format json --sort ratio --output-dir results/local-sweep-20260509-squeeze-split-mojo-0953 --no-stdout --timeout 300
+```
+
+Next target: profile `empty_like_shape_override_f32` and `astype_f32_to_i64`
+before optimizing. The former may be allocation-wrapper noise; the latter is a
+real cast row if it reproduces outside the low-loop sweep.

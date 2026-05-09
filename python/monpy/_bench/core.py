@@ -445,12 +445,15 @@ def build_cases(
   # shape manipulation + creation helpers.
   s_np = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
   s_mp = mnp.asarray(s_np)
+  squeeze_np = np.zeros((1, 4, 1, 5), dtype=np.float32)
+  squeeze_mp = mnp.asarray(squeeze_np)
   vec_a_np = np.arange(8, dtype=np.float32)
   vec_a_mp = mnp.asarray(vec_a_np)
   vec_b_np = np.arange(8, 16, dtype=np.float32)
   vec_b_mp = mnp.asarray(vec_b_np)
   cases.extend([
-    BenchCase("views", "squeeze_axis0_f32", lambda: mnp.squeeze(mnp.asarray(np.zeros((1, 4, 1, 5), dtype=np.float32)), axis=0), lambda: np.squeeze(np.zeros((1, 4, 1, 5), dtype=np.float32), axis=0)),
+    BenchCase("views", "squeeze_axis0_f32", lambda: mnp.squeeze(squeeze_mp, axis=0), lambda: np.squeeze(squeeze_np, axis=0)),
+    BenchCase("interop", "asarray_squeeze_axis0_f32", lambda: mnp.squeeze(mnp.asarray(squeeze_np), axis=0), lambda: np.squeeze(np.asarray(squeeze_np), axis=0)),
     BenchCase("views", "moveaxis_f32", lambda: mnp.moveaxis(s_mp, 0, -1), lambda: np.moveaxis(s_np, 0, -1)),
     BenchCase("views", "swapaxes_f32", lambda: mnp.swapaxes(s_mp, 0, 2), lambda: np.swapaxes(s_np, 0, 2)),
     BenchCase("views", "ravel_f32", lambda: mnp.ravel(s_mp), lambda: np.ravel(s_np)),
