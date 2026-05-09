@@ -2261,3 +2261,70 @@ Next target should be either the pure-Mojo `add_f32_64k`/`add_f32_1m` variance
 with a longer stdlib harness runtime, or the larger public wrapper cluster
 (`moveaxis_f32`, `empty_like_shape_override_f32`, `transpose_add_f32`) where the
 NumPy-facing ratios are still 1.7x-1.9x.
+
+### 2026-05-09 parallel worker policy split
+
+The "8-way" reduction note was easy to misread as "use 8 workers because this
+Mac has 8 performance cores." That is not the contract. The reduction kernels
+now name it explicitly as `REDUCE_SIMD_ACCUMULATORS = 8`: eight independent SIMD
+accumulator chains inside one worker, chosen for instruction-level parallelism
+on 2-IPC floating-point pipelines. Core fanout is a separate policy owned by
+`elementwise/kernels/parallel.mojo`.
+
+The parallel policy is now split into three layers:
+
+1. `worker_count(work_units)`: hardware and `MONPY_THREADS` cap only.
+   `MONPY_THREADS=1` still forces serial execution, while `MONPY_THREADS=N`
+   caps automatic fanout at N workers.
+2. `worker_count_for_bytes(...)`: whole-tensor byte budget per worker. A
+   many-core Ubuntu host can use more workers than this laptop, but only when
+   the tensor has enough bytes to keep each worker out of tiny cache-cold
+   slices.
+3. `worker_count_for_row_elements(...)`: row-kernel budget using both row count
+   and row width. Row kernels can only split between rows, so row count alone
+   is insufficient: a 32x32 attention softmax should stay serial, while a
+   32x4096 softmax has enough work inside each row to justify fanout.
+
+That third split was not cosmetic. The first implementation used only
+`worker_count_for_rows(rows)`, which let the 32-row attention benchmark spawn
+two workers. The smoke result immediately regressed:
+
+| smoke | row | monpy us | NumPy us | ratio |
+| --- | --- | -------: | -------: | ----: |
+| row-only policy | `attention/softmax/causal_scores_t32_f32` | 18.300 | 12.438 | 1.466x |
+| row-only policy | `attention/attention/causal_attention_t32_d32_f32` | 38.654 | 27.550 | 1.412x |
+| row-only policy | `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 139.608 | 116.442 | 1.199x |
+
+After adding the row-element budget, the same small attention rows stayed on the
+serial f32 row kernels and returned below NumPy:
+
+| smoke | row | monpy us | NumPy us | ratio |
+| --- | --- | -------: | -------: | ----: |
+| row-element policy | `attention/softmax/causal_scores_t32_f32` | 9.387 | 13.142 | 0.711x |
+| row-element policy | `attention/attention/causal_attention_t32_d32_f32` | 23.342 | 26.450 | 0.886x |
+| row-element policy | `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 72.921 | 117.988 | 0.619x |
+
+Focused verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/elementwise/kernels/parallel.mojo src/elementwise/kernels/nn.mojo src/elementwise/kernels/__init__.mojo src/elementwise/kernels/reduce.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_numeric.py::test_reductions_match_numpy_for_axis_none tests/python/numpy_compat/test_numeric.py::test_axis_reductions_match_numpy tests/python/numpy_compat/test_numeric.py::test_float_axis_last_reductions_match_numpy tests/python/numpy_compat/test_numeric.py::test_fused_softmax_matches_numpy_formula tests/python/numpy_compat/test_numeric.py::test_fused_scaled_masked_softmax_matches_numpy_formula tests/python/numpy_compat/test_numeric.py::test_fused_layer_norm_matches_numpy_formula -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types attention --loops 5 --repeats 3 --rounds 2 --vector-size 1024 --matrix-sizes 32 --format json --sort ratio --output-dir results/local-sweep-20260509-parallel-policy-attention-smoke2 --no-progress --no-stdout
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/python -m monpy._bench.mojo_sweep --format json --sort ratio --output-dir results/local-sweep-20260509-parallel-policy-mojo --no-stdout --timeout 300
+MONPY_THREADS=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/python -m monpy._bench.mojo_sweep --format json --sort ratio --output-dir results/local-sweep-20260509-parallel-policy-mojo-serial --no-stdout --timeout 300
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/python -m monpy._bench.mojo_sweep --format json --sort ratio --output-dir results/local-sweep-20260509-parallel-policy-mojo-rerun --no-stdout --timeout 300
+```
+
+The pure-Mojo sweep had visible system noise in unrelated raw-kernel rows. One
+run reported `reductions/sum_f64_1m` at 2.197x against `std.algorithm.sum`, but
+the forced-serial pass put the same raw `reduce_sum_typed` row at 1.057x and an
+immediate normal rerun put it at 1.006x. Since `bench_mojo_sweep.mojo` calls
+`reduce_sum_typed` directly, not the new worker policy, that spike is not
+evidence for changing reduction grain yet. It needs a longer minimum-runtime
+harness before we treat it as a kernel signal.
+
+Next target: add a larger attention-size sweep so the row-element policy can be
+calibrated beyond the 32x32 smoke. The intended curve is serial for tiny
+attention, then gradual fanout as `rows * cols / ROW_HEAVY_GRAIN_ELEMS` grows,
+capped by row slices, hardware performance cores, and `MONPY_THREADS`.
