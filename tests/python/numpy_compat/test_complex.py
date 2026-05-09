@@ -75,6 +75,18 @@ def test_complex_scalar_mul_with_complex_constant() -> None:
   numpy.testing.assert_allclose(out, numpy.asarray([1 + 2j, 3 + 4j]) * (2 + 1j), rtol=1e-12)
 
 
+def test_complex64_contiguous_multiply_uses_fused_kernel() -> None:
+  a_np = numpy.asarray([1 + 2j, -3 + 5j, 7 - 11j, 13 + 17j], dtype=numpy.complex64)
+  b_np = numpy.asarray([2 - 1j, 4 + 3j, -5 + 9j, 6 - 7j], dtype=numpy.complex64)
+  a_mp = mp.asarray(a_np, dtype=mp.complex64, copy=True)
+  b_mp = mp.asarray(b_np, dtype=mp.complex64, copy=True)
+
+  out = a_mp * b_mp
+
+  assert out._native.used_fused()
+  numpy.testing.assert_allclose(numpy.asarray(out), a_np * b_np, rtol=1e-6)
+
+
 def test_complex_division_uses_smith_for_stability() -> None:
   # Smith's algorithm avoids overflow when |c|, |d| differ greatly.
   a_np = numpy.asarray([1.0 + 1.0j])

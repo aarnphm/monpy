@@ -400,6 +400,28 @@ def complex_binary_contig_typed[
         )
         return
     if op == BinaryOp.MUL.value:
+        comptime width = simd_width_of[dtype]()
+        comptime if dtype == DType.float32 and width == 4:
+            var i = 0
+            while i + 2 <= n_elems:
+                var lane = i * 2
+                var lvec = lhs_ptr.load[width=4](lane)
+                var rvec = rhs_ptr.load[width=4](lane)
+                var l_swap = lvec.shuffle[1, 0, 3, 2]()
+                var r_re = rvec.shuffle[0, 0, 2, 2]()
+                var r_im = rvec.shuffle[1, 1, 3, 3]()
+                var real_lanes = lvec * r_re - l_swap * r_im
+                var imag_lanes = lvec * r_im + l_swap * r_re
+                out_ptr.store(lane, real_lanes.shuffle[0, 4, 2, 6](imag_lanes))
+                i += 2
+            if i < n_elems:
+                var a = lhs_ptr[i * 2]
+                var b = lhs_ptr[i * 2 + 1]
+                var c = rhs_ptr[i * 2]
+                var d = rhs_ptr[i * 2 + 1]
+                out_ptr[i * 2] = a * c - b * d
+                out_ptr[i * 2 + 1] = a * d + b * c
+            return
         for i in range(n_elems):
             var a = lhs_ptr[i * 2]
             var b = lhs_ptr[i * 2 + 1]

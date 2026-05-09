@@ -1185,3 +1185,71 @@ longer an ingress problem; the likely work is inside the complex multiply
 kernel, specifically redundant real/imag lane loads, scalar temporary pressure,
 and whether a wider interleaved-lane SIMD path beats the current per-element
 Smith-compatible shape for multiplication.
+
+### 2026-05-08 complex64 multiply interleaved SIMD
+
+The next refreshed complex slice ranked the live deficits as:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.922 | 1.953 | 1.501x |
+| `complex/interop/array_copy_complex128` | 3.679 | 2.463 | 1.491x |
+| `complex/views/reversed_add_complex64` | 4.209 | 3.065 | 1.371x |
+| `complex/elementwise/binary_mul_complex64` | 3.497 | 2.547 | 1.368x |
+
+The multiply row was the useful kernel target. It was still using the scalar
+contiguous complex loop: two loads from each input, four multiplies, two
+add/sub operations, and two stores per complex element. That is correct, but it
+does not use the fact that complex64 storage is interleaved float lanes.
+
+`src/elementwise/kernels/complex.mojo` now adds a `float32x4` path for
+contiguous complex multiply. Each vector load covers two complex values:
+`[a0,b0,a1,b1]` and `[c0,d0,c1,d1]`. The kernel broadcasts real and imaginary
+rhs lanes with shuffles, computes real and imaginary candidate lanes, then
+interleaves `[real0, imag0, real1, imag1]` back into the output vector. The
+scalar tail remains for odd element counts, and the existing Smith division path
+is untouched.
+
+`src/elementwise/binary_dispatch.mojo` now also marks the non-Accelerate
+contiguous complex path as `BackendKind.FUSED`, so benchmark/profile manifests
+report the native fused kernel instead of the default backend code.
+
+Focused verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_complex.py::test_complex_arithmetic_add_sub_mul_div_match_numpy tests/python/numpy_compat/test_complex.py::test_complex_strided_arithmetic_preserves_imaginary_part tests/python/numpy_compat/test_complex.py::test_complex_scalar_mul_with_complex_constant tests/python/numpy_compat/test_complex.py::test_complex64_contiguous_multiply_uses_fused_kernel tests/python/numpy_compat/test_complex.py::test_complex_scalar_mul_with_real_int -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --repeats 7 --rounds 5 --matrix-sizes 64 --format json --sort ratio --output-dir results/local-sweep-20260509-complex-mul-simd-fused --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/elementwise/binary_mul_complex64 --types complex --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-complex-mul-simd-fused --sample --no-perf-stat
+```
+
+Post-fix benchmark results:
+
+| row | before | after | delta |
+| --- | ---: | ---: | ---: |
+| `complex/elementwise/binary_mul_complex64` | 3.497 us, 1.368x | 3.210 us, 1.180x | 1.09x faster |
+
+The post-fix profile manifest reports `used_fused=True`, `backend_code=2`, no
+major faults, a 1,590 byte traced allocation peak, and max RSS around 49.6 MB.
+The profile loop moved from 3.593 us/call to 3.275 us/call; the `sample` child
+loop moved from 3.745 us/call to 3.424 us/call. Hardware PMU counters were not
+collected in this run because `--no-perf-stat` was used.
+
+The remaining complex frontier after this slice:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/array_copy_complex128` | 3.849 | 2.590 | 1.454x |
+| `complex/interop/asarray_complex64` | 3.002 | 2.078 | 1.449x |
+| `complex/views/reversed_add_complex64` | 4.324 | 3.169 | 1.356x |
+| `complex/casts/astype_complex64_to_complex128` | 3.387 | 2.704 | 1.272x |
+| `complex/elementwise/binary_add_complex64` | 3.270 | 2.575 | 1.255x |
+| `complex/elementwise/binary_add_complex128` | 3.330 | 2.751 | 1.211x |
+| `complex/elementwise/binary_mul_complex64` | 3.210 | 2.638 | 1.180x |
+| `complex/matmul_64_complex64` | 7.355 | 7.147 | 1.055x |
+
+Next target should move back to the interop/copy cluster, but the likely owner
+is allocation and Python/native wrapper overhead rather than another SIMD
+kernel. The useful question is whether `array(copy=True)` can call a narrower
+native copy entrypoint that combines buffer import, allocation, and memcpy with
+fewer Python object transitions.

@@ -25,7 +25,7 @@ from array import (
     same_shape,
     set_contiguous_from_f64,
 )
-from domain import ArrayDType, BinaryOp
+from domain import ArrayDType, BackendKind, BinaryOp
 
 from .accelerate_dispatch import (
     maybe_binary_accelerate,
@@ -79,6 +79,7 @@ def maybe_binary_same_shape_contiguous(lhs: Array, rhs: Array, mut result: Array
             result.size_value,
             op,
         )
+        result.backend_code = BackendKind.FUSED.value
         return True
     if (
         lhs.dtype_code == ArrayDType.COMPLEX128.value
@@ -94,6 +95,7 @@ def maybe_binary_same_shape_contiguous(lhs: Array, rhs: Array, mut result: Array
             result.size_value,
             op,
         )
+        result.backend_code = BackendKind.FUSED.value
         return True
     # Accelerate fast-paths for f32/f64 (macOS only). Try first, fall through to typed kernel.
     comptime if CompilationTarget.is_macos():
