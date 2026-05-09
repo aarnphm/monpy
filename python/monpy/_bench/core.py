@@ -12,7 +12,7 @@ import sys
 import time
 import warnings
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -99,7 +99,7 @@ def force_monpy(value: Any) -> Any:
 
 
 @contextmanager
-def suppress_known_numpy_linalg_warnings():
+def suppress_known_numpy_linalg_warnings() -> Iterator[None]:
   with warnings.catch_warnings():
     warnings.filterwarnings(
       "ignore",

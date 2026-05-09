@@ -340,12 +340,8 @@ class Ufunc:
     if rop is None:raise TypeError(f"reduce on {self.__name__} is not supported")
     if axis is None:
       # Full reduction.
-      if rop in (REDUCE_ARGMAX, REDUCE_ARGMIN, REDUCE_ALL, REDUCE_ANY):
-        res=ndarray(_native.reduce(arr._native, rop))
-        v=res._scalar() if not keepdims else res.reshape((1,)*arr.ndim)
-      else:
-        res=ndarray(_native.reduce(arr._native, rop))
-        v=res._scalar() if not keepdims else res.reshape((1,)*arr.ndim)
+      res=ndarray(_native.reduce(arr._native, rop))
+      v=res.reshape((1,)*arr.ndim) if keepdims else res
       if out is not None:
         out[...]=v
         return out
@@ -970,6 +966,10 @@ def tri(N:int, M:int|None=None, k:int=0, dtype:object=None, *, device:object=Non
   m=N if M is None else M
   return ndarray(_native.tri(N, m, k, t.code))
 
+@typing.overload
+def atleast_1d(ary:object, /)->ndarray:...
+@typing.overload
+def atleast_1d(ary:object, ary2:object, /, *arys:object)->tuple[ndarray, ...]:...
 def atleast_1d(*arys:object)->ndarray|tuple[ndarray, ...]:
   def _bump(a:object)->ndarray:
     arr=asarray(a)
@@ -977,6 +977,10 @@ def atleast_1d(*arys:object)->ndarray|tuple[ndarray, ...]:
   res=tuple(_bump(a) for a in arys)
   return res[0] if len(res)==1 else res
 
+@typing.overload
+def atleast_2d(ary:object, /)->ndarray:...
+@typing.overload
+def atleast_2d(ary:object, ary2:object, /, *arys:object)->tuple[ndarray, ...]:...
 def atleast_2d(*arys:object)->ndarray|tuple[ndarray, ...]:
   def _bump(a:object)->ndarray:
     arr=asarray(a)
@@ -986,6 +990,10 @@ def atleast_2d(*arys:object)->ndarray|tuple[ndarray, ...]:
   res=tuple(_bump(a) for a in arys)
   return res[0] if len(res)==1 else res
 
+@typing.overload
+def atleast_3d(ary:object, /)->ndarray:...
+@typing.overload
+def atleast_3d(ary:object, ary2:object, /, *arys:object)->tuple[ndarray, ...]:...
 def atleast_3d(*arys:object)->ndarray|tuple[ndarray, ...]:
   def _bump(a:object)->ndarray:
     arr=asarray(a)
@@ -1519,7 +1527,7 @@ def _reduce_dispatch(x:object, axis:object, op:int, *, dtype:object, out:ndarray
       keep=tuple(1 for _ in range(arr.ndim))
       v=res.reshape(keep) if keep else res
     else:
-      v=res._scalar() if res.ndim==0 else res
+      v=res
     if out is not None:
       out[...]=v
       return out
@@ -1606,7 +1614,6 @@ def quantile(x:object, q:object, axis:object=None, *, keepdims:builtins.bool=Fal
       flat_out.append(_py_float(_quantile_from_sorted(vals, k_q, keepdims_axes=None, orig_shape=())))
   if not isinstance(q, (list, tuple)):
     if keepdims:return ndarray(_native.from_flat(flat_out, out_shape, float64.code))
-    if not pref:return flat_out[0]
     return ndarray(_native.from_flat(flat_out, pref, float64.code))
   if keepdims:return ndarray(_native.from_flat(flat_out, out_shape, float64.code))
   return ndarray(_native.from_flat(flat_out, out_shape, float64.code))
@@ -1620,9 +1627,8 @@ def _quantile_from_sorted(sorted_vals:Sequence[float], q:object, *, keepdims_axe
   hi=builtins.min(lo+1, n-1)
   frac=pos-lo
   v=sorted_vals[lo]*(1-frac)+sorted_vals[hi]*frac
-  if keepdims_axes is None:return v
-  shape=tuple(1 for _ in orig_shape)
-  return ndarray(_native.from_flat([v], shape, float64.code)) if shape else v
+  shape=() if keepdims_axes is None else tuple(1 for _ in orig_shape)
+  return ndarray(_native.from_flat([v], shape, float64.code))
 
 def percentile(x:object, q:object, axis:object=None, *, keepdims:builtins.bool=False, method:str="linear")->object:
   if isinstance(q, (list, tuple)):qf=[_py_float(v)/100.0 for v in q]
@@ -1800,7 +1806,8 @@ def nanquantile(x:object, q:object, axis:object=None, *, keepdims:builtins.bool=
   flat.sort()
   if not flat:raise ValueError("all values nan")
   if isinstance(q, (list, tuple)):
-    return ndarray(_native.from_flat([_quantile_from_sorted(flat, qq, keepdims_axes=None, orig_shape=()) for qq in q], (len(q),), float64.code))
+    vals=[_py_float(_quantile_from_sorted(flat, qq, keepdims_axes=None, orig_shape=())) for qq in q]
+    return ndarray(_native.from_flat(vals, (len(q),), float64.code))
   return _quantile_from_sorted(flat, q, keepdims_axes=None, orig_shape=())
 def nanpercentile(x:object, q:object, axis:object=None, *, keepdims:builtins.bool=False, method:str="linear")->object:
   if isinstance(q, (list, tuple)):qf=[_py_float(v)/100.0 for v in q]
@@ -1918,7 +1925,7 @@ def searchsorted(a:object, v:object, side:str="left", sorter:object=None)->objec
   for x in needles:
     if side=="left":out.append(bisect.bisect_left(haystack, x))
     else:out.append(bisect.bisect_right(haystack, x))
-  if is_scalar:return out[0]
+  if is_scalar:return ndarray(_native.from_flat(out, (), int64.code))
   shape=asarray(v).shape
   return ndarray(_native.from_flat(out, shape, int64.code))
 
@@ -2258,7 +2265,7 @@ def block(arrays:object)->ndarray:
       return 1+builtins.max((_md(e) for e in x), default=0)
     return 0
   d=_md(arrays)
-  if d==0:return typing.cast(ndarray, atleast_1d(asarray(arrays)))
+  if d==0:return atleast_1d(asarray(arrays))
   def _atleast(x:object, n:int)->ndarray:
     a=asarray(x)
     while a.ndim<n:a=expand_dims(a, 0)
@@ -2684,7 +2691,7 @@ def trace(a:object, offset:int=0, axis1:int=0, axis2:int=1, dtype:object=None, o
   if tr is not None:
     dc=-1 if dtype is None else _resolve_dtype(dtype).code
     r=ndarray(tr(arr._native, int(offset), int(axis1), int(axis2), dc))
-    v=r._scalar() if r.ndim==0 else r
+    v=r
   else:
     v=_trace_fallback(arr, int(offset), int(axis1), int(axis2), dtype)
   if out is not None:
@@ -2782,7 +2789,7 @@ def _unary(x:object, op:int)->object:
 def _reduce(x:object, axis:object, op:int)->object:
   if axis is not None:raise NotImplementedError("axis-specific reductions are not implemented in monpy v1")
   a=_mat(_av(x))
-  return _native.reduce(a._native, op).get_scalar(0)
+  return ndarray(_native.reduce(a._native, op))
 
 def _isarrv(v:object)->typing.TypeGuard[ndarray|_DeferredArray]:return isinstance(v, (ndarray, _DeferredArray))                 # is "array value": ours, materialised or not
 def _av(v:object)->ndarray|_DeferredArray:return v if isinstance(v, (ndarray, _DeferredArray)) else asarray(v)                  # as-array-value: convert non-arrays via asarray

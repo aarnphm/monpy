@@ -14,7 +14,7 @@ version = "0.1.0"
 requires-python = ">=3.11"
 
 [project.optional-dependencies]
-dev = ["numpy>=2", "pytest>=9", "tqdm", "pyyaml"]
+dev = ["numpy>=2", "pytest>=9", "tqdm", "pyyaml", "ipython>=9.13.0"]
 kernels = ["max>=26.2.0", "safetensors"]
 
 [project.scripts]

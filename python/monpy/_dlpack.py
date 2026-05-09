@@ -6,6 +6,9 @@ import ctypes
 import math
 import typing
 
+if typing.TYPE_CHECKING:
+  import monpy as mp
+
 _DLPACK_MAJOR = 1
 _DLPACK_MINOR = 0
 _DLPACK_CPU = 1
@@ -315,10 +318,10 @@ class _DLPackOwner:
     except Exception:return
 
 
-def from_dlpack(obj:object, copy:bool|None):return from_dlpack_capsule(_request_capsule(obj, copy), copy)
+def from_dlpack(obj:object, copy:bool|None)->mp.ndarray:return from_dlpack_capsule(_request_capsule(obj, copy), copy)
 
 
-def from_dlpack_capsule(capsule:object, copy:bool|None):
+def from_dlpack_capsule(capsule:object, copy:bool|None)->mp.ndarray:
   import monpy as mp
   address, versioned, _name, used_name = _capsule_pointer(capsule)
   tensor, flags = _managed_tensor(address, versioned)

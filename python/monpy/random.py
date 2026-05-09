@@ -6,7 +6,7 @@ from __future__ import annotations
 import builtins, time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import ClassVar, cast
+from typing import ClassVar, TypeAlias, overload, cast
 
 from . import (
   DType,
@@ -32,6 +32,8 @@ _DEFAULT_IMPL="threefry2x32"
 _FLOAT_DTYPES=(float32, float64)
 _BITS_DTYPES=(uint32, uint64)
 _INT_DTYPES=(int64, int32, int16, int8, uint64, uint32, uint16, uint8)
+_FloatOrArray:TypeAlias=builtins.float|ndarray
+_IntOrArray:TypeAlias=builtins.int|ndarray
 
 
 def _check_impl(impl:str)->str:
@@ -107,8 +109,12 @@ class KeyBatch:
     return self.shape[0]
 
   def __iter__(self)->Iterator[Key]:
-    for index in range(len(self)):yield cast(Key, self[index])
+    for index in range(len(self)):yield self[index]
 
+  @overload
+  def __getitem__(self, index:int)->Key:...
+  @overload
+  def __getitem__(self, index:object)->Key|KeyBatch:...
   def __getitem__(self, index:object)->Key|KeyBatch:
     item=cast(ndarray, self._data[index])
     if item.shape==(2,):return _key_from_words(_py_int(item[0]), _py_int(item[1]), self.impl)
@@ -137,7 +143,7 @@ def _next_key()->Key:
 
 def _split2(source:Key)->tuple[Key, Key]:
   pair=split(source, 2)
-  return cast(Key, pair[0]), cast(Key, pair[1])
+  return pair[0], pair[1]
 
 
 def _parse(name:str, args:tuple[object, ...], key:Key|None, size:object, shape_first:bool=True)->tuple[list[object], Key|None, object]:
@@ -214,21 +220,51 @@ def _randint_array(source:Key, low:object, high:object, size:object, dtype:objec
   return ndarray(_native._random_randint(source.word0, source.word1, _shape(size), lo, hi, t.code))
 
 
-def random(key:object=None, size:object=None, dtype:object=float64)->object:
+@overload
+def random(key:Key, size:object=None, dtype:object=float64)->ndarray:...
+@overload
+def random(key:None=None, size:None=None, dtype:object=float64)->builtins.float:...
+@overload
+def random(key:int|Sequence[int], size:None=None, dtype:object=float64)->ndarray:...
+@overload
+def random(key:None=None, size:int|Sequence[int]=..., dtype:object=float64)->ndarray:...
+@overload
+def random(key:object=None, size:object=None, dtype:object=float64)->_FloatOrArray:...
+def random(key:object=None, size:object=None, dtype:object=float64)->_FloatOrArray:
   if isinstance(key, Key):
     return _uniform_array(key, size, dtype, 0.0, 1.0)
   if key is not None:
     if size is not None:raise TypeError("random() got both positional size and size=")
     size=key
-  return _as_scalar_if(_uniform_array(_next_key(), size, dtype, 0.0, 1.0), size is None)
+  return cast(_FloatOrArray, _as_scalar_if(_uniform_array(_next_key(), size, dtype, 0.0, 1.0), size is None))
 
 
-def random_sample(size:object=None)->object:return random(None, size=size, dtype=float64)
-def sample(size:object=None)->object:return random_sample(size)
-def ranf(size:object=None)->object:return random_sample(size)
+@overload
+def random_sample(size:None=None)->builtins.float:...
+@overload
+def random_sample(size:int|Sequence[int])->ndarray:...
+def random_sample(size:object=None)->_FloatOrArray:return random(None, size=size, dtype=float64)
+@overload
+def sample(size:None=None)->builtins.float:...
+@overload
+def sample(size:int|Sequence[int])->ndarray:...
+def sample(size:object=None)->_FloatOrArray:return random(None, size=size, dtype=float64)
+@overload
+def ranf(size:None=None)->builtins.float:...
+@overload
+def ranf(size:int|Sequence[int])->ndarray:...
+def ranf(size:object=None)->_FloatOrArray:return random(None, size=size, dtype=float64)
 
 
-def standard_normal(size:object=None, dtype:object=float64, *, key:Key|None=None)->object:
+@overload
+def standard_normal(size:Key, dtype:object=float64, *, key:None=None)->ndarray:...
+@overload
+def standard_normal(size:None=None, dtype:object=float64, *, key:Key)->ndarray:...
+@overload
+def standard_normal(size:int|Sequence[int], dtype:object=float64, *, key:Key|None=None)->ndarray:...
+@overload
+def standard_normal(size:None=None, dtype:object=float64, *, key:None=None)->builtins.float:...
+def standard_normal(size:object=None, dtype:object=float64, *, key:Key|None=None)->_FloatOrArray:
   if isinstance(size, Key):
     if key is not None:raise TypeError("standard_normal() got multiple keys")
     key=size
@@ -236,28 +272,28 @@ def standard_normal(size:object=None, dtype:object=float64, *, key:Key|None=None
       size=dtype
       dtype=float64
     else:size=None
-  return _maybe_scalar(_normal_array(key if key is not None else _next_key(), size, dtype), key, size)
+  return cast(_FloatOrArray, _maybe_scalar(_normal_array(key if key is not None else _next_key(), size, dtype), key, size))
 
 
-def uniform(*args:object, key:Key|None=None, low:object=0.0, high:object=1.0, size:object=None, dtype:object=float64)->object:
+def uniform(*args:object, key:Key|None=None, low:object=0.0, high:object=1.0, size:object=None, dtype:object=float64)->_FloatOrArray:
   values, key, size=_parse("uniform", args, key, size)
   if values:low=values.pop(0)
   if values:high=values.pop(0)
   if values:size=values.pop(0)
   if values:raise TypeError("uniform() takes at most key, low, high, and size positional arguments")
-  return _maybe_scalar(_uniform_array(key if key is not None else _next_key(), size, dtype, low, high), key, size)
+  return cast(_FloatOrArray, _maybe_scalar(_uniform_array(key if key is not None else _next_key(), size, dtype, low, high), key, size))
 
 
-def normal(*args:object, key:Key|None=None, loc:object=0.0, scale:object=1.0, size:object=None, dtype:object=float64)->object:
+def normal(*args:object, key:Key|None=None, loc:object=0.0, scale:object=1.0, size:object=None, dtype:object=float64)->_FloatOrArray:
   values, key, size=_parse("normal", args, key, size)
   if values:loc=values.pop(0)
   if values:scale=values.pop(0)
   if values:size=values.pop(0)
   if values:raise TypeError("normal() takes at most key, loc, scale, and size positional arguments")
-  return _maybe_scalar(_scaled(_normal_array(key if key is not None else _next_key(), size, dtype), loc, scale), key, size)
+  return cast(_FloatOrArray, _maybe_scalar(_scaled(_normal_array(key if key is not None else _next_key(), size, dtype), loc, scale), key, size))
 
 
-def randint(*args:object, key:Key|None=None, low:object|None=None, high:object|None=None, size:object=None, dtype:object=int64)->object:
+def randint(*args:object, key:Key|None=None, low:object|None=None, high:object|None=None, size:object=None, dtype:object=int64)->_IntOrArray:
   values, key, size=_parse("randint", args, key, size, False)
   if low is None:
     if not values:raise TypeError("randint() missing required argument 'low'")
@@ -273,11 +309,19 @@ def randint(*args:object, key:Key|None=None, low:object|None=None, high:object|N
   else:
     lo=low
     hi=high
-  return _maybe_scalar(_randint_array(key if key is not None else _next_key(), lo, hi, size, dtype), key, size)
+  return cast(_IntOrArray, _maybe_scalar(_randint_array(key if key is not None else _next_key(), lo, hi, size, dtype), key, size))
 
 
-def rand(*dims:int)->object:return random(None, size=dims if dims else None, dtype=float64)
-def randn(*dims:int)->object:return standard_normal(size=dims if dims else None, dtype=float64)
+@overload
+def rand()->builtins.float:...
+@overload
+def rand(dim:int, *dims:int)->ndarray:...
+def rand(*dims:int)->_FloatOrArray:return random(None, size=dims if dims else None, dtype=float64)
+@overload
+def randn()->builtins.float:...
+@overload
+def randn(dim:int, *dims:int)->ndarray:...
+def randn(*dims:int)->_FloatOrArray:return standard_normal(size=dims if dims else None, dtype=float64)
 
 
 class Generator:
@@ -292,25 +336,45 @@ class Generator:
     self._key, out=_split2(self._key)
     return out
 
-  def random(self, size:object=None, dtype:object=float64)->object:
-    return _as_scalar_if(_uniform_array(self._draw_key(), size, dtype, 0.0, 1.0), size is None)
+  @overload
+  def random(self, size:None=None, dtype:object=float64)->builtins.float:...
+  @overload
+  def random(self, size:int|Sequence[int], dtype:object=float64)->ndarray:...
+  def random(self, size:object=None, dtype:object=float64)->_FloatOrArray:
+    return cast(_FloatOrArray, _as_scalar_if(_uniform_array(self._draw_key(), size, dtype, 0.0, 1.0), size is None))
 
-  def uniform(self, low:object=0.0, high:object=1.0, size:object=None)->object:
-    return _as_scalar_if(_uniform_array(self._draw_key(), size, float64, low, high), size is None)
+  @overload
+  def uniform(self, low:object=0.0, high:object=1.0, size:None=None)->builtins.float:...
+  @overload
+  def uniform(self, low:object=0.0, high:object=1.0, size:int|Sequence[int]=...)->ndarray:...
+  def uniform(self, low:object=0.0, high:object=1.0, size:object=None)->_FloatOrArray:
+    return cast(_FloatOrArray, _as_scalar_if(_uniform_array(self._draw_key(), size, float64, low, high), size is None))
 
-  def standard_normal(self, size:object=None, dtype:object=float64)->object:
-    return _as_scalar_if(_normal_array(self._draw_key(), size, dtype), size is None)
+  @overload
+  def standard_normal(self, size:None=None, dtype:object=float64)->builtins.float:...
+  @overload
+  def standard_normal(self, size:int|Sequence[int], dtype:object=float64)->ndarray:...
+  def standard_normal(self, size:object=None, dtype:object=float64)->_FloatOrArray:
+    return cast(_FloatOrArray, _as_scalar_if(_normal_array(self._draw_key(), size, dtype), size is None))
 
-  def normal(self, loc:object=0.0, scale:object=1.0, size:object=None)->object:
+  @overload
+  def normal(self, loc:object=0.0, scale:object=1.0, size:None=None)->builtins.float:...
+  @overload
+  def normal(self, loc:object=0.0, scale:object=1.0, size:int|Sequence[int]=...)->ndarray:...
+  def normal(self, loc:object=0.0, scale:object=1.0, size:object=None)->_FloatOrArray:
     result=_scaled(_normal_array(self._draw_key(), size, float64), loc, scale)
     return result if size is not None else result._scalar()
 
-  def integers(self, low:object, high:object|None=None, size:object=None, dtype:object=int64, endpoint:bool=False)->object:
+  @overload
+  def integers(self, low:object, high:object|None=None, size:None=None, dtype:object=int64, endpoint:bool=False)->builtins.int:...
+  @overload
+  def integers(self, low:object, high:object|None=None, size:int|Sequence[int]=..., dtype:object=int64, endpoint:bool=False)->ndarray:...
+  def integers(self, low:object, high:object|None=None, size:object=None, dtype:object=int64, endpoint:bool=False)->_IntOrArray:
     if high is None:
       lo, hi=0, low
     else:lo, hi=low, high
     hi=_py_int(hi)+(1 if endpoint else 0)
-    return _as_scalar_if(_randint_array(self._draw_key(), lo, hi, size, dtype), size is None)
+    return cast(_IntOrArray, _as_scalar_if(_randint_array(self._draw_key(), lo, hi, size, dtype), size is None))
 
 
 def default_rng(seed:object=None)->Generator:

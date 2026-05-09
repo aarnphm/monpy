@@ -4,7 +4,7 @@ import math
 from dataclasses import dataclass
 from typing import Protocol, SupportsInt, TypeAlias, cast
 
-import monumpy as np
+import monpy as np
 
 RNG: TypeAlias = np.random.Generator
 

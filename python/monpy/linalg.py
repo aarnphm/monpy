@@ -51,6 +51,11 @@ def _prod(xs:typing.Iterable[int])->int:
   for x in xs:out*=x
   return out
 
+def _axis_tuple(axis:object)->tuple[int, ...]:
+  if isinstance(axis, builtins.int):return(axis,)
+  if not hasattr(axis, "__iter__"):return(builtins.int(typing.cast(typing.Any, axis)),)
+  return tuple(builtins.int(typing.cast(typing.Any, a)) for a in typing.cast(typing.Iterable[object], axis))
+
 def _eig_parts(wr:ndarray, wi:ndarray, n:int)->tuple[list[float], list[float], list[complex]]:
   r=[float(wr._native.get_scalar(i)) for i in range(n)]
   im=[float(wi._native.get_scalar(i)) for i in range(n)]
@@ -119,8 +124,8 @@ def tensordot(a:object, b:object, axes:int|tuple[object, object]=2)->object:
     b_axes=tuple(range(n))
   else:
     a_axes, b_axes=axes
-    a_axes=tuple(a_axes) if hasattr(a_axes, '__iter__') else (a_axes,)
-    b_axes=tuple(b_axes) if hasattr(b_axes, '__iter__') else (b_axes,)
+    a_axes=_axis_tuple(a_axes)
+    b_axes=_axis_tuple(b_axes)
   for ax_a, ax_b in zip(a_axes, b_axes, strict=True):
     if A.shape[ax_a]!=B.shape[ax_b]:raise ValueError("tensordot: axis size mismatch")
   a_kept=tuple(d for d in range(A.ndim) if d not in a_axes)
@@ -224,8 +229,8 @@ def matrix_rank(M:object, tol:object=None, hermitian:bool=False)->int:
   if X.ndim<2:return 1 if any(X._native.get_scalar(i)!=0 for i in range(X.size)) else 0
   s=svd(X, compute_uv=False)
   smax=max(float(s._native.get_scalar(i)) for i in range(s.size))
-  if tol is None:tol=smax*max(X.shape[-2:])*_eps_for(X.dtype)
-  return sum(1 for i in range(s.size) if float(s._native.get_scalar(i))>tol)
+  threshold=smax*max(X.shape[-2:])*_eps_for(X.dtype) if tol is None else float(typing.cast(typing.Any, tol))
+  return sum(1 for i in range(s.size) if float(s._native.get_scalar(i))>threshold)
 
 def matrix_power(a:object, n:int)->ndarray:
   A=_array(a)
@@ -485,9 +490,8 @@ def lstsq(a:object, b:object, rcond:object=None)->tuple[ndarray, ndarray, int, n
   if B.ndim not in(1, 2):raise ValueError("lstsq: b must be rank-1 or rank-2")
   if A.shape[0]!=B.shape[0]:raise ValueError("lstsq: shape mismatch on first axis")
   # numpy 2.x default rcond convention: machine epsilon * max(M, N).
-  if rcond is None:
-    rcond=_eps_for(A.dtype)*max(A.shape)
-  out=_w(_native.linalg_lstsq, A._native, B._native, float(rcond))
+  rcond_value=_eps_for(A.dtype)*max(A.shape) if rcond is None else float(typing.cast(typing.Any, rcond))
+  out=_w(_native.linalg_lstsq, A._native, B._native, rcond_value)
   x=ndarray(out[0])
   s=ndarray(out[1])
   rank=int(out[2])
@@ -497,10 +501,10 @@ def lstsq(a:object, b:object, rcond:object=None)->tuple[ndarray, ndarray, int, n
   m, n=A.shape
   if rank==n and m>n and B.ndim==1:
     diff=matmul(A, x)-B
-    residuals=_sum(square(diff), keepdims=True)
+    residuals=typing.cast(ndarray, _sum(square(diff), keepdims=True))
   elif rank==n and m>n and B.ndim==2:
     diff=matmul(A, x)-B
-    residuals=_sum(square(diff), axis=0)
+    residuals=typing.cast(ndarray, _sum(square(diff), axis=0))
   else:
     from . import empty as _empty
     residuals=_empty((0,), dtype=A.dtype)
@@ -511,7 +515,7 @@ def pinv(a:object, rcond:object=None, hermitian:bool=False)->ndarray:
   A=_floatify(asarray(a))
   if A.ndim!=2:raise ValueError("pinv: input must be rank-2")
   m, n=A.shape
-  if rcond is None:rcond=_eps_for(A.dtype)*max(m, n)
-  return ndarray(_w(_native.linalg_pinv, A._native, float(rcond)))
+  rcond_value=_eps_for(A.dtype)*max(m, n) if rcond is None else float(typing.cast(typing.Any, rcond))
+  return ndarray(_w(_native.linalg_pinv, A._native, rcond_value))
 
 __all__=["LinAlgError", "cholesky", "cross", "det", "dot", "eig", "eigh", "eigvals", "eigvalsh", "inner", "inv", "kron", "lstsq", "matmul", "matrix_norm", "matrix_power", "matrix_rank", "matrix_transpose", "matvec", "multi_dot", "norm", "outer", "pinv", "qr", "slogdet", "solve", "svd", "svdvals", "tensordot", "tensorinv", "tensorsolve", "trace", "vdot", "vecdot", "vecmat", "vector_norm"]

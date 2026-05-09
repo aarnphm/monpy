@@ -84,7 +84,7 @@ class LayoutSpec:
       raise ValueError("layout shape and strides must have the same rank")
 
   @classmethod
-  def row_major(cls, shape: tuple[Dim, ...], *, alignment_bytes: int | None = None) -> LayoutSpec:
+  def row_major(cls: type[LayoutSpec], shape: tuple[Dim, ...], *, alignment_bytes: int | None = None) -> LayoutSpec:
     return cls(
       shape=tuple(shape),
       strides=row_major_strides(tuple(shape)),
@@ -95,7 +95,7 @@ class LayoutSpec:
 
   @classmethod
   def explicit(
-    cls,
+    cls: type[LayoutSpec],
     shape: tuple[Dim, ...],
     strides: tuple[Dim, ...],
     *,

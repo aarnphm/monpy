@@ -46,7 +46,7 @@ class DeviceSpec:
   index: int | None = None
 
   @classmethod
-  def coerce(cls, device: object = None) -> DeviceSpec:
+  def coerce(cls: type[DeviceSpec], device: object = None) -> DeviceSpec:
     if isinstance(device, DeviceSpec):
       return device
     if device is None:
