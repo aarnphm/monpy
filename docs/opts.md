@@ -2191,3 +2191,73 @@ under `results/local-profile-20260509-unary-sin-static-*`.
 Next target should be the new pure-Mojo `scalar_mul_f64_64k` stdlib gap or the
 public complex64 add/asarray wrapper cluster. The former is a cleaner leaf
 kernel target; the latter is the larger NumPy-facing ratio.
+
+### 2026-05-09 scalar static commutative loop split
+
+Refresh before editing showed attention still ahead of NumPy and the pure-Mojo
+stdlib comparison led by scalar multiply:
+
+| slice | row | candidate | baseline | ratio |
+| --- | --- | --------: | -------: | ----: |
+| attention | `attention/attention/causal_attention_t32_d32_f32` | 20.483 us | 23.750 us | 0.843x |
+| attention | `attention/softmax/causal_scores_t32_f32` | 7.846 us | 11.367 us | 0.690x |
+| attention | `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 71.900 us | 113.706 us | 0.619x |
+| pure Mojo | `elementwise/scalar_mul_f64_64k` | 11843.5 ns | 10464.7 ns | 1.132x |
+| pure Mojo | `elementwise/add_f32_1m` | 131810 ns | 120804 ns | 1.091x |
+
+`binary_scalar_contig_typed_static` already specialized ADD/MUL with comptime
+branches, but those branches lived inside the shared scalar-left-aware kernel
+body. The stdlib scalar-multiply baseline is just a direct SIMD load, multiply,
+store, tail loop. I split ADD and MUL into compile-time early-return loops so
+the commutative hot path has no `scalar_on_left` branch or fallback
+`apply_binary_typed_vec_static` scaffolding in its body.
+
+Focused verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/elementwise/kernels/typed.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_numeric.py::test_scalar_binary_ops_match_numpy tests/python/numpy_compat/test_numeric.py::test_python_scalars_are_weak_for_float32_arrays tests/python/numpy_compat/test_numeric.py::test_binary_out_writes_existing_destination tests/python/numpy_compat/test_ufunc.py::test_floor_divide_and_remainder_match_numpy tests/python/numpy_compat/test_ufunc.py::test_power_scalar_square_and_cube_match_numpy -q
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/python -m monpy._bench.mojo_sweep --format json --sort ratio --output-dir results/local-sweep-20260509-scalar-static-0553 --no-stdout --timeout 300
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/python -m monpy._bench.mojo_sweep --format json --sort ratio --output-dir results/local-sweep-20260509-scalar-static-rerun-0553 --no-stdout --timeout 300
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types array --loops 50 --repeats 7 --rounds 5 --vector-sizes 65536 --matrix-sizes 64 --linalg-sizes 8 --format json --sort ratio --output-dir results/local-sweep-20260509-array-scalar-static-0553 --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case array/bandwidth/binary_add_65536_f32 --types array --vector-sizes 65536 --matrix-sizes 64 --linalg-sizes 8 --candidate monpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-binary-add-static-monpy --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case array/bandwidth/binary_add_65536_f32 --types array --vector-sizes 65536 --matrix-sizes 64 --linalg-sizes 8 --candidate numpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-binary-add-static-numpy --sample --no-perf-stat
+```
+
+The first post-patch pure-Mojo sweep moved `scalar_mul_f64_64k` from 1.132x to
+0.987x. The rerun put it at 1.002x, so the practical conclusion is "closed to
+parity" rather than "reliably faster":
+
+| row | before | after | rerun |
+| --- | -----: | ----: | ----: |
+| `elementwise/scalar_mul_f64_64k` | 11843.5 ns vs 10464.7 ns, 1.132x | 10527.7 ns vs 10663.8 ns, 0.987x | 11772.2 ns vs 11753.8 ns, 1.002x |
+| `elementwise/scalar_mul_f32_64k` | 5932.2 ns vs 5831.3 ns, 1.017x | 5583.4 ns vs 5503.7 ns, 1.014x | 5857.9 ns vs 5544.1 ns, 1.057x |
+
+One sweep produced a false-looking `sum_f32_1m` spike at 4.965x; the immediate
+rerun put the same row back at 0.994x. That row is unrelated to the scalar patch
+and should be treated as benchmark noise unless it reproduces in a third run
+with a longer minimum runtime.
+
+The NumPy-facing guardrail stayed healthy for the bandwidth row:
+
+| row | monpy | NumPy | ratio |
+| --- | ----: | ----: | ----: |
+| `array/bandwidth/binary_add_65536_f32` | 7.334 us | 11.278 us | 0.670x |
+| `array/bandwidth/reversed_add_65536_f32` | 13.884 us | 30.888 us | 0.450x |
+| `array/bandwidth/fused_sin_add_mul_65536_f32` | 39.779 us | 116.539 us | 0.342x |
+
+The `sample(1)` CPU profile for `array/bandwidth/binary_add_65536_f32` showed
+monpy spending the main hot path under `maybe_binary_same_shape_contiguous`
+inside `libvDSP`, while NumPy spent the hot loop in `_multiarray_umath`
+`FLOAT_add` plus allocation and ufunc dispatch. Wall-clock profile measurement
+was 7.932 us/call for monpy versus 11.433 us/call for NumPy. Tracemalloc peaks
+were 1,598 bytes for monpy and 525,512 bytes for NumPy, a 329:1 peak-allocation
+ratio. No PMU counters were collected on macOS because this run used
+`--no-perf-stat`; the stack samples and manifests live under
+`results/local-profile-20260509-binary-add-static-*`.
+
+Next target should be either the pure-Mojo `add_f32_64k`/`add_f32_1m` variance
+with a longer stdlib harness runtime, or the larger public wrapper cluster
+(`moveaxis_f32`, `empty_like_shape_override_f32`, `transpose_add_f32`) where the
+NumPy-facing ratios are still 1.7x-1.9x.
