@@ -836,6 +836,19 @@ def asarray(obj:object, dtype:object=None, *, copy:builtins.bool|None=None, devi
     return arr.astype(tgt, copy=True)
   if isinstance(obj, _DeferredArray):return asarray(obj._materialize(), dtype=dtype, copy=copy, device=device)
   if _is_numpy_array(obj):
+    if dtype is complex64 and copy is False:
+      try:return ndarray(_native.asarray_complex64_view_from_buffer(obj), owner=obj)
+      except Exception as exc:
+        message=str(exc)
+        if "copy" in message or "readonly" in message:raise ValueError(message) from exc
+        if "buffer format unsupported" in message:raise NotImplementedError("unsupported dtype") from exc
+        raise
+    if dtype is complex128 and copy is True:
+      try:return ndarray(_native.asarray_complex128_copy_from_buffer(obj))
+      except Exception as exc:
+        message=str(exc)
+        if "buffer format unsupported" in message:raise NotImplementedError("unsupported dtype") from exc
+        raise
     tc=-1 if dtype is None else _resolve_dtype(dtype).code
     cf=-1 if copy is None else (1 if copy else 0)                                                                              # tri-state: -1 default, 0 never, 1 always
     try:return ndarray(_native.asarray_from_buffer(obj, tc, cf), owner=None if cf==1 else obj)

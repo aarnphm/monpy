@@ -1337,3 +1337,88 @@ Remaining frontier after this slice:
 Next target should stay on the interop cluster. The direct copy leaf helped the
 native portion, but the row is still 1.42x NumPy because object creation and
 buffer classification dominate the remaining cost.
+
+### 2026-05-09 specialized complex buffer wrappers
+
+The next pass kept the existing benchmark harness fixed and refreshed the
+complex slice:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.911 | 1.963 | 1.484x |
+| `complex/interop/array_copy_complex128` | 3.479 | 2.456 | 1.420x |
+| `complex/views/reversed_add_complex64` | 4.134 | 3.044 | 1.358x |
+| `complex/casts/astype_complex64_to_complex128` | 3.258 | 2.557 | 1.270x |
+
+One important measurement wrinkle: `time_call()` still enters
+`warnings.catch_warnings()` through `call_bench_fn()` for every timed loop
+iteration. A raw microbench put that context-manager tax at about 2.1 us/call
+on this machine. That overhead applies to both monpy and NumPy rows, so the
+official ratio remains useful for the current campaign, but raw microbenchmarks
+are better for isolating the actual ingress leaf.
+
+The raw ingress timings showed the target clearly:
+
+| path | before | after |
+| --- | ---: | ---: |
+| generic native complex64 view | 0.461 us | 0.461 us |
+| specialized native complex64 view | n/a | 0.366 us |
+| `monumpy.asarray(..., complex64, copy=False)` | 0.838 us | 0.665 us |
+| generic native complex128 copy | 0.828 us | 0.828 us |
+| specialized native complex128 copy | n/a | 0.729 us |
+| `monumpy.array(..., complex128, copy=True)` | 1.277 us | 1.051 us |
+
+`src/buffer.mojo` now splits the old Python-object argument decoder from the
+actual buffer implementation. The generic public function still accepts
+`requested_dtype_obj` and `copy_obj`, but the hot wrappers call the shared
+implementation with native `Int` constants:
+
+- `asarray_complex64_view_from_buffer(obj)` for the complex64 zero-copy path.
+- `asarray_complex128_copy_from_buffer(obj)` for the complex128 forced-copy
+  path.
+
+The top-level NumPy-array branch in `python/monpy/__init__.py` uses those
+wrappers when the caller passes the exact monpy dtype singleton and copy policy
+used by the benchmark. Everything else falls back to the generic buffer bridge,
+so dtype conversion, readonly handling, strided copies, and exotic dtype errors
+stay centralized.
+
+Focused verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_round_trip tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_copy_false_shares_storage tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_copy_true_detaches_storage tests/python/numpy_compat/test_array_coercion.py::test_numpy_array_copy_false_shares_storage tests/python/numpy_compat/test_array_coercion.py::test_numpy_array_copy_true_detaches_storage tests/python/numpy_compat/test_array_coercion.py::test_numpy_array_readonly_copy_false_raises_and_copy_none_detaches tests/python/numpy_compat/test_array_interface.py::test_ops_numpy_from_numpy_dtype_and_copy_arguments -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --repeats 7 --rounds 5 --matrix-sizes 64 --format json --sort ratio --output-dir results/local-sweep-20260509-complex-specialized-buffer-wrappers-final --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/interop/asarray_complex64 --types complex --candidate monpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-asarray-complex64-specialized-buffer --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/interop/array_copy_complex128 --types complex --candidate monpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-array-copy-complex128-specialized-buffer --sample --no-perf-stat
+```
+
+Official post-fix benchmark results:
+
+| row | before | after | delta |
+| --- | ---: | ---: | ---: |
+| `complex/interop/asarray_complex64` | 2.911 us, 1.484x | 2.817 us, 1.417x | 1.03x faster |
+| `complex/interop/array_copy_complex128` | 3.479 us, 1.420x | 3.312 us, 1.318x | 1.05x faster |
+
+The profile manifests reported `complex/interop/asarray_complex64` at 2.996
+us/call and `complex/interop/array_copy_complex128` at 3.470 us/call, both with
+max RSS around 49-50 MB, 1,590 byte traced allocation peaks, no major faults,
+and default backend metadata. No hardware PMU counters were collected because
+`--no-perf-stat` was used; the `sample(1)` stacks were captured under the two
+`results/local-profile-20260509-*-specialized-buffer` directories.
+
+Remaining frontier after this slice:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.817 | 1.999 | 1.417x |
+| `complex/views/reversed_add_complex64` | 4.131 | 3.121 | 1.359x |
+| `complex/interop/array_copy_complex128` | 3.312 | 2.547 | 1.318x |
+| `complex/casts/astype_complex64_to_complex128` | 3.355 | 2.613 | 1.282x |
+| `complex/elementwise/binary_add_complex128` | 3.446 | 2.687 | 1.258x |
+
+Next target should probably be `complex/views/reversed_add_complex64` again.
+The interop rows still lead, but their remaining raw leaf is already
+sub-microsecond; the official row is now dominated by harness and Python wrapper
+constant factors. The reversed-add row has real native work left in negative
+stride handling and may have more actual loot per line changed.

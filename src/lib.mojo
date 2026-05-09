@@ -2,7 +2,12 @@ from std.os import abort
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
 
-from buffer import asarray_from_buffer_ops, frombuffer_ops
+from buffer import (
+    asarray_complex128_copy_from_buffer_ops,
+    asarray_complex64_view_from_buffer_ops,
+    asarray_from_buffer_ops,
+    frombuffer_ops,
+)
 from create import (
     arange_ops,
     array_add_method_ops,
@@ -128,6 +133,8 @@ def PyInit__native() -> PythonObject:
         module.def_function[from_external_ops]("from_external")
         module.def_function[copy_from_external_ops]("copy_from_external")
         module.def_function[asarray_from_buffer_ops]("asarray_from_buffer")
+        module.def_function[asarray_complex64_view_from_buffer_ops]("asarray_complex64_view_from_buffer")
+        module.def_function[asarray_complex128_copy_from_buffer_ops]("asarray_complex128_copy_from_buffer")
         module.def_function[frombuffer_ops]("frombuffer")
         module.def_function[arange_ops]("arange")
         module.def_function[linspace_ops]("linspace")

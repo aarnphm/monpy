@@ -15,6 +15,7 @@ from array import (
     make_external_array,
 )
 from domain import (
+    ArrayDType,
     dtype_code_from_format_char,
     dtype_storage_byte_len,
     dtype_storage_bits,
@@ -110,20 +111,18 @@ def _buffer_is_c_contiguous(shape: List[Int], strides: List[Int]) -> Bool:
     return True
 
 
-def asarray_from_buffer_ops(
+def _asarray_from_buffer_impl(
     obj: PythonObject,
-    requested_dtype_obj: PythonObject,
-    copy_obj: PythonObject,
+    requested_code: Int,
+    copy_flag: Int,
 ) raises -> PythonObject:
     # Single-FFI buffer-protocol bridge. One `PyObject_GetBuffer` call replaces
     # the old multi-step `__array_interface__` walk, with cached function
     # pointers so hot imports skip dyld symbol lookup.
     #
-    # `requested_dtype_obj` carries the target dtype code or -1 to mean
-    # "use whatever the source is". `copy_obj` is the tri-state copy flag:
-    # 0 = never, 1 = always, -1 = numpy's default (copy on readonly only).
-    var requested_code = Int(py=requested_dtype_obj)
-    var copy_flag = Int(py=copy_obj)
+    # `requested_code` carries the target dtype code or -1 to mean "use
+    # whatever the source is". `copy_flag` is tri-state: 0 = never, 1 =
+    # always, -1 = numpy's default (copy on readonly only).
     var view = Py_buffer()
     var view_ptr = UnsafePointer(to=view).as_any_origin()
     var buffer_functions = MONPY_BUFFER_FUNCTIONS.get_or_create_ptr()
@@ -210,6 +209,22 @@ def asarray_from_buffer_ops(
     var result = make_external_array(src_dtype_code, shape^, elem_strides^, 0, data, byte_len)
     release_fn(view_ptr)
     return PythonObject(alloc=result^)
+
+
+def asarray_from_buffer_ops(
+    obj: PythonObject,
+    requested_dtype_obj: PythonObject,
+    copy_obj: PythonObject,
+) raises -> PythonObject:
+    return _asarray_from_buffer_impl(obj, Int(py=requested_dtype_obj), Int(py=copy_obj))
+
+
+def asarray_complex64_view_from_buffer_ops(obj: PythonObject) raises -> PythonObject:
+    return _asarray_from_buffer_impl(obj, ArrayDType.COMPLEX64.value, 0)
+
+
+def asarray_complex128_copy_from_buffer_ops(obj: PythonObject) raises -> PythonObject:
+    return _asarray_from_buffer_impl(obj, ArrayDType.COMPLEX128.value, 1)
 
 
 def frombuffer_ops(
