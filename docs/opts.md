@@ -1901,3 +1901,76 @@ Remaining frontier after this slice:
 Next target should either specialize complex128 add/mul at the fused-kernel
 level, or attack the `asarray_complex64` facade only if a profile shows more
 than wrapper creation and dtype lookup left to remove.
+
+### 2026-05-09 specialized complex64 zero-copy buffer view
+
+The next live refresh put `asarray_complex64` back at the top of the public
+complex frontier:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 3.063 | 2.123 | 1.443x |
+| `complex/interop/array_copy_complex128` | 3.378 | 2.814 | 1.251x |
+| `complex/elementwise/binary_add_complex64` | 3.270 | 2.647 | 1.228x |
+| `complex/elementwise/binary_mul_complex64` | 3.345 | 2.753 | 1.212x |
+| `complex/elementwise/binary_add_complex128` | 3.519 | 2.866 | 1.209x |
+
+The same pass refreshed the pure-Mojo stdlib comparison. The largest
+candidate/stdlib ratio was `elementwise/scalar_mul_f32_64k` at 1.095x, followed
+by `small_matmul_f32_8` at 1.086x. The scalar-MUL source already spells the
+direct SIMD multiply in the static kernel, so this pass targeted the public
+interop row where the generic buffer bridge was still doing tri-state
+copy/cast bookkeeping for an exact zero-copy complex64 view.
+
+`asarray_complex64_view_from_buffer_ops` now owns a narrow fast path:
+
+- one `PyObject_GetBuffer(..., PyBUF_RECORDS_RO)` call;
+- direct itemsize/format validation for complex64 (`F` or NumPy's `Z`, 8
+  bytes);
+- readonly and shape/stride validation;
+- direct `make_external_array(COMPLEX64, ...)`;
+- guaranteed `PyBuffer_Release` before returning or raising on validation
+  failures.
+
+This avoids the generic `requested_code`/`copy_flag` branch tree, dtype decode,
+`must_copy` calculation, and copy/cast fallback setup in the hot
+`copy=False, dtype=complex64` path.
+
+Focused verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/buffer.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_copy_false_shares_storage tests/python/numpy_compat/test_complex.py::test_complex_array_from_numpy_round_trip tests/python/test_buffer_core.py::test_asarray_from_writable_buffer_shares_storage tests/python/test_buffer_core.py::test_asarray_from_readonly_buffer_copies_by_default_and_rejects_copy_false tests/python/test_buffer_core.py::test_asarray_buffer_dtype_mismatch_copy_policy -q
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types complex --loops 50 --repeats 7 --rounds 5 --matrix-sizes 64 --format json --sort ratio --output-dir results/local-sweep-20260509-complex-c64-view-format-fastcheck-0344 --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/interop/asarray_complex64 --types complex --candidate monpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-asarray-complex64-format-fastcheck-monpy --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case complex/interop/asarray_complex64 --types complex --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-asarray-complex64-format-fastcheck-numpy --sample --no-perf-stat
+```
+
+Post-fix public complex result:
+
+| row | before | after | delta |
+| --- | -----: | ----: | ----: |
+| `complex/interop/asarray_complex64` | 3.063 us vs 2.123 us, 1.443x | 2.681 us vs 1.973 us, 1.360x | 1.14x faster monpy side |
+
+The final profiles reported `asarray_complex64` at 2.742 us/call for monpy and
+2.062 us/call for NumPy. Monpy used backend code 0, as expected for a zero-copy
+external view. Max RSS was about 49.2 MB for monpy and 49.3 MB for NumPy.
+Traced allocation peaks were 1,598 bytes for monpy and 1,406 bytes for NumPy.
+No hardware PMU counters were collected because the profile command used
+`--no-perf-stat`; the `sample(1)` captures live under
+`results/local-profile-20260509-asarray-complex64-format-fastcheck-*`.
+
+Remaining frontier after this slice:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.681 | 1.973 | 1.360x |
+| `complex/elementwise/binary_add_complex128` | 3.290 | 2.668 | 1.248x |
+| `complex/interop/array_copy_complex128` | 3.070 | 2.478 | 1.247x |
+| `complex/elementwise/binary_add_complex64` | 2.998 | 2.459 | 1.220x |
+| `complex/elementwise/binary_mul_complex64` | 3.094 | 2.552 | 1.210x |
+
+Next target should move back to complex128 add/copy. The remaining
+`asarray_complex64` gap is now mostly the cost of allocating a monpy wrapper
+around a borrowed Python buffer; there is less generic bridge code left to cut.
