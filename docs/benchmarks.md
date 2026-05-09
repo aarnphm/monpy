@@ -50,6 +50,19 @@ monpy-bench --types all --format json --no-progress
 monpy-bench --types all --format markdown --sort ratio
 ```
 
+`--sort` accepts:
+
+- `input` (default) — bench-emit order
+- `name` — alphabetical
+- `fastest` — smallest `monpy/numpy` first; the cases where monpy beats numpy
+  by the largest margin float to the top
+- `slowest` (or `ratio`, alias) — largest `monpy/numpy` first; regressions on top
+- `monpy` — sort by absolute monpy timing descending (largest cells first,
+  for "what's the biggest single bottleneck" view)
+
+`monpy-bench-mojo` takes the same options with `candidate` as the
+absolute-timing alias instead of `monpy`.
+
 Each run saves the rendered output by default:
 
 ```text

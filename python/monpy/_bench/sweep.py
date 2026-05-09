@@ -334,7 +334,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     help="square matrix sizes for solve/inv/det (default 2,4,8,32,128)",
   )
   parser.add_argument("--format", choices=("table", "csv", "json", "markdown"), default="table")
-  parser.add_argument("--sort", choices=("input", "name", "monpy", "ratio"), default="input")
+  parser.add_argument(
+    "--sort",
+    choices=("input", "name", "fastest", "slowest", "monpy", "ratio"),
+    default="input",
+    help=(
+      "row order. 'fastest' = monpy/numpy ascending (cases where monpy beats numpy "
+      "the most on top). 'slowest' = monpy/numpy descending (regressions on top). "
+      "'ratio' is a back-compat alias for 'slowest'. 'monpy' sorts by absolute "
+      "monpy timing descending (largest cells first)."
+    ),
+  )
   parser.add_argument(
     "--output-dir",
     type=Path,

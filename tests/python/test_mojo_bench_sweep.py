@@ -126,6 +126,44 @@ def test_render_json_preserves_row_level_candidate_and_baseline() -> None:
   assert payload["results"][0]["baseline"] == "numojo.sum"
 
 
+def _row(name: str, candidate_ns: float, ratio: float = 1.0) -> mojo_sweep.MojoBenchRow:
+  return mojo_sweep.MojoBenchRow(
+    group="elementwise",
+    name=name,
+    candidate="monpy",
+    baseline="std",
+    candidate_ns=candidate_ns,
+    baseline_ns=candidate_ns / ratio,
+    ratio=ratio,
+    bytes=0,
+    flops=0,
+  )
+
+
+def test_sorted_rows_fastest_orders_smallest_ratio_first() -> None:
+  # ratio = candidate/baseline. fastest = "candidate beats baseline by the most"
+  # = smallest ratio first.
+  rows = [_row("loss", 100.0, ratio=2.0), _row("tie", 100.0, ratio=1.0), _row("win", 100.0, ratio=0.4)]
+  ordered = mojo_sweep.sorted_rows(rows, sort="fastest")
+  assert [row.name for row in ordered] == ["win", "tie", "loss"]
+
+
+def test_sorted_rows_slowest_matches_legacy_ratio_alias() -> None:
+  # slowest = ratio descending = "regressions on top". Should match the
+  # historical `--sort ratio` semantics byte-for-byte.
+  rows = [_row("loss", 100.0, ratio=2.0), _row("tie", 100.0, ratio=1.0), _row("win", 100.0, ratio=0.4)]
+  by_slowest = [row.name for row in mojo_sweep.sorted_rows(rows, sort="slowest")]
+  by_ratio = [row.name for row in mojo_sweep.sorted_rows(rows, sort="ratio")]
+  assert by_slowest == by_ratio == ["loss", "tie", "win"]
+
+
+def test_sorted_rows_candidate_still_orders_by_absolute_timing() -> None:
+  # `candidate` keeps its old absolute-timing semantic for back-compat.
+  rows = [_row("slow", 1000.0), _row("medium", 100.0), _row("fast", 10.0)]
+  ordered = mojo_sweep.sorted_rows(rows, sort="candidate")
+  assert [row.name for row in ordered] == ["slow", "medium", "fast"]
+
+
 def _standard_tsv() -> str:
   return "\n".join([
     "\t".join(mojo_sweep.TSV_HEADER),

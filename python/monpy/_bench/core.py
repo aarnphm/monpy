@@ -911,7 +911,12 @@ def sorted_results(results: Sequence[BenchResult], *, sort: str) -> list[BenchRe
     return sorted(results, key=lambda result: (result.name, result.group))
   if sort == "monpy":
     return sorted(results, key=lambda result: result.monpy_median_us, reverse=True)
-  if sort == "ratio":
+  if sort == "fastest":
+    # Smallest monpy/numpy first: cases where monpy beats numpy by the largest
+    # margin. The "fastest relative to numpy" reading.
+    return sorted(results, key=lambda result: result.ratio_median)
+  if sort in ("slowest", "ratio"):
+    # Largest monpy/numpy first: regressions on top.
     return sorted(results, key=lambda result: result.ratio_median, reverse=True)
   return list(results)
 

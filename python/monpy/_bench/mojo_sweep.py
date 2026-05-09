@@ -255,7 +255,11 @@ def sorted_rows(rows: Sequence[MojoBenchRow], *, sort: str) -> list[MojoBenchRow
     return sorted(rows, key=lambda row: (row.name, row.group, row.candidate, row.baseline))
   if sort == "candidate":
     return sorted(rows, key=lambda row: row.candidate_ns, reverse=True)
-  if sort == "ratio":
+  if sort == "fastest":
+    # Smallest candidate/baseline first: cases where the candidate beats the
+    # baseline by the largest margin.
+    return sorted(rows, key=lambda row: row.ratio)
+  if sort in ("slowest", "ratio"):
     return sorted(rows, key=lambda row: row.ratio, reverse=True)
   return list(rows)
 
@@ -596,7 +600,17 @@ def main(argv: Sequence[str] | None = None) -> None:
   )
   parser.add_argument("--timeout", type=positive_int, default=300, help="seconds per Mojo command")
   parser.add_argument("--format", choices=("table", "csv", "json", "markdown"), default="table")
-  parser.add_argument("--sort", choices=("input", "name", "candidate", "ratio"), default="input")
+  parser.add_argument(
+    "--sort",
+    choices=("input", "name", "fastest", "slowest", "candidate", "ratio"),
+    default="input",
+    help=(
+      "row order. 'fastest' = candidate/baseline ascending (cases where the "
+      "candidate beats the baseline the most on top). 'slowest' = descending. "
+      "'ratio' is a back-compat alias for 'slowest'. 'candidate' sorts by "
+      "absolute candidate timing descending."
+    ),
+  )
   parser.add_argument(
     "--output-dir",
     type=Path,

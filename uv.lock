@@ -212,6 +212,7 @@ source = { editable = "." }
 
 [package.optional-dependencies]
 dev = [
+    { name = "ipython" },
     { name = "numpy" },
     { name = "pytest" },
     { name = "pyyaml" },
@@ -222,13 +223,9 @@ kernels = [
     { name = "safetensors" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "ipython" },
-]
-
 [package.metadata]
 requires-dist = [
+    { name = "ipython", marker = "extra == 'dev'", specifier = ">=9.13.0" },
     { name = "max", marker = "extra == 'kernels'", specifier = ">=26.2.0" },
     { name = "numpy", marker = "extra == 'dev'", specifier = ">=2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9" },
@@ -237,9 +234,6 @@ requires-dist = [
     { name = "tqdm", marker = "extra == 'dev'" },
 ]
 provides-extras = ["dev", "kernels"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "ipython", specifier = ">=9.13.0" }]
 
 [[package]]
 name = "numpy"
