@@ -27,13 +27,14 @@ def test_parse_mojo_tsv_ignores_preheader_noise() -> None:
   assert rows[1].ratio == 0.9
 
 
-def test_standard_and_numojo_commands_use_repo_include_paths() -> None:
+def test_standard_numojo_and_threading_commands_use_repo_include_paths() -> None:
   repo_root = Path("/repo/monpy")
   mojo = Path("/toolchain/mojo")
   numojo = Path("/deps/NuMojo")
 
   standard = mojo_sweep.standard_command(mojo=mojo, repo_root=repo_root)
   optional = mojo_sweep.numojo_command(mojo=mojo, repo_root=repo_root, numojo_path=numojo)
+  threading = mojo_sweep.threading_command(mojo=mojo, repo_root=repo_root)
 
   assert standard == [
     "/toolchain/mojo",
@@ -53,6 +54,20 @@ def test_standard_and_numojo_commands_use_repo_include_paths() -> None:
     "/deps/NuMojo",
     "/repo/monpy/benches/bench_numojo_sweep.mojo",
   ]
+  assert threading == [
+    "/toolchain/mojo",
+    "run",
+    "-I",
+    "/repo/monpy/src",
+    "/repo/monpy/benches/bench_threading_sweep.mojo",
+  ]
+
+
+def test_parse_thread_caps_accepts_auto_and_positive_integer_caps() -> None:
+  assert mojo_sweep.parse_thread_caps("auto,1,2,4,auto") == ("auto", "1", "2", "4")
+
+  with pytest.raises(argparse.ArgumentTypeError, match="positive integer"):
+    mojo_sweep.parse_thread_caps("auto,0")
 
 
 def test_default_numojo_path_prefers_vendor_checkout(tmp_path: Path) -> None:
@@ -81,7 +96,9 @@ def test_render_json_preserves_row_level_candidate_and_baseline() -> None:
     format="json",
     sort="input",
     include_numojo=True,
+    include_threading=True,
     numojo_path=Path("/deps/NuMojo"),
+    thread_caps=("auto", "1"),
   )
   rows = [
     mojo_sweep.MojoBenchRow(
@@ -101,8 +118,10 @@ def test_render_json_preserves_row_level_candidate_and_baseline() -> None:
 
   assert payload["config"]["suite"] == "mojo-kernel-sweep"
   assert payload["config"]["include_numojo"] is True
+  assert payload["config"]["include_threading"] is True
   assert payload["config"]["comparison"] == "candidate_ns / baseline_ns"
   assert payload["config"]["strict_numojo"] is False
+  assert payload["config"]["thread_caps"] == ["auto", "1"]
   assert payload["results"][0]["candidate"] == "monpy.reduce_sum_typed"
   assert payload["results"][0]["baseline"] == "numojo.sum"
 
@@ -114,8 +133,16 @@ def _standard_tsv() -> str:
   ])
 
 
-def _run_standard_then_fail_numojo(command: Sequence[str], *, timeout: int) -> str:
+def _run_standard_then_fail_numojo(
+  command: Sequence[str],
+  *,
+  timeout: int,
+  env_overrides: dict[str, str] | None = None,
+  unset_env: Sequence[str] = (),
+) -> str:
   del timeout
+  del env_overrides
+  del unset_env
   if command[-1].endswith("bench_numojo_sweep.mojo"):
     raise RuntimeError(
       "command failed: mojo run bench_numojo_sweep.mojo\n"
@@ -158,3 +185,51 @@ def test_collect_rows_can_fail_strictly_for_numojo_failure(monkeypatch: MonkeyPa
       strict_numojo=True,
       timeout=5,
     )
+
+
+def test_collect_rows_runs_threading_sweep_in_fresh_thread_cap_processes(
+  monkeypatch: MonkeyPatch,
+) -> None:
+  calls: list[tuple[tuple[str, ...], dict[str, str] | None, tuple[str, ...]]] = []
+
+  def run_with_thread_caps(
+    command: Sequence[str],
+    *,
+    timeout: int,
+    env_overrides: dict[str, str] | None = None,
+    unset_env: Sequence[str] = (),
+  ) -> str:
+    del timeout
+    calls.append((tuple(command), env_overrides, tuple(unset_env)))
+    if command[-1].endswith("bench_threading_sweep.mojo"):
+      return "\n".join([
+        "\t".join(mojo_sweep.TSV_HEADER),
+        "threading.auto\tadd_f32_1m\tinternal.threaded\tmonpy.serial\t80.0\t100.0\t0.8\t12582912\t1048576",
+      ])
+    return _standard_tsv()
+
+  monkeypatch.setattr(mojo_sweep, "run_mojo_command", run_with_thread_caps)
+
+  collection = mojo_sweep.collect_rows(
+    mojo=Path("/toolchain/mojo"),
+    repo_root=Path("/repo/monpy"),
+    include_numojo=False,
+    numojo_path=None,
+    strict_numojo=False,
+    include_threading=True,
+    thread_caps=("auto", "1", "4"),
+    timeout=5,
+  )
+
+  assert [row.group for row in collection.rows] == [
+    "elementwise",
+    "threading.auto",
+    "threading.auto",
+    "threading.auto",
+  ]
+  assert calls[1][1] is None
+  assert calls[1][2] == ("MONPY_THREADS",)
+  assert calls[2][1] == {"MONPY_THREADS": "1"}
+  assert calls[3][1] == {"MONPY_THREADS": "4"}
+  assert collection.commands[1][0:3] == ["env", "-u", "MONPY_THREADS"]
+  assert collection.commands[2][0:2] == ["env", "MONPY_THREADS=1"]

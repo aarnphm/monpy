@@ -122,6 +122,45 @@ def numojo_command(*, mojo: Path, repo_root: Path, numojo_path: Path) -> list[st
   ]
 
 
+def threading_command(*, mojo: Path, repo_root: Path) -> list[str]:
+  return [
+    str(mojo),
+    "run",
+    "-I",
+    str(repo_root / "src"),
+    str(repo_root / "benches" / "bench_threading_sweep.mojo"),
+  ]
+
+
+def parse_thread_caps(value: str) -> tuple[str, ...]:
+  caps: list[str] = []
+  seen: set[str] = set()
+  for raw in value.split(","):
+    cap = raw.strip().lower()
+    if not cap:
+      continue
+    if cap == "auto":
+      normalized = "auto"
+    else:
+      try:
+        parsed = int(cap)
+      except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+          f"thread cap {raw!r} must be 'auto' or a positive integer"
+        ) from exc
+      if parsed <= 0:
+        raise argparse.ArgumentTypeError(
+          f"thread cap {raw!r} must be 'auto' or a positive integer"
+        )
+      normalized = str(parsed)
+    if normalized not in seen:
+      caps.append(normalized)
+      seen.add(normalized)
+  if not caps:
+    raise argparse.ArgumentTypeError("at least one thread cap is required")
+  return tuple(caps)
+
+
 def parse_mojo_tsv(output: str) -> list[MojoBenchRow]:
   rows: list[MojoBenchRow] = []
   seen_header = False
@@ -155,7 +194,18 @@ def parse_mojo_tsv(output: str) -> list[MojoBenchRow]:
   return rows
 
 
-def run_mojo_command(command: Sequence[str], *, timeout: int) -> str:
+def run_mojo_command(
+  command: Sequence[str],
+  *,
+  timeout: int,
+  env_overrides: dict[str, str] | None = None,
+  unset_env: Sequence[str] = (),
+) -> str:
+  env = mojo_subprocess_env(Path(command[0]))
+  for name in unset_env:
+    env.pop(name, None)
+  if env_overrides is not None:
+    env.update(env_overrides)
   try:
     completed = subprocess.run(
       command,
@@ -163,7 +213,7 @@ def run_mojo_command(command: Sequence[str], *, timeout: int) -> str:
       capture_output=True,
       text=True,
       timeout=timeout,
-      env=mojo_subprocess_env(Path(command[0])),
+      env=env,
     )
   except FileNotFoundError as exc:
     raise RuntimeError(f"could not execute {command[0]!r}") from exc
@@ -357,8 +407,10 @@ def mojo_sweep_config(args: argparse.Namespace) -> dict[str, object]:
     "baseline": "row.baseline",
     "comparison": "candidate_ns / baseline_ns",
     "include_numojo": args.include_numojo,
+    "include_threading": args.include_threading,
     "numojo_path": numojo_path,
     "strict_numojo": getattr(args, "strict_numojo", False),
+    "thread_caps": list(args.thread_caps),
     "sort": args.sort,
     "format": args.format,
   }
@@ -483,6 +535,8 @@ def collect_rows(
   include_numojo: bool,
   numojo_path: Path | None,
   strict_numojo: bool,
+  include_threading: bool = False,
+  thread_caps: Sequence[str] = (),
   timeout: int,
 ) -> MojoBenchCollection:
   commands: list[list[str]] = []
@@ -506,12 +560,30 @@ def collect_rows(
         f"this Mojo toolchain: {summarize_failure(exc)}"
       )
 
+  if include_threading:
+    th_command = threading_command(mojo=mojo, repo_root=repo_root)
+    for cap in thread_caps:
+      if cap == "auto":
+        commands.append(["env", "-u", "MONPY_THREADS", *th_command])
+        rows.extend(
+          parse_mojo_tsv(
+            run_mojo_command(th_command, timeout=timeout, unset_env=("MONPY_THREADS",))
+          )
+        )
+      else:
+        commands.append(["env", f"MONPY_THREADS={cap}", *th_command])
+        rows.extend(
+          parse_mojo_tsv(
+            run_mojo_command(th_command, timeout=timeout, env_overrides={"MONPY_THREADS": cap})
+          )
+        )
+
   return MojoBenchCollection(rows=rows, commands=commands, warnings=warnings)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
   parser = argparse.ArgumentParser(
-    description="benchmark monpy Mojo kernels against Mojo stdlib and optional NuMojo baselines"
+    description="benchmark monpy Mojo kernels against Mojo stdlib, NuMojo, and threading baselines"
   )
   parser.add_argument("--mojo", type=Path, default=None, help="path to the mojo executable")
   parser.add_argument(
@@ -540,6 +612,24 @@ def main(argv: Sequence[str] | None = None) -> None:
     action=argparse.BooleanOptionalAction,
     default=False,
     help="fail instead of warning when the optional NuMojo comparison cannot compile or run",
+  )
+  parser.add_argument(
+    "--include-threading",
+    action=argparse.BooleanOptionalAction,
+    default=False,
+    help=(
+      "also run benches/bench_threading_sweep.mojo, comparing internal threaded "
+      "static kernels against monpy serial static kernels"
+    ),
+  )
+  parser.add_argument(
+    "--thread-caps",
+    type=parse_thread_caps,
+    default=("auto", "1"),
+    help=(
+      "comma-separated MONPY_THREADS caps for --include-threading "
+      "(default: auto,1; use e.g. auto,1,2,4,8)"
+    ),
   )
   parser.add_argument("--timeout", type=positive_int, default=300, help="seconds per Mojo command")
   parser.add_argument("--format", choices=("table", "csv", "json", "markdown"), default="table")
@@ -585,6 +675,8 @@ def main(argv: Sequence[str] | None = None) -> None:
       include_numojo=args.include_numojo,
       numojo_path=args.numojo_path,
       strict_numojo=args.strict_numojo,
+      include_threading=args.include_threading,
+      thread_caps=args.thread_caps,
       timeout=args.timeout,
     )
     for warning in collection.warnings:

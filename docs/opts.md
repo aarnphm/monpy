@@ -2654,3 +2654,76 @@ Next target: rerun the stdlib-facing Mojo sweep with a longer runtime and isolat
 `scalar_mul_f32_1k` / `scalar_mul_f64_64k` in a tiny variant bench. If the gap
 survives a local direct-call baseline, move scalar MUL into a narrower exported
 kernel with no runtime op or scalar-left payload.
+
+### 2026-05-09 threading sweep harness
+
+The missing comparison was not NuMojo. It was our own candidate threaded static
+implementation against the monpy serial static kernels it would replace.
+
+`benches/bench_threading_sweep.mojo` now emits the same TSV schema as
+`bench_mojo_sweep.mojo`. `monpy-bench-mojo --include-threading` runs it through
+the normal artifact path, and `--thread-caps` fans out separate Mojo processes:
+
+- `auto`: clears `MONPY_THREADS`, so the policy uses hardware performance cores
+  plus the byte-grain gates.
+- `N`: runs with `MONPY_THREADS=N`, proving the cap in the same process model
+  production uses.
+
+Rows compare:
+
+- candidate: `internal.threaded_static_{add,negate,exp}`;
+- baseline: current monpy serial static kernels;
+- ratio: `internal / monpy`, so below `1.0x` means the threaded prototype wins.
+
+The smoke run lives at `results/local-sweep-20260509-threading-sweep-smoke-064228`
+for `auto,1`. The cap sweep lives at
+`results/local-sweep-20260509-threading-sweep-caps-064336` for `2,4`.
+
+Useful rows:
+
+| row             | cap       | internal ns | monpy ns | ratio |
+| --------------- | --------: | ----------: | -------: | ----: |
+| `add_f32_64k`   |         1 |        6449 |     6368 | 1.013x |
+| `add_f32_64k`   |         2 |        6363 |     6495 | 0.980x |
+| `add_f32_64k`   |      auto |        6534 |     6460 | 1.011x |
+| `add_f32_1m`    |         1 |      113117 |   109349 | 1.034x |
+| `add_f32_1m`    |         2 |       66470 |   111947 | 0.594x |
+| `add_f32_1m`    |         4 |       63684 |   106159 | 0.600x |
+| `add_f32_1m`    |      auto |       60245 |   122483 | 0.492x |
+| `neg_f32_64k`   |      auto |        5901 |     5193 | 1.136x |
+| `neg_f32_16m`   |         4 |     1054300 |  1931000 | 0.546x |
+| `neg_f32_16m`   |      auto |     1092455 |  2022286 | 0.540x |
+| `exp_f32_64k`   |      auto |       32139 |    29102 | 1.104x |
+| `exp_f32_256k`  |         2 |       66579 |   116345 | 0.572x |
+| `exp_f32_256k`  |         4 |       39772 |   117491 | 0.339x |
+| `exp_f32_256k`  |      auto |       36883 |   117439 | 0.314x |
+| `exp_f32_1m`    |         4 |      130396 |   462611 | 0.282x |
+| `exp_f32_1m`    |      auto |      212934 |   471889 | 0.451x |
+| `add_f64_1m`    |         4 |       97427 |   331087 | 0.294x |
+| `exp_f64_256k`  |         4 |       91219 |   307480 | 0.297x |
+
+Read:
+
+- 64K light ops should stay serial. The auto path is at parity or worse, which
+  is the spawn-overhead floor showing up cleanly.
+- 1M+ add/negate and 256K+ exp are real wins. Those are the candidates for a
+  production threaded static fast path.
+- `auto` is not uniformly better than `MONPY_THREADS=4`. On this Mac, `exp_f32_1m`
+  was 0.282x at cap 4 but 0.451x at auto. The next policy work is not "use all
+  cores harder"; it is finding the per-op cap where memory bandwidth, libm work,
+  and `sync_parallelize` overhead meet.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 benches/bench_threading_sweep.mojo
+.venv/bin/python -m py_compile python/monpy/_bench/mojo_sweep.py
+.venv/bin/pytest tests/python/test_mojo_bench_sweep.py -q
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --include-threading --thread-caps auto,1 --format json --sort ratio --output-dir results/local-sweep-20260509-threading-sweep-smoke-064228 --no-stdout --timeout 300
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --include-threading --thread-caps 2,4 --format json --sort ratio --output-dir results/local-sweep-20260509-threading-sweep-caps-064336 --no-stdout --timeout 300
+```
+
+Next target: promote the threading sweep from measurement to policy. Start with
+threaded static `EXP` for f32/f64 above the heavy gate, cap auto workers by row
+size instead of blindly using every performance core, and keep ADD/NEGATE serial
+below the 1M-element region.

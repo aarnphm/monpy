@@ -174,6 +174,25 @@ $MODULAR_DERIVED_PATH/build/bin/mojo run \
 
 NuMojo `0.9.0` currently tracks the Modular 0.26.x toolchain family. The vendored copy is patched for this checkout's Mojo `1.0.0.dev0` benchmark path; see `vendor/README.md` and `vendor/NuMojo/MONPY_PATCHES.md` for provenance, license references, and the compatibility patch ledger. Update that ledger whenever the vendored source changes. External NuMojo checkouts may still fail at import time with stdlib API drift. The CLI treats that as a skipped optional baseline by default: it still reports the monpy/stdlib Mojo rows and writes the attempted NuMojo command into the manifest. Use `--strict-numojo` when you want that compatibility failure to stop the run.
 
+### Optional threading comparison
+
+Use `--include-threading` when the question is whether a threaded internal
+prototype should replace the current monpy serial static kernel for wide
+elementwise work:
+
+```bash
+monpy-bench-mojo --include-threading --thread-caps auto,1,2,4,8
+```
+
+The CLI runs `benches/bench_threading_sweep.mojo` once per thread cap in a fresh
+Mojo process. `auto` clears `MONPY_THREADS`; numeric caps set
+`MONPY_THREADS=N`. This matters because the production thread policy is read
+once per process. Threading rows use the same comparison contract as the rest
+of the Mojo sweep: `candidate` is the internal threaded static prototype,
+`baseline` is the monpy serial static kernel, and `ratio = candidate_ns /
+baseline_ns`. Ratios below `1.0x` mean the threaded prototype wins for that
+shape and cap.
+
 ### `bench_reduce.mojo`
 
 The reduction harness uses `std.benchmark.Bench` with significance gating, ~100 iterations per cell, two repetitions by default. Each row prints mean wall-time (ms), data-movement throughput (GB/s), and arithmetic throughput (GFLOPS/s).
