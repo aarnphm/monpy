@@ -48,6 +48,16 @@ from .matmul import (
     maybe_matmul_vector_accelerate,
 )
 from .nn import layer_norm_last_axis_typed, scaled_masked_softmax_last_axis_typed, softmax_last_axis_typed
+from .parallel import (
+    ELEMENTWISE_HEAVY_GRAIN,
+    ELEMENTWISE_LIGHT_GRAIN,
+    PER_ROW_MIN,
+    REDUCE_GRAIN,
+    is_serial_only,
+    should_parallelize_bytes,
+    should_parallelize_rows,
+    worker_count,
+)
 from .reduce import (
     maybe_argmax_contiguous,
     maybe_reduce_axis_last_contiguous,
