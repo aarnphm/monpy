@@ -1313,19 +1313,19 @@ def broadcast_to(x:object, shape:int|Sequence[int])->ndarray:
 def flip(m:object, axis:int|Sequence[int]|None=None)->ndarray:
   arr=asarray(m)
   if axis is None:axes:tuple[int, ...]=()                                                                                       # () means flip all axes (mojo flip_ops convention)
-  elif isinstance(axis, builtins.int):axes=(axis,)
+  elif isinstance(axis, builtins.int):return ndarray._wrap(_native.flip_axis_single(arr._native, axis), base=arr)
   else:axes=tuple(axis)
-  return ndarray(_native.flip(arr._native, axes), base=arr)
+  return ndarray._wrap(_native.flip(arr._native, axes), base=arr)
 
 def fliplr(m:object)->ndarray:
   arr=asarray(m)
   if arr.ndim<2:raise ValueError("fliplr() requires array with at least 2 dimensions")
-  return flip(arr, axis=1)
+  return ndarray._wrap(_native.flip_axis_single(arr._native, 1), base=arr)
 
 def flipud(m:object)->ndarray:
   arr=asarray(m)
   if arr.ndim<1:raise ValueError("flipud() requires array with at least 1 dimension")
-  return flip(arr, axis=0)
+  return ndarray._wrap(_native.flip_axis_single(arr._native, 0), base=arr)
 
 def rot90(m:object, k:int=1, axes:tuple[int, int]=(0, 1))->ndarray:
   arr=asarray(m)

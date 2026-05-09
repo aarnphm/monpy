@@ -70,6 +70,7 @@ from .shape import (
     diagonal_ops,
     expand_dims_ops,
     flatten_ops,
+    flip_axis_single_ops,
     flip_ops,
     materialize_c_contiguous_ops,
     moveaxis_single_ops,

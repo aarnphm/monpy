@@ -2444,3 +2444,81 @@ Next target: split `squeeze_axis0_f32` before optimizing it. The current row is
 stable at about 1.80x, but its benchmark body creates a fresh NumPy zero array
 and calls `mnp.asarray(...)` inside the timed lambda, so it is not a clean
 squeeze-only signal yet. `fliplr_f32` is the next clean view row at about 1.50x.
+
+### 2026-05-09 single-axis flip native view
+
+The current array sweep put the clean flip rows behind the polluted squeeze row:
+
+- `flip_all_f32`: 3.173 us for monpy vs 2.335 us for NumPy, 1.359x.
+- `fliplr_f32`: 3.487 us for monpy vs 2.663 us for NumPy, 1.334x.
+- `flip_axis0_f32`: noisy in the low-loop sweep, but a direct 50k-loop probe put
+  `mnp.flip(helper_mp, axis=0)` around 1.03 us.
+
+The hot path was pure wrapper/native-call overhead. `flip(axis=int)`, `fliplr`,
+and `flipud` all went through the generic multi-axis `flip_ops` ABI: allocate a
+Python tuple, read `axes_obj[k]`, build a `seen` list, then do the actual
+stride/offset rewrite. For one axis, that is junk work.
+
+`src/create/ops/shape.mojo` now exposes `flip_axis_single_ops`. It normalizes one
+axis, clones shape and strides, shifts the offset only when that axis has at
+least one element, and negates the selected stride. The Python facade routes
+`flip(axis=int)`, `fliplr`, and `flipud` through that entry. Multi-axis flip
+still uses the older generic path, because repeated-axis validation belongs
+there.
+
+Direct timing after the patch:
+
+| call                       | before ns | after ns | speedup |
+| -------------------------- | --------: | -------: | ------: |
+| `mnp.flip(..., axis=0)`    |      1028 |      821 |   1.25x |
+| `mnp.flip(..., axis=1)`    |      1028 |      795 |   1.29x |
+| `mnp.flipud(...)`          |      1330 |      959 |   1.39x |
+| `mnp.fliplr(...)`          |      1322 |      954 |   1.39x |
+| raw native one-axis flip   |       808 |      641 |   1.26x |
+
+The saved low-loop array sweep at
+`results/local-sweep-20260509-flip-axis-single-after-0853` reported:
+
+| row                  | before monpy us | after monpy us | after ratio |
+| -------------------- | --------------: | -------------: | ----------: |
+| `views/flip_axis0_f32` |           3.287 |          3.044 |      1.032x |
+| `views/fliplr_f32`     |           3.487 |          3.154 |      1.385x |
+| `views/rot90_k1_f32`   |           7.544 |          7.385 |      1.595x |
+
+The `fliplr` ratio is worse than the monpy wall-clock delta because NumPy's
+low-loop sample moved too. Treat the monpy medians and the 50k-loop probe as the
+signal. The suite now has flip-axis construction below the fixed Python harness
+tax; the next gains need fewer facade calls, not more stride math.
+
+The std-Mojo sweep stayed unrelated to this change. Its worst row was
+`elementwise/scalar_mul_f32_1k` at 173.2 ns for monpy vs 91.8 ns for
+`stdlib.SIMD_loop`, a 1.888x ratio. All other top stdlib rows were around
+1.04x or lower, so the one-axis flip patch did not move the kernel/stdlib
+frontier.
+
+Verification:
+
+```text
+uv pip install --python .venv/bin/python --extra-index-url https://aarnphm.github.io/mohaus/simple 'mohaus>=0.1,<0.2'
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/create/ops/shape.mojo src/create/ops/__init__.mojo src/create/__init__.mojo src/lib.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_flip.py -q
+.venv/bin/python - <<'PY'
+import numpy as np
+import monpy as mnp
+for shape in [(0,), (0, 3), (2, 0, 4)]:
+    src = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+    arr = mnp.asarray(src)
+    for axis in range(-len(shape), len(shape)):
+        got = np.asarray(mnp.flip(arr, axis=axis))
+        expected = np.flip(src, axis=axis)
+        assert got.shape == expected.shape
+        assert np.array_equal(got, expected)
+PY
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types array --loops 10 --repeats 3 --rounds 2 --vector-sizes 65536,1048576 --matrix-sizes 32 --linalg-sizes 8 --format json --sort ratio --output-dir results/local-sweep-20260509-flip-axis-single-after-0853 --no-progress --no-stdout
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --format json --sort ratio --output-dir results/local-sweep-20260509-flip-axis-single-mojo-0853 --no-stdout --timeout 300
+```
+
+Next target: split `squeeze_axis0_f32` into a clean existing-array view row and
+an explicit asarray-from-NumPy row. Right now one benchmark name hides two
+costs, which makes it too easy to optimize the wrong atom.

@@ -269,6 +269,25 @@ def flip_ops(
     return PythonObject(alloc=result^)
 
 
+def flip_axis_single_ops(array_obj: PythonObject, axis_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var ndim = len(src[].shape)
+    var axis = Int(py=axis_obj)
+    if axis < 0:
+        axis += ndim
+    if axis < 0 or axis >= ndim:
+        raise Error("flip() axis out of bounds")
+
+    var shape = clone_int_list(src[].shape)
+    var strides = clone_int_list(src[].strides)
+    var offset = src[].offset_elems
+    if shape[axis] > 0:
+        offset += (shape[axis] - 1) * strides[axis]
+    strides[axis] = -strides[axis]
+    var result = make_view_array(src[], shape^, strides^, src[].size_value, offset)
+    return PythonObject(alloc=result^)
+
+
 def transpose_full_reverse_ops(
     array_obj: PythonObject,
 ) raises -> PythonObject:
