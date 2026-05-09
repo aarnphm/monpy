@@ -56,6 +56,7 @@ from domain import ArrayDType, BackendKind, ReduceOp
 from elementwise.kernels.parallel import (
     REDUCE_GRAIN,
     worker_count_for_bytes,
+    worker_count_for_rows,
 )
 from elementwise.predicates import is_contiguous_float_array
 
@@ -605,22 +606,49 @@ def maybe_reduce_strided_typed(src: Array, mut result: Array, op: Int) raises ->
 def _reduce_axis_last_contiguous_typed[
     dt: DType
 ](src: Array, mut result: Array, op: Int) raises where dt.is_floating_point():
+    # Per-row reduction over the last (contiguous) axis. Each row reads a
+    # disjoint `[base, base+cols)` slice of `src` and writes one scalar to
+    # `result` at logical index `row`. set_logical_from_f64 mutates only
+    # `result.data[physical_offset(result, row)]` (verified in
+    # array/dispatch.mojo:388 and array/accessors.mojo:355), so two
+    # workers writing different rows never alias.
     var cols = src.shape[len(src.shape) - 1]
     var rows = src.size_value // cols
     var ptr = contiguous_ptr[dt](src)
-    for row in range(rows):
-        var base = row * cols
-        if op == ReduceOp.SUM.value or op == ReduceOp.MEAN.value:
-            var acc = reduce_sum_typed[dt](ptr + base, cols)
-            if op == ReduceOp.MEAN.value:
-                acc = acc / Float64(cols)
-            set_logical_from_f64(result, row, acc)
-        elif op == ReduceOp.PROD.value:
-            set_logical_from_f64(result, row, Float64(reduce_prod_typed[dt](ptr + base, cols)))
-        elif op == ReduceOp.MIN.value:
-            set_logical_from_f64(result, row, Float64(reduce_min_typed[dt](ptr + base, cols)))
-        elif op == ReduceOp.MAX.value:
-            set_logical_from_f64(result, row, Float64(reduce_max_typed[dt](ptr + base, cols)))
+
+    @parameter
+    def process_row_range(row_start: Int, row_end: Int) raises:
+        for row in range(row_start, row_end):
+            var base = row * cols
+            if op == ReduceOp.SUM.value or op == ReduceOp.MEAN.value:
+                var acc = reduce_sum_typed[dt](ptr + base, cols)
+                if op == ReduceOp.MEAN.value:
+                    acc = acc / Float64(cols)
+                set_logical_from_f64(result, row, acc)
+            elif op == ReduceOp.PROD.value:
+                set_logical_from_f64(result, row, Float64(reduce_prod_typed[dt](ptr + base, cols)))
+            elif op == ReduceOp.MIN.value:
+                set_logical_from_f64(result, row, Float64(reduce_min_typed[dt](ptr + base, cols)))
+            elif op == ReduceOp.MAX.value:
+                set_logical_from_f64(result, row, Float64(reduce_max_typed[dt](ptr + base, cols)))
+
+    var nw = worker_count_for_rows(rows)
+    if nw > 1:
+        var chunk = ceildiv(rows, nw)
+
+        @parameter
+        def chunk_worker(i: Int) raises:
+            var start = i * chunk
+            var end = start + chunk
+            if end > rows:
+                end = rows
+            if start >= rows:
+                return
+            process_row_range(start, end)
+
+        sync_parallelize[chunk_worker](nw)
+    else:
+        process_row_range(0, rows)
     result.backend_code = BackendKind.FUSED.value
 
 
