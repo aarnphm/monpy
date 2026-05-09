@@ -1,0 +1,116 @@
+# ===----------------------------------------------------------------------=== #
+# NuMojo: Misc
+# Distributed under the Apache 2.0 License with LLVM Exceptions.
+# See LICENSE and the LLVM License for more information.
+# https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo/blob/main/LICENSE
+# https://llvm.org/LICENSE.txt
+#  ===----------------------------------------------------------------------=== #
+"""Miscellaneous Linear Algebra Routines (numojo.routines.linalg.misc)
+
+This module provides miscellaneous linear algebra routines, such as extracting diagonals and checking for symmetry.
+"""
+
+from std.sys import simd_width_of
+from std.algorithm import parallelize
+from numojo._compat.vectorize import vectorize
+
+from numojo.core.ndarray import NDArray
+from numojo.core.matrix import Matrix
+
+
+def diagonal[
+    dtype: DType
+](a: NDArray[dtype], offset: Int = 0) raises -> NDArray[dtype]:
+    """
+    Returns specific diagonals.
+    Currently supports only 2D arrays.
+
+    Raises:
+        Error: If the array is not 2D.
+        Error: If the offset is beyond the shape of the array.
+
+    Parameters:
+        dtype: Data type of the array.
+
+    Args:
+        a: An NDArray.
+        offset: Offset of the diagonal from the main diagonal.
+
+    Returns:
+        The diagonal of the NDArray.
+    """
+
+    if a.ndim != 2:
+        raise Error("\nError in `diagonal`: Only supports 2D arrays")
+
+    if not a.is_c_contiguous():
+        return diagonal(a.contiguous(), offset)
+
+    var m: Int = a.shape[0]
+    var n: Int = a.shape[1]
+
+    if offset > n - 1 or offset < -(m - 1):
+        raise Error(
+            "\nError in `diagonal`: Offset "
+            + String(offset)
+            + " is outside the valid range for array with shape ("
+            + String(m)
+            + ", "
+            + String(n)
+            + ")"
+        )
+
+    var result: NDArray[dtype]
+
+    if offset >= 0:
+        var size_of_result: Int = min(m, n - offset)
+        result = NDArray[dtype](Shape(size_of_result))
+        for i in range(size_of_result):
+            result._buf.ptr[i] = a._buf.ptr[i * n + (i + offset)]
+    else:
+        var k: Int = -offset
+        var size_of_result: Int = min(m - k, n)
+        result = NDArray[dtype](Shape(size_of_result))
+        for i in range(size_of_result):
+            result._buf.ptr[i] = a._buf.ptr[(i + k) * n + i]
+
+    return result^
+
+
+def issymmetric[
+    dtype: DType
+](
+    A: Matrix[dtype],
+    rtol: Scalar[dtype] = 1e-5,
+    atol: Scalar[dtype] = 1e-8,
+) -> Bool:
+    """
+    Returns True if A is symmetric, False otherwise.
+
+    Parameters:
+        dtype: Data type of the Matrix Elements.
+
+    Args:
+        A: A Matrix.
+        rtol: Relative tolerance for comparison.
+        atol: Absolute tolerance for comparison.
+
+    Returns:
+        True if the array is symmetric, False otherwise.
+    """
+
+    if A.shape[0] != A.shape[1]:
+        return False
+
+    var n = A.shape[0]
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            var a_ij = A._load(i, j)
+            var a_ji = A._load(j, i)
+            var diff = abs(a_ij - a_ji)
+            var allowed_error = atol + rtol * max(abs(a_ij), abs(a_ji))
+            if diff > allowed_error:
+                return False
+
+    return True

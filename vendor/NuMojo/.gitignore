@@ -1,0 +1,37 @@
+# Build directory
+/build
+/dist
+/local
+*.egg-info
+
+# VSCode files
+/.vscode
+
+# MacOs Desktop Service file
+*.DS_Store
+
+# pixi environments
+.pixi
+/venv
+
+
+# Irrelevant files
+*.html
+*.css
+*.py
+*.pyc
+
+# Miscellaneous files
+mojo
+numojo.mojopkg
+/bench.mojo
+/test*.mojo
+/test*.ipynb
+bench_*.mojo
+/tempCodeRunnerFile.mojo
+kgen.trace.*
+extras/
+
+# Auto docs
+docs/readthedocs/docs.json
+docs.json

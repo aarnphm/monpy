@@ -157,7 +157,9 @@ Interpretation rule: rows near `1.0x` mean the monpy kernel and stdlib-shaped lo
 
 ### Optional NuMojo comparison
 
-NuMojo is an external array library, so its bench is separate and opt-in:
+NuMojo is an external array library, so its bench is separate and opt-in. The
+repo carries a patched vendored copy at `vendor/NuMojo`; that is the default
+`monpy-bench --include-numojo` lookup after `NUMOJO_PATH`.
 
 ```bash
 monpy-bench-mojo --include-numojo
@@ -170,7 +172,7 @@ $MODULAR_DERIVED_PATH/build/bin/mojo run \
 
 `bench_numojo_sweep.mojo` compares NuMojo public NDArray operations against monpy raw kernels for add, `sin`, `sum`, and small matmul. That comparison is intentionally not identical to `bench_mojo_sweep.mojo`: NuMojo includes its array abstraction overhead, while monpy rows are kernel-level. Treat it as an external-library baseline, not as a stdlib replacement proof.
 
-NuMojo main currently tracks the Modular 0.26.x toolchain family. This checkout expects Mojo `1.0.0.dev0`, so the optional bench can fail at import time with stdlib API drift such as `std.os.atomic` moving or disappearing. The CLI treats that as a skipped optional baseline by default: it still reports the monpy/stdlib Mojo rows and writes the attempted NuMojo command into the manifest. Use `--strict-numojo` when you want that compatibility failure to stop the run.
+NuMojo `0.9.0` currently tracks the Modular 0.26.x toolchain family. The vendored copy is patched for this checkout's Mojo `1.0.0.dev0` benchmark path; see `vendor/README.md` and `vendor/NuMojo/MONPY_PATCHES.md` for provenance, license references, and the compatibility patch ledger. External NuMojo checkouts may still fail at import time with stdlib API drift. The CLI treats that as a skipped optional baseline by default: it still reports the monpy/stdlib Mojo rows and writes the attempted NuMojo command into the manifest. Use `--strict-numojo` when you want that compatibility failure to stop the run.
 
 ### `bench_reduce.mojo`
 

@@ -1,0 +1,343 @@
+# ===----------------------------------------------------------------------=== #
+# NuMojo: Searching routines
+# Distributed under the Apache 2.0 License with LLVM Exceptions.
+# See LICENSE and the LLVM License for more information.
+# https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo/blob/main/LICENSE
+# https://llvm.org/LICENSE.txt
+# ===----------------------------------------------------------------------=== #
+""""Searching routines (numojo.routines.searching)
+
+This module implements searching routines for finding indices of extrema (argmax and argmin) in NDArrays and Matrices.
+"""
+
+from numojo._compat.vectorize import vectorize
+from std.sys import simd_width_of
+from std.collections.optional import Optional
+
+from numojo.core.ndarray import NDArray
+from numojo.core.layout import NDArrayShape
+from numojo.core.layout import NDArrayShape
+import numojo.core.matrix as matrix
+from numojo.core.matrix import Matrix
+from numojo.core.dtype.utility import is_inttype, is_floattype
+from numojo.routines.sorting import binary_sort
+from numojo.routines.math.extrema import _max, _min
+from numojo.routines.functional import apply_along_axis_reduce_to_int
+
+
+def argmax_1d[dtype: DType](a: NDArray[dtype]) capturing raises -> Scalar[DType.int]:
+    """Returns the index of the maximum value in the buffer.
+    Regardless of the shape of input, it is treated as a 1-d array.
+
+    Parameters:
+        dtype: The element type.
+
+    Args:
+        a: An array.
+
+    Returns:
+        The index of the maximum value in the buffer.
+    """
+
+    if not a.is_c_contiguous():
+        return argmax_1d(a.contiguous())
+
+    var ptr = a._buf.ptr
+    var value = ptr[]
+    var result: Int = 0
+
+    for i in range(a.size):
+        if ptr[] > value:
+            result = i
+            value = ptr[]
+        ptr += 1
+
+    return Scalar[DType.int](result)
+
+
+def argmin_1d[dtype: DType](a: NDArray[dtype]) capturing raises -> Scalar[DType.int]:
+    """Returns the index of the minimum value in the buffer.
+    Regardless of the shape of input, it is treated as a 1-d array.
+
+    Parameters:
+        dtype: The element type.
+
+    Args:
+        a: An array.
+
+    Returns:
+        The index of the minimum value in the buffer.
+    """
+
+    if not a.is_c_contiguous():
+        return argmin_1d(a.contiguous())
+
+    var ptr = a._buf.ptr
+    var value = ptr[]
+    var result: Int = 0
+
+    for i in range(a.size):
+        if ptr[] < value:
+            result = i
+            value = ptr[]
+        ptr += 1
+
+    return Scalar[DType.int](result)
+
+
+def argmax[dtype: DType, //](a: NDArray[dtype]) raises -> Scalar[DType.int]:
+    """Returns the indices of the maximum values of the array along an axis.
+    When no axis is specified, the array is flattened.
+
+    Parameters:
+        dtype: The element type.
+
+    Args:
+        a: An array.
+
+    Returns:
+        Returns the indices of the maximum values of the array along an axis.
+
+    Notes:
+
+    If there are multiple occurrences of the maximum values, the indices
+    of the first occurrence are returned.
+    """
+
+    if a.ndim == 1:
+        return argmax_1d(a)
+    else:
+        return argmax_1d(ravel(a))
+
+
+def argmax[
+    dtype: DType, //
+](a: NDArray[dtype], axis: Int) raises -> NDArray[DType.int]:
+    """Returns the indices of the maximum values of the array along an axis.
+    When no axis is specified, the array is flattened.
+
+    Parameters:
+        dtype: The element type.
+
+    Args:
+        a: An array.
+        axis: The axis along which to operate.
+
+    Returns:
+        Returns the indices of the maximum values of the array along an axis.
+
+    Notes:
+
+    If there are multiple occurrences of the maximum values, the indices
+    of the first occurrence are returned.
+
+    Examples:
+
+    ```mojo
+    from numojo.prelude import *
+    from python import Python
+
+    def main() raises:
+        var np = Python.import_module("numpy")
+        # Test with argmax to get maximum values
+        var a = nm.random.randint(5, 4, low=0, high=10)
+        var a_np = a.to_numpy()
+        print(a)
+        print(a_np)
+        # Get indices of maximum values along axis=1
+        var max_indices = nm.argmax(a, axis=1)
+        var max_indices_np = np.argmax(a_np, axis=1)
+        # Reshape indices for take_along_axis
+        var reshaped_indices = max_indices.reshape(Shape(max_indices.shape[0], 1))
+        var reshaped_indices_np = max_indices_np.reshape(max_indices_np.shape[0], 1)
+        print(reshaped_indices)
+        print(reshaped_indices_np)
+        # Get maximum values using take_along_axis
+        print(nm.indexing.take_along_axis(a, reshaped_indices, axis=1))
+        print(np.take_along_axis(a_np, reshaped_indices_np, axis=1))
+    ```
+    End of examples.
+    """
+
+    var normalized_axis = axis
+    if axis < 0:
+        normalized_axis += a.ndim
+    if (normalized_axis < 0) or (normalized_axis >= a.ndim):
+        raise Error(
+            String("Error in `argmax`: Axis {} not in bound [-{}, {})").format(
+                axis, a.ndim, a.ndim
+            )
+        )
+
+    return apply_along_axis_reduce_to_int[dtype, func1d=argmax_1d](
+        a=a, axis=normalized_axis
+    )
+
+
+@always_inline
+def find_extrema_index[
+    dtype: DType, find_max: Bool
+](A: Matrix[dtype]) raises -> Scalar[DType.int]:
+    """Find index of min/max value, either in whole matrix or along an axis."""
+
+    var extreme_val = A[0, 0]
+    var extreme_idx: Scalar[DType.int] = 0
+
+    for i in range(A.shape[0]):
+        for j in range(A.shape[1]):
+            var current = A[i, j]
+            var linear_idx = Scalar[DType.int](i * A.shape[1] + j)
+
+            comptime if find_max:
+                if current > extreme_val:
+                    extreme_val = current
+                    extreme_idx = linear_idx
+            else:
+                if current < extreme_val:
+                    extreme_val = current
+                    extreme_idx = linear_idx
+
+    return extreme_idx
+
+
+@always_inline
+def find_extrema_index[
+    dtype: DType, find_max: Bool
+](A: Matrix[dtype], axis: Optional[Int]) raises -> Matrix[DType.int]:
+    """Find index of min/max value, either in whole matrix or along an axis."""
+
+    if axis != 0 and axis != 1:
+        raise Error(String("The axis can either be 1 or 0!"))
+
+    var B = Matrix[DType.int](
+        shape=(A.shape[0], 1) if axis == 1 else (1, A.shape[1])
+    )
+
+    if axis == 1:
+        for i in range(A.shape[0]):
+            var extreme_val = A[i, 0]
+            var extreme_idx: Scalar[DType.int] = 0
+
+            for j in range(1, A.shape[1]):
+                var current = A[i, j]
+
+                if find_max:
+                    if current > extreme_val:
+                        extreme_val = current
+                        extreme_idx = Scalar[DType.int](j)
+                else:
+                    if current < extreme_val:
+                        extreme_val = current
+                        extreme_idx = Scalar[DType.int](j)
+
+            B[i, 0] = extreme_idx
+    else:
+        for j in range(A.shape[1]):
+            var extreme_val = A[0, j]
+            var extreme_idx: Scalar[DType.int] = 0
+
+            for i in range(1, A.shape[0]):
+                var current = A[i, j]
+
+                if find_max:
+                    if current > extreme_val:
+                        extreme_val = current
+                        extreme_idx = Scalar[DType.int](i)
+                else:
+                    if current < extreme_val:
+                        extreme_val = current
+                        extreme_idx = Scalar[DType.int](i)
+
+            B[0, j] = extreme_idx
+
+    return B^
+
+
+def argmax[dtype: DType](A: Matrix[dtype]) raises -> Scalar[DType.int]:
+    """Find index of max value in a flattened matrix."""
+    return find_extrema_index[dtype, True](A)
+
+
+def argmax[
+    dtype: DType
+](A: Matrix[dtype], axis: Int) raises -> Matrix[DType.int]:
+    """Find indices of max values along the given axis."""
+    return find_extrema_index[dtype, True](A, axis)
+
+
+def argmin[dtype: DType, //](a: NDArray[dtype]) raises -> Scalar[DType.int]:
+    """Returns the indices of the minimum values of the array along an axis.
+    When no axis is specified, the array is flattened.
+
+    Parameters:
+        dtype: The element type.
+
+    Args:
+        a: An array.
+
+    Returns:
+        Returns the indices of the minimum values of the array along an axis.
+
+    Notes:
+
+    If there are multiple occurrences of the minimum values, the indices
+    of the first occurrence are returned.
+    """
+
+    if a.ndim == 1:
+        return argmin_1d(a)
+    else:
+        return argmin_1d(ravel(a))
+
+
+def argmin[
+    dtype: DType, //
+](a: NDArray[dtype], axis: Int) raises -> NDArray[DType.int]:
+    """Returns the indices of the minimum values of the array along an axis.
+    When no axis is specified, the array is flattened.
+
+    Parameters:
+        dtype: The element type.
+
+    Args:
+        a: An array.
+        axis: The axis along which to operate.
+
+    Returns:
+        Returns the indices of the minimum values of the array along an axis.
+
+    Notes:
+
+    If there are multiple occurrences of the minimum values, the indices
+    of the first occurrence are returned.
+    """
+
+    var normalized_axis = axis
+    if axis < 0:
+        normalized_axis += a.ndim
+    if (normalized_axis < 0) or (normalized_axis >= a.ndim):
+        raise Error(
+            String("Error in `argmin`: Axis {} not in bound [-{}, {})").format(
+                axis, a.ndim, a.ndim
+            )
+        )
+
+    return apply_along_axis_reduce_to_int[dtype, func1d=argmin_1d](
+        a=a, axis=normalized_axis
+    )
+
+
+def argmin[dtype: DType](A: Matrix[dtype]) raises -> Scalar[DType.int]:
+    """
+    Index of the min. It is first flattened before sorting.
+    """
+    return find_extrema_index[dtype, False](A)
+
+
+def argmin[
+    dtype: DType
+](A: Matrix[dtype], axis: Int) raises -> Matrix[DType.int]:
+    """
+    Index of the min along the given axis.
+    """
+    return find_extrema_index[dtype, False](A, axis)

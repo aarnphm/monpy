@@ -98,5 +98,5 @@ MOHAUS_MOJO=/path/bin/mojo
 
 - CuTEDSL Layout algebra
 - Modular's `LayoutTensor`
-- [NuMojo](https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo)
+- [NuMojo](https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo), vendored under `vendor/NuMojo` for optional benchmarks under `Apache-2.0 WITH LLVM-exception`
 - [numpy](https://github.com/numpy/numpy)
