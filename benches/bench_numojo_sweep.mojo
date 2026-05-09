@@ -101,10 +101,10 @@ def emit_numojo_add_f32[n: Int]() raises:
     emit_result(
         "numojo.elementwise",
         String("add_f32_{}").format(n),
-        "numojo.NDArray.__add__",
         "monpy.binary_same_shape_contig_typed_static",
-        bench_configured[numojo_call](),
+        "numojo.NDArray.__add__",
         bench_configured[monpy_call](),
+        bench_configured[numojo_call](),
         n * size_of[Scalar[DType.float32]]() * 3,
         n,
     )
@@ -132,10 +132,10 @@ def emit_numojo_sin_f32[n: Int]() raises:
     emit_result(
         "numojo.elementwise",
         String("sin_f32_{}").format(n),
-        "numojo.sin",
         "monpy.unary_contig_typed",
-        bench_configured[numojo_call](),
+        "numojo.sin",
         bench_configured[monpy_call](),
+        bench_configured[numojo_call](),
         n * size_of[Scalar[DType.float32]]() * 2,
         n,
     )
@@ -161,10 +161,10 @@ def emit_numojo_sum_f32[n: Int]() raises:
     emit_result(
         "numojo.reductions",
         String("sum_f32_{}").format(n),
-        "numojo.sum",
         "monpy.reduce_sum_typed",
-        bench_configured[numojo_call](),
+        "numojo.sum",
         bench_configured[monpy_call](),
+        bench_configured[numojo_call](),
         n * size_of[Scalar[DType.float32]](),
         n,
     )
@@ -196,10 +196,10 @@ def emit_numojo_matmul_f32[n: Int]() raises:
     emit_result(
         "numojo.matmul",
         String("matmul_f32_{}").format(n),
-        "numojo.NDArray.__matmul__",
         "monpy.matmul_small_typed",
-        bench_configured[numojo_call](),
+        "numojo.NDArray.__matmul__",
         bench_configured[monpy_call](),
+        bench_configured[numojo_call](),
         n * n * size_of[Scalar[DType.float32]]() * 3,
         2 * n * n * n,
     )

@@ -170,7 +170,7 @@ $MODULAR_DERIVED_PATH/build/bin/mojo run \
   benches/bench_numojo_sweep.mojo
 ```
 
-`bench_numojo_sweep.mojo` compares NuMojo public NDArray operations against monpy raw kernels for add, `sin`, `sum`, and small matmul. That comparison is intentionally not identical to `bench_mojo_sweep.mojo`: NuMojo includes its array abstraction overhead, while monpy rows are kernel-level. Treat it as an external-library baseline, not as a stdlib replacement proof.
+`bench_numojo_sweep.mojo` compares monpy raw kernels against NuMojo public NDArray operations for add, `sin`, `sum`, and small matmul. The row orientation matches the rest of `monpy-bench-mojo`: `candidate` is monpy, `baseline` is the comparison target, and `ratio = candidate_ns / baseline_ns`. This comparison is intentionally not identical to `bench_mojo_sweep.mojo`: NuMojo includes its array abstraction overhead, while monpy rows are kernel-level. Treat it as an external-library baseline, not as a stdlib replacement proof.
 
 NuMojo `0.9.0` currently tracks the Modular 0.26.x toolchain family. The vendored copy is patched for this checkout's Mojo `1.0.0.dev0` benchmark path; see `vendor/README.md` and `vendor/NuMojo/MONPY_PATCHES.md` for provenance, license references, and the compatibility patch ledger. Update that ledger whenever the vendored source changes. External NuMojo checkouts may still fail at import time with stdlib API drift. The CLI treats that as a skipped optional baseline by default: it still reports the monpy/stdlib Mojo rows and writes the attempted NuMojo command into the manifest. Use `--strict-numojo` when you want that compatibility failure to stop the run.
 

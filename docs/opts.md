@@ -2468,19 +2468,19 @@ there.
 
 Direct timing after the patch:
 
-| call                       | before ns | after ns | speedup |
-| -------------------------- | --------: | -------: | ------: |
-| `mnp.flip(..., axis=0)`    |      1028 |      821 |   1.25x |
-| `mnp.flip(..., axis=1)`    |      1028 |      795 |   1.29x |
-| `mnp.flipud(...)`          |      1330 |      959 |   1.39x |
-| `mnp.fliplr(...)`          |      1322 |      954 |   1.39x |
-| raw native one-axis flip   |       808 |      641 |   1.26x |
+| call                     | before ns | after ns | speedup |
+| ------------------------ | --------: | -------: | ------: |
+| `mnp.flip(..., axis=0)`  |      1028 |      821 |   1.25x |
+| `mnp.flip(..., axis=1)`  |      1028 |      795 |   1.29x |
+| `mnp.flipud(...)`        |      1330 |      959 |   1.39x |
+| `mnp.fliplr(...)`        |      1322 |      954 |   1.39x |
+| raw native one-axis flip |       808 |      641 |   1.26x |
 
 The saved low-loop array sweep at
 `results/local-sweep-20260509-flip-axis-single-after-0853` reported:
 
-| row                  | before monpy us | after monpy us | after ratio |
-| -------------------- | --------------: | -------------: | ----------: |
+| row                    | before monpy us | after monpy us | after ratio |
+| ---------------------- | --------------: | -------------: | ----------: |
 | `views/flip_axis0_f32` |           3.287 |          3.044 |      1.032x |
 | `views/fliplr_f32`     |           3.487 |          3.154 |      1.385x |
 | `views/rot90_k1_f32`   |           7.544 |          7.385 |      1.595x |
@@ -2542,19 +2542,19 @@ emits two rows:
 
 Direct timing on the benchmark shape:
 
-| call                         | monpy ns | NumPy ns | ratio |
-| ---------------------------- | -------: | -------: | ----: |
-| existing-array `squeeze`     |      918 |      238 | 3.86x |
-| `asarray` plus `squeeze`     |     2031 |      256 | 7.94x |
-| raw native `squeeze_axis`    |      713 |      n/a |   n/a |
+| call                      | monpy ns | NumPy ns | ratio |
+| ------------------------- | -------: | -------: | ----: |
+| existing-array `squeeze`  |      918 |      238 | 3.86x |
+| `asarray` plus `squeeze`  |     2031 |      256 | 7.94x |
+| raw native `squeeze_axis` |      713 |      n/a |   n/a |
 
 The saved array sweep moved the public rows like this:
 
-| row                                      | monpy us | NumPy us | ratio |
-| ---------------------------------------- | -------: | -------: | ----: |
-| old `views/squeeze_axis0_f32`            |    4.590 |    2.606 | 1.761x |
-| new `views/squeeze_axis0_f32`            |    3.238 |    2.375 | 1.363x |
-| new `interop/asarray_squeeze_axis0_f32`  |    4.335 |    2.352 | 1.843x |
+| row                                     | monpy us | NumPy us |  ratio |
+| --------------------------------------- | -------: | -------: | -----: |
+| old `views/squeeze_axis0_f32`           |    4.590 |    2.606 | 1.761x |
+| new `views/squeeze_axis0_f32`           |    3.238 |    2.375 | 1.363x |
+| new `interop/asarray_squeeze_axis0_f32` |    4.335 |    2.352 | 1.843x |
 
 The split changes the target ranking. Existing-array squeeze is still slower
 than NumPy, but the native bridge is already 713 ns and the Python facade adds
@@ -2585,3 +2585,72 @@ MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/m
 Next target: profile `empty_like_shape_override_f32` and `astype_f32_to_i64`
 before optimizing. The former may be allocation-wrapper noise; the latter is a
 real cast row if it reproduces outside the low-loop sweep.
+
+### 2026-05-09 NuMojo row orientation
+
+`monpy-bench-mojo --include-numojo --sort ratio` looked much worse than it was.
+The row contract was inverted only for the NuMojo slice:
+
+- regular Mojo rows: `candidate = monpy`, `baseline = stdlib-ish loop`.
+- old NuMojo rows: `candidate = numojo`, `baseline = monpy`.
+
+That made the top sorted rows read like monpy losses if your eye carried over
+the `monpy/numpy` habit from the public benchmark suite. The atoms were doing
+the opposite. In the pre-fix run at
+`results/local-sweep-20260509-numojo-current-062756`, NuMojo was slower in every
+NuMojo row:
+
+| row                               | old candidate | old baseline | old ratio |
+| --------------------------------- | ------------: | -----------: | --------: |
+| `numojo.matmul/matmul_f32_16`     |     226140 ns |       380 ns |  595.746x |
+| `numojo.matmul/matmul_f32_8`      |      22633 ns |        64 ns |  353.307x |
+| `numojo.reductions/sum_f32_1024`  |        226 ns |        32 ns |    7.078x |
+| `numojo.elementwise/add_f32_1024` |        425 ns |        90 ns |    4.750x |
+
+`benches/bench_numojo_sweep.mojo` now matches the rest of the Mojo harness:
+`candidate` is monpy, `baseline` is the comparison target, and `ratio` is
+`monpy/baseline`. The post-fix run at
+`results/local-sweep-20260509-numojo-oriented-063037` now reads in the same
+direction:
+
+| row                                | monpy candidate | NuMojo baseline | new ratio |
+| ---------------------------------- | --------------: | --------------: | --------: |
+| `numojo.elementwise/sin_f32_65536` |       401238 ns |       468333 ns |    0.857x |
+| `numojo.elementwise/add_f32_65536` |         6414 ns |        14510 ns |    0.442x |
+| `numojo.reductions/sum_f32_65536`  |         3222 ns |        16169 ns |    0.199x |
+| `numojo.elementwise/add_f32_1024`  |           92 ns |          465 ns |    0.198x |
+| `numojo.reductions/sum_f32_1024`   |           29 ns |          210 ns |    0.138x |
+
+So the answer to "why are we so much slower than NuMojo?" is: in this harness,
+we are not. This is also not a proof that the Python-facing monpy API beats
+NuMojo's Python-facing API. The NuMojo comparison measures public NuMojo
+`NDArray` calls against monpy leaf kernels with preallocated raw buffers. That
+is useful as an external library smoke test, but not an abstraction-level fair
+fight.
+
+The actual current pure-Mojo frontier after the fix is stdlib-facing:
+
+| row                              |   monpy | baseline |  ratio |
+| -------------------------------- | ------: | -------: | -----: |
+| `matmul/small_matmul_f32_8`      |  150 ns |    68 ns | 2.194x |
+| `elementwise/scalar_mul_f32_1k`  |  176 ns |    94 ns | 1.867x |
+| `elementwise/scalar_mul_f64_64k` | 12.1 us |  10.5 us | 1.155x |
+
+The `small_matmul_f32_8` row is noisy enough to demand a rerun before acting.
+The scalar-multiply rows have reproduced across several sweeps, so they remain
+the better leaf-kernel target once the benchmark labeling no longer lies by
+orientation.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 benches/bench_numojo_sweep.mojo
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --include-numojo --format json --sort ratio --output-dir results/local-sweep-20260509-numojo-current-062756 --no-stdout --timeout 300
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --include-numojo --format json --sort ratio --output-dir results/local-sweep-20260509-numojo-oriented-063037 --no-stdout --timeout 300
+.venv/bin/pytest tests/python/test_mojo_bench_sweep.py -q
+```
+
+Next target: rerun the stdlib-facing Mojo sweep with a longer runtime and isolate
+`scalar_mul_f32_1k` / `scalar_mul_f64_64k` in a tiny variant bench. If the gap
+survives a local direct-call baseline, move scalar MUL into a narrower exported
+kernel with no runtime op or scalar-left payload.

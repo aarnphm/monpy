@@ -87,11 +87,11 @@ def test_render_json_preserves_row_level_candidate_and_baseline() -> None:
     mojo_sweep.MojoBenchRow(
       group="numojo.reductions",
       name="sum_f32_1024",
-      candidate="numojo.sum",
-      baseline="monpy.reduce_sum_typed",
-      candidate_ns=120.0,
-      baseline_ns=80.0,
-      ratio=1.5,
+      candidate="monpy.reduce_sum_typed",
+      baseline="numojo.sum",
+      candidate_ns=80.0,
+      baseline_ns=120.0,
+      ratio=2.0 / 3.0,
       bytes=4096,
       flops=1024,
     )
@@ -103,8 +103,8 @@ def test_render_json_preserves_row_level_candidate_and_baseline() -> None:
   assert payload["config"]["include_numojo"] is True
   assert payload["config"]["comparison"] == "candidate_ns / baseline_ns"
   assert payload["config"]["strict_numojo"] is False
-  assert payload["results"][0]["candidate"] == "numojo.sum"
-  assert payload["results"][0]["baseline"] == "monpy.reduce_sum_typed"
+  assert payload["results"][0]["candidate"] == "monpy.reduce_sum_typed"
+  assert payload["results"][0]["baseline"] == "numojo.sum"
 
 
 def _standard_tsv() -> str:
