@@ -308,6 +308,25 @@ def transpose_full_reverse_ops(
     return PythonObject(alloc=result^)
 
 
+def matrix_transpose_ops(array_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var ndim = len(src[].shape)
+    if ndim < 2:
+        raise Error("matrix transpose requires at least two dimensions")
+    var shape = clone_int_list(src[].shape)
+    var strides = clone_int_list(src[].strides)
+    var last = ndim - 1
+    var penult = ndim - 2
+    var last_shape = shape[last]
+    var last_stride = strides[last]
+    shape[last] = shape[penult]
+    strides[last] = strides[penult]
+    shape[penult] = last_shape
+    strides[penult] = last_stride
+    var result = make_view_array_unchecked(src[], shape^, strides^, src[].size_value, src[].offset_elems)
+    return PythonObject(alloc=result^)
+
+
 def slice_ops(
     array_obj: PythonObject,
     starts_obj: PythonObject,

@@ -3604,3 +3604,55 @@ MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarn
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py -q
 ```
+
+### 2026-05-09 native last-two-axis matrix transpose
+
+After the scalar-dot pass and the linalg alignment cleanup, the array sweep put
+`matrix_transpose_16_f64` back on top:
+
+| row                                        | monpy us | numpy us | ratio  |
+| ------------------------------------------ | -------: | -------: | -----: |
+| `array/linalg_api/matrix_transpose_16_f64` |    5.746 |    2.444 | 2.337x |
+| `array/linalg_api/kron_2x2_f64`            |   22.602 |    9.966 | 2.268x |
+| `array/linalg_api/tensorsolve_2x3x2x3_f64` |   14.987 |    6.599 | 2.266x |
+| `array/linalg_api/dot_1d_32_f64`           |    5.433 |    2.408 | 2.260x |
+
+Patch:
+
+- Added `_native.matrix_transpose`, a view constructor that swaps only the last
+  two axes.
+- Routed `ndarray.mT` and top-level `matrix_transpose` through that native
+  leaf.
+- Kept the Python `ValueError` for rank `<2`, then did the stride rewrite
+  natively. No axes tuple, no generic `transpose` path, no layout select for a
+  fixed operation.
+
+Post-patch array rerun:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-array-20260509-native-matrix-transpose --no-progress --no-stdout
+```
+
+Key movement:
+
+| row                                        | before us | after us | before ratio | after ratio | speedup |
+| ------------------------------------------ | --------: | -------: | -----------: | ----------: | ------: |
+| `array/linalg_api/matrix_transpose_16_f64` |     5.746 |    3.069 |       2.337x |      1.258x |  1.87:1 |
+
+Read:
+
+- Matrix transpose is no longer the top ratio. This was the right kind of
+  target: fixed metadata transform, one native call.
+- The new top cluster is mixed: `kron_2x2_f64` at 2.365x, `tensorsolve` at
+  2.321x, `dot_1d_32_f64` at 2.316x, and `tensorinv` at 2.313x.
+- `kron_2x2_f64` is the next sane target if we want another small-array
+  facade/kernel win. `tensorsolve` and `tensorinv` need more care because they
+  sit on shape transforms plus solve/inv behavior, not just one stride rewrite.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/create/ops/shape.mojo src/create/ops/__init__.mojo src/create/__init__.mojo src/lib.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_linalg.py tests/python/numpy_compat/test_numeric.py -q
+```

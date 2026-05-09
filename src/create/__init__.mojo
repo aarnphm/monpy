@@ -147,6 +147,7 @@ from .ops.shape import (
     flatten_ops,
     flip_axis_single_ops,
     flip_ops,
+    matrix_transpose_ops,
     materialize_c_contiguous_ops,
     moveaxis_single_ops,
     normalize_axis_ops,

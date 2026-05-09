@@ -44,6 +44,7 @@ from create import (
     flatten_ops,
     flip_axis_single_ops,
     flip_ops,
+    matrix_transpose_ops,
     from_external_ops,
     from_flat_ops,
     full_like_ops,
@@ -165,6 +166,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[squeeze_all_ops]("squeeze_all")
         module.def_function[squeeze_axis_ops]("squeeze_axis")
         module.def_function[squeeze_axes_ops]("squeeze_axes")
+        module.def_function[matrix_transpose_ops]("matrix_transpose")
         module.def_function[transpose_ops]("transpose")
         module.def_function[transpose_full_reverse_ops]("transpose_full_reverse")
         module.def_function[swapaxes_ops]("swapaxes")

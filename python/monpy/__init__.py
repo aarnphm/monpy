@@ -466,7 +466,7 @@ class ndarray:
   @property
   def mT(self)->ndarray:
     if self.ndim<2:raise ValueError("matrix transpose requires at least two dimensions")
-    return self.transpose(tuple(range(self.ndim-2))+(self.ndim-1, self.ndim-2))
+    return ndarray._wrap(_native.matrix_transpose(self._native), base=self)
   @property
   def __array_interface__(self)->dict[str, object]:
     if not self.dtype.buffer_exportable:raise BufferError(f"{self.dtype.name} has no portable __array_interface__ storage format")
@@ -1313,7 +1313,10 @@ def transpose(x:object, axes:Sequence[int]|None=None)->ndarray:
     from .kernels import dsl as _kernel_dsl
     return typing.cast(ndarray, _kernel_dsl.transpose(x, axes))
   return asarray(x).transpose(axes)
-def matrix_transpose(x:object)->ndarray:return asarray(x).mT
+def matrix_transpose(x:object)->ndarray:
+  arr=asarray(x)
+  if arr.ndim<2:raise ValueError("matrix transpose requires at least two dimensions")
+  return ndarray._wrap(_native.matrix_transpose(arr._native), base=arr)
 def broadcast_to(x:object, shape:int|Sequence[int])->ndarray:
   if _is_kernel_value(x):
     from .kernels import dsl as _kernel_dsl
