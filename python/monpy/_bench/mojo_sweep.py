@@ -58,10 +58,13 @@ def default_mojo_output_dir(now: datetime | None = None) -> Path:
   return default_output_dir(now) / "mojo"
 
 
-def default_numojo_path() -> Path | None:
+def default_numojo_path(repo_root: Path) -> Path | None:
   env_value = os.environ.get("NUMOJO_PATH")
   if env_value:
     return Path(env_value).expanduser()
+  vendor = repo_root / "vendor" / "NuMojo"
+  if vendor.exists():
+    return vendor
   scratchpad = Path.home() / "workspace" / "scratchpad" / "NuMojo"
   return scratchpad if scratchpad.exists() else None
 
@@ -153,6 +156,7 @@ def run_mojo_command(command: Sequence[str], *, timeout: int) -> str:
       capture_output=True,
       text=True,
       timeout=timeout,
+      env=mojo_subprocess_env(Path(command[0])),
     )
   except FileNotFoundError as exc:
     raise RuntimeError(f"could not execute {command[0]!r}") from exc
@@ -166,6 +170,28 @@ def run_mojo_command(command: Sequence[str], *, timeout: int) -> str:
   return completed.stdout
 
 
+def prepend_env_path(env: dict[str, str], name: str, path: Path) -> None:
+  current = env.get(name, "")
+  env[name] = str(path) if not current else f"{path}{os.pathsep}{current}"
+
+
+def mojo_subprocess_env(mojo: Path) -> dict[str, str]:
+  env = os.environ.copy()
+  venv_root = mojo.expanduser().resolve().parent.parent
+  site_packages = venv_root / "lib"
+  if not site_packages.exists():
+    return env
+
+  modular_libs = sorted(site_packages.glob("python*/site-packages/modular/lib"))
+  if not modular_libs:
+    return env
+
+  modular_lib = modular_libs[0]
+  prepend_env_path(env, "DYLD_LIBRARY_PATH", modular_lib)
+  prepend_env_path(env, "LD_LIBRARY_PATH", modular_lib)
+  return env
+
+
 def mojo_binary_metadata(mojo: Path) -> dict[str, str]:
   metadata = {"path": str(mojo)}
   try:
@@ -175,6 +201,7 @@ def mojo_binary_metadata(mojo: Path) -> dict[str, str]:
       capture_output=True,
       text=True,
       timeout=5,
+      env=mojo_subprocess_env(mojo),
     )
   except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
     return metadata
@@ -470,10 +497,10 @@ def main(argv: Sequence[str] | None = None) -> None:
   parser.add_argument(
     "--numojo-path",
     type=Path,
-    default=default_numojo_path(),
+    default=None,
     help=(
       "path to a NuMojo checkout or package root "
-      "(default: NUMOJO_PATH or ~/workspace/scratchpad/NuMojo)"
+      "(default: NUMOJO_PATH, vendor/NuMojo, or ~/workspace/scratchpad/NuMojo)"
     ),
   )
   parser.add_argument("--timeout", type=positive_int, default=300, help="seconds per Mojo command")
@@ -501,6 +528,8 @@ def main(argv: Sequence[str] | None = None) -> None:
   if args.output_dir is None:
     args.output_dir = default_mojo_output_dir()
   args.repo_root = args.repo_root.expanduser().resolve()
+  if args.numojo_path is None:
+    args.numojo_path = default_numojo_path(args.repo_root)
   if args.numojo_path is not None:
     args.numojo_path = args.numojo_path.expanduser().resolve()
   if args.include_numojo and args.numojo_path is None:

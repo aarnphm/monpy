@@ -160,11 +160,11 @@ Interpretation rule: rows near `1.0x` mean the monpy kernel and stdlib-shaped lo
 NuMojo is an external array library, so its bench is separate and opt-in:
 
 ```bash
-monpy-bench-mojo --include-numojo --numojo-path ~/workspace/scratchpad/NuMojo
+monpy-bench-mojo --include-numojo
 $MODULAR_DERIVED_PATH/build/bin/mojo run \
   --ignore-incompatible-package-errors \
   -I src \
-  -I ~/workspace/scratchpad/NuMojo \
+  -I vendor/NuMojo \
   benches/bench_numojo_sweep.mojo
 ```
 

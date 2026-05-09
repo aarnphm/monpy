@@ -4,12 +4,16 @@
   inputs = {
     git-hooks-nix.url = "github:cachix/git-hooks.nix";
     git-hooks-nix.inputs.nixpkgs.follows = "nixpkgs";
+    mohaus.url = "github:aarnphm/mohaus";
+    mohaus.inputs.git-hooks-nix.follows = "git-hooks-nix";
+    mohaus.inputs.nixpkgs.follows = "nixpkgs";
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
   };
 
   outputs = {
     self,
     git-hooks-nix,
+    mohaus,
     nixpkgs,
     ...
   }: let
@@ -26,6 +30,7 @@
       );
 
     commonPackages = pkgs: [
+      pkgs.bash-completion
       pkgs.oxfmt
       pkgs.python311
       pkgs.uv
@@ -132,21 +137,68 @@
   in {
     devShells = forAllSystems (
       system: pkgs: let
+        mohausPackage = mohaus.packages.${system}.default or null;
+        mohausBin =
+          if mohausPackage == null
+          then "mohaus"
+          else "${mohausPackage}/bin/mohaus";
+        mohausPathPrefix = pkgs.lib.optionalString (mohausPackage != null) "${mohausPackage}/bin:";
         preCommit = self.checks.${system}.pre-commit;
       in {
         default = pkgs.mkShell {
-          packages = (commonPackages pkgs) ++ preCommit.enabledPackages;
+          packages =
+            (commonPackages pkgs)
+            ++ pkgs.lib.optional (mohausPackage != null) mohausPackage
+            ++ preCommit.enabledPackages;
 
           shellHook = ''
             export UV_PYTHON="${pkgs.python311}/bin/python3.11"
             export UV_NO_MANAGED_PYTHON=1
             export UV_PYTHON_DOWNLOADS=never
             export PYTHON="$UV_PYTHON"
+            export VIRTUAL_ENV="$PWD/.venv"
+
+            if [ ! -x "$VIRTUAL_ENV/bin/python" ]; then
+              uv venv --python "$UV_PYTHON" "$VIRTUAL_ENV"
+            elif ! "$VIRTUAL_ENV/bin/python" -c 'import sys; raise SystemExit(sys.version_info[:2] != (3, 11))' >/dev/null 2>&1; then
+              printf '%s\n' "recreating $VIRTUAL_ENV with Python 3.11 for monpy" >&2
+              uv venv --python "$UV_PYTHON" --clear "$VIRTUAL_ENV"
+            fi
+
+            export PATH="${mohausPathPrefix}$VIRTUAL_ENV/bin:$PATH"
 
             if [ -z "''${MOHAUS_MOJO:-}" ] \
               && [ -n "''${MODULAR_DERIVED_PATH:-}" ] \
               && [ -x "''${MODULAR_DERIVED_PATH:-}/build/bin/mojo" ]; then
               export MOHAUS_MOJO="$MODULAR_DERIVED_PATH/build/bin/mojo"
+            fi
+
+            completion_root="$VIRTUAL_ENV/share"
+            mkdir -p \
+              "$completion_root/bash-completion/completions" \
+              "$completion_root/fish/vendor_completions.d" \
+              "$completion_root/zsh/site-functions"
+
+            if command -v "${mohausBin}" >/dev/null 2>&1; then
+              "${mohausBin}" completions bash > "$completion_root/bash-completion/completions/mohaus"
+              "${mohausBin}" completions fish > "$completion_root/fish/vendor_completions.d/mohaus.fish"
+              "${mohausBin}" completions zsh > "$completion_root/zsh/site-functions/_mohaus"
+            else
+              printf '%s\n' "mohaus completions skipped: mohaus is not available for ${system}" >&2
+            fi
+
+            export XDG_DATA_DIRS="$completion_root''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
+            export FPATH="$completion_root/zsh/site-functions''${FPATH:+:$FPATH}"
+
+            if [ -n "''${BASH_VERSION:-}" ] \
+              && [ -f "$completion_root/bash-completion/completions/mohaus" ] \
+              && type complete >/dev/null 2>&1; then
+              . "$completion_root/bash-completion/completions/mohaus"
+            fi
+
+            if [ -n "''${ZSH_VERSION:-}" ]; then
+              autoload -Uz compinit 2>/dev/null || true
+              compinit -u 2>/dev/null || true
             fi
 
             if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then

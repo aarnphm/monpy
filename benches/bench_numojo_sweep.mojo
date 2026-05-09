@@ -10,11 +10,15 @@ newer dev compiler, run this file with a compatible Mojo toolchain or expect
 the import to fail before any benchmark row is emitted.
 """
 
-import numojo as nm
-
 from std.benchmark import keep, run
 from std.memory.unsafe_pointer import alloc
 from std.sys import size_of
+
+from numojo.core.dtype.default_dtype import f32
+from numojo.core.type_aliases import Shape
+from numojo.routines.creation import arange
+from numojo.routines.math.sums import sum
+from numojo.routines.math.trig import sin
 
 from domain import BinaryOp, UnaryOp
 from elementwise.kernels.matmul import matmul_small_typed
@@ -76,8 +80,8 @@ def bench_configured[func: def() raises capturing[_] -> None]() raises -> Float6
 
 
 def emit_numojo_add_f32[n: Int]() raises:
-    var lhs_nm = nm.arange[nm.f32](0.0, Float32(n))
-    var rhs_nm = nm.arange[nm.f32](0.0, Float32(n))
+    var lhs_nm = arange[f32](0.0, Float32(n))
+    var rhs_nm = arange[f32](0.0, Float32(n))
     var lhs = alloc[Scalar[DType.float32]](n)
     var rhs = alloc[Scalar[DType.float32]](n)
     var out = alloc[Scalar[DType.float32]](n)
@@ -110,14 +114,14 @@ def emit_numojo_add_f32[n: Int]() raises:
 
 
 def emit_numojo_sin_f32[n: Int]() raises:
-    var src_nm = nm.arange[nm.f32](0.0, Float32(n))
+    var src_nm = arange[f32](0.0, Float32(n))
     var src = alloc[Scalar[DType.float32]](n)
     var out = alloc[Scalar[DType.float32]](n)
     fill_buffer[DType.float32](src, n)
 
     @parameter
     def numojo_call() raises:
-        var result = nm.sin(src_nm)
+        var result = sin(src_nm)
         keep(result.size)
 
     @parameter
@@ -140,13 +144,13 @@ def emit_numojo_sin_f32[n: Int]() raises:
 
 
 def emit_numojo_sum_f32[n: Int]() raises:
-    var src_nm = nm.arange[nm.f32](0.0, Float32(n))
+    var src_nm = arange[f32](0.0, Float32(n))
     var src = alloc[Scalar[DType.float32]](n)
     fill_buffer[DType.float32](src, n)
 
     @parameter
     def numojo_call() raises:
-        var result = nm.sum(src_nm)
+        var result = sum(src_nm)
         keep(result)
 
     @parameter
@@ -168,10 +172,10 @@ def emit_numojo_sum_f32[n: Int]() raises:
 
 
 def emit_numojo_matmul_f32[n: Int]() raises:
-    var lhs_nm = nm.arange[nm.f32](0.0, Float32(n * n))
-    var rhs_nm = nm.arange[nm.f32](0.0, Float32(n * n))
-    lhs_nm.resize(nm.Shape(n, n))
-    rhs_nm.resize(nm.Shape(n, n))
+    var lhs_nm = arange[f32](0.0, Float32(n * n))
+    var rhs_nm = arange[f32](0.0, Float32(n * n))
+    lhs_nm.resize(Shape(n, n))
+    rhs_nm.resize(Shape(n, n))
 
     var lhs = alloc[Scalar[DType.float32]](n * n)
     var rhs = alloc[Scalar[DType.float32]](n * n)

@@ -1,5 +1,11 @@
 [build-system]
-requires = ["mohaus>=0.1,<0.2", "mojo"]
+requires = [
+  "mohaus>=0.1,<0.2",
+  "mojo==1.0.0b1",
+  "mojo-compiler==1.0.0b1",
+  "mojo-compiler-mojo-libs==1.0.0b1",
+  "mojo-lldb-libs==1.0.0b1",
+]
 build-backend = "mohaus.backend"
 
 [project]
@@ -17,12 +23,10 @@ monpy-bench-mojo = "monpy._bench.mojo_sweep:main"
 monpy-profile = "monpy._bench.profile:main"
 
 [tool.mohaus]
-mojo-src = "src"
-python-src = "python"
-module-name = "monpy._native"
-strip = true
 mojo-flags = []
+strip = true
 generate-stub = false
+module-name = "monpy._native"
 
 [tool.ruff.lint]
 ignore = ["E111", "E114"]
@@ -33,3 +37,6 @@ exclude = ["tests/**"]
 
 [tool.ty.rules]
 all = "error"
+
+[tool.uv]
+extra-index-url = ["https://aarnphm.github.io/mohaus/simple"]

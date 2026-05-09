@@ -59,6 +59,30 @@
         "type": "github"
       }
     },
+    "mohaus": {
+      "inputs": {
+        "git-hooks-nix": [
+          "git-hooks-nix"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "rust-overlay": "rust-overlay"
+      },
+      "locked": {
+        "lastModified": 1778305718,
+        "narHash": "sha256-hnYICwbYJ+A3tq7Vw6wj09sWKDfUzKCcY/MVwnPHlzI=",
+        "owner": "aarnphm",
+        "repo": "mohaus",
+        "rev": "738f6fb23426f5ac6a1eb75609e5c43596e9860d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "aarnphm",
+        "repo": "mohaus",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1778124196,
@@ -78,7 +102,29 @@
     "root": {
       "inputs": {
         "git-hooks-nix": "git-hooks-nix",
+        "mohaus": "mohaus",
         "nixpkgs": "nixpkgs"
+      }
+    },
+    "rust-overlay": {
+      "inputs": {
+        "nixpkgs": [
+          "mohaus",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1777778183,
+        "narHash": "sha256-Lqv9MZO0XAGcMbXJU+ULBSMD41Pf391uJehylUQKe7Y=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "dbba5f888c82ef3ce594c451c33ac2474eb80847",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
       }
     }
   },

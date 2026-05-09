@@ -51,6 +51,27 @@ def test_standard_and_numojo_commands_use_repo_include_paths() -> None:
   ]
 
 
+def test_default_numojo_path_prefers_vendor_checkout(tmp_path: Path) -> None:
+  repo_root = tmp_path / "monpy"
+  vendor = repo_root / "vendor" / "NuMojo"
+  vendor.mkdir(parents=True)
+
+  assert mojo_sweep.default_numojo_path(repo_root) == vendor
+
+
+def test_mojo_subprocess_env_adds_packaged_modular_libs(tmp_path: Path) -> None:
+  mojo = tmp_path / ".venv" / "bin" / "mojo"
+  modular_lib = tmp_path / ".venv" / "lib" / "python3.11" / "site-packages" / "modular" / "lib"
+  mojo.parent.mkdir(parents=True)
+  modular_lib.mkdir(parents=True)
+  mojo.write_text("", encoding="utf-8")
+
+  env = mojo_sweep.mojo_subprocess_env(mojo)
+
+  assert str(modular_lib) in env["DYLD_LIBRARY_PATH"].split(":")
+  assert str(modular_lib) in env["LD_LIBRARY_PATH"].split(":")
+
+
 def test_render_json_preserves_row_level_candidate_and_baseline() -> None:
   args = argparse.Namespace(
     format="json",
