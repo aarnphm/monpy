@@ -56,7 +56,10 @@ from .parallel import (
     is_serial_only,
     should_parallelize_bytes,
     should_parallelize_rows,
+    thread_limit,
     worker_count,
+    worker_count_for_bytes,
+    worker_count_for_rows,
 )
 from .reduce import (
     maybe_argmax_contiguous,

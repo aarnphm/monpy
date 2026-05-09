@@ -16,13 +16,17 @@ Hosts:
     accumulators; f16 → f64 round-trip; f32 / f64 → `reduce_*_typed`.
   - `maybe_argmax_contiguous` — c-contig argmax over float arrays.
 
-The 8-parallel-accumulator trick: single-accumulator FADD/FMIN/FMAX/FMUL
+The 8-parallel-accumulator trick is per worker, not per machine:
+single-accumulator FADD/FMIN/FMAX/FMUL
 chains stall because each op depends on the previous (≈3 cyc latency on
 Apple Silicon). Modern cores dispatch 2 FP ops per cycle (M-series, AVX2
 Intel/AMD), so the depth needed to saturate is `latency × IPC ≈ 6–8`.
 Eight independent accumulators saturate that pipeline; the final
 tree-reduction collapses them to a scalar. The 4-way version still works
 on 1-IPC machines but leaves ~2× on the table on 2-IPC ones.
+Multi-core fanout is a separate policy in `kernels/parallel.mojo`: a
+64-core Ubuntu host may use many workers, and each worker still runs this
+same 8-accumulator SIMD loop on its chunk.
 
 Validated on M-series in `benches/bench_reduce.mojo`: 4-way → 86 GB/s
 f32 1k; 8-way → 133 GB/s f32 1k; std.algorithm.sum → 130 GB/s. The
@@ -51,10 +55,15 @@ from domain import ArrayDType, BackendKind, ReduceOp
 
 from elementwise.kernels.parallel import (
     REDUCE_GRAIN,
-    should_parallelize_bytes,
-    worker_count,
+    worker_count_for_bytes,
 )
 from elementwise.predicates import is_contiguous_float_array
+
+
+comptime REDUCE_SIMD_ACCUMULATORS = 8
+# Keep this in sync with the explicit a0..a7 / v0..v7 accumulator lists
+# below. This is instruction-level parallelism inside one worker, not the
+# number of worker threads.
 
 
 def reduce_sum_typed[
@@ -81,7 +90,7 @@ def reduce_sum_typed[
     # the f32 sum's catastrophic cancellation risk (numpy.sum on f32
     # already promotes internally on linalg paths).
     comptime width = simd_width_of[dtype]()
-    comptime block = width * 8
+    comptime block = width * REDUCE_SIMD_ACCUMULATORS
     var a0 = SIMD[dtype, width](0)
     var a1 = SIMD[dtype, width](0)
     var a2 = SIMD[dtype, width](0)
@@ -115,21 +124,20 @@ def reduce_sum_typed[
 def reduce_sum_par_typed[
     dtype: DType
 ](
-    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int, nworkers: Int
 ) raises -> Float64 where dtype.is_floating_point():
-    # Multi-thread sum: chunk across `worker_count(...)` P-cores, each
-    # worker calls `reduce_sum_typed` (the 8-way SIMD kernel) on its
-    # slice into a Float64 partial. Master thread combines partials at
-    # the end (small, scalar — irrelevant cost).
+    # Multi-thread sum: chunk across the policy-chosen worker count.
+    # Each worker calls `reduce_sum_typed` (the 8-accumulator SIMD kernel)
+    # on its slice into a Float64 partial. Master thread combines partials
+    # at the end (small, scalar — irrelevant cost).
     #
     # Validated in `benches/bench_reduce.mojo`:
     #   - 16M f32: 61 → 117 GB/s (1.9x, hits M3 Pro DRAM ceiling)
     #   - 1M f64 cache-resident: 82 → 374 GB/s (4.6x, L2 ceiling)
     #
-    # The caller is expected to gate on `should_parallelize_bytes` —
-    # this function does not check and will fan out for tiny inputs
-    # if asked. See `maybe_reduce_contiguous` for the production gate.
-    var nworkers = worker_count(size)
+    # The caller is expected to pass `worker_count_for_bytes(...)` so this
+    # does not fan a 1MB tensor across every core on many-core systems.
+    # See `maybe_reduce_contiguous` for the production gate.
     if nworkers <= 1:
         return reduce_sum_typed[dtype](src_ptr, size)
 
@@ -158,9 +166,9 @@ def reduce_sum_par_typed[
 
 def reduce_min_typed[
     dtype: DType
-](
-    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
-) raises -> Scalar[dtype] where dtype.is_floating_point():
+](src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int) raises -> Scalar[
+    dtype
+] where dtype.is_floating_point():
     # 8-parallel SIMD min — same multi-accumulator structure as sum, but
     # the dependency-breaking primitive is FMIN instead of FADD. FMIN
     # latency on M-series is ~3 cyc just like FADD; the 8-way unroll
@@ -172,7 +180,7 @@ def reduce_min_typed[
     if size == 0:
         raise Error("reduce_min_typed: empty source")
     comptime width = simd_width_of[dtype]()
-    comptime block = width * 8
+    comptime block = width * REDUCE_SIMD_ACCUMULATORS
     if size < block:
         var acc = src_ptr[0]
         for j in range(1, size):
@@ -217,14 +225,14 @@ def reduce_min_typed[
 
 def reduce_max_typed[
     dtype: DType
-](
-    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
-) raises -> Scalar[dtype] where dtype.is_floating_point():
+](src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int) raises -> Scalar[
+    dtype
+] where dtype.is_floating_point():
     # 8-parallel SIMD max — symmetric to reduce_min_typed.
     if size == 0:
         raise Error("reduce_max_typed: empty source")
     comptime width = simd_width_of[dtype]()
-    comptime block = width * 8
+    comptime block = width * REDUCE_SIMD_ACCUMULATORS
     if size < block:
         var acc = src_ptr[0]
         for j in range(1, size):
@@ -269,15 +277,15 @@ def reduce_max_typed[
 
 def reduce_prod_typed[
     dtype: DType
-](
-    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
-) raises -> Scalar[dtype] where dtype.is_floating_point():
+](src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int) raises -> Scalar[
+    dtype
+] where dtype.is_floating_point():
     # 8-parallel SIMD product — FMUL latency on M-series is ~4 cyc at
     # 2 IPC, so the 8-way structure remains correct (8 ≥ 4 × 2 = 8).
     # Seed accumulators with 1.0 so the partial product semantics hold
     # for any size including ones below the SIMD-block threshold.
     comptime width = simd_width_of[dtype]()
-    comptime block = width * 8
+    comptime block = width * REDUCE_SIMD_ACCUMULATORS
     var v0 = SIMD[dtype, width](1)
     var v1 = SIMD[dtype, width](1)
     var v2 = SIMD[dtype, width](1)
@@ -313,18 +321,18 @@ def reduce_prod_typed[
 # Same per-chunk SIMD kernel as the serial path; just stitched.
 # ===-----------------------------------------------------------------------===
 
+
 def reduce_min_par_typed[
     dtype: DType
-](
-    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
-) raises -> Scalar[dtype] where dtype.is_floating_point():
+](src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int, nworkers: Int) raises -> Scalar[
+    dtype
+] where dtype.is_floating_point():
     # Worker scheme mirrors reduce_sum_par_typed. Each chunk runs the
     # serial reduce_min_typed (8-way SIMD) on its slice; partials live
     # in a heap Float64 array (so we don't need a Scalar[dtype] heap
     # allocator); master combines via scalar < walk.
     if size == 0:
         raise Error("reduce_min_par_typed: empty source")
-    var nworkers = worker_count(size)
     if nworkers <= 1:
         return reduce_min_typed[dtype](src_ptr, size)
 
@@ -359,13 +367,12 @@ def reduce_min_par_typed[
 
 def reduce_max_par_typed[
     dtype: DType
-](
-    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
-) raises -> Scalar[dtype] where dtype.is_floating_point():
+](src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int, nworkers: Int) raises -> Scalar[
+    dtype
+] where dtype.is_floating_point():
     # Symmetric to reduce_min_par_typed.
     if size == 0:
         raise Error("reduce_max_par_typed: empty source")
-    var nworkers = worker_count(size)
     if nworkers <= 1:
         return reduce_max_typed[dtype](src_ptr, size)
 
@@ -397,13 +404,12 @@ def reduce_max_par_typed[
 
 def reduce_prod_par_typed[
     dtype: DType
-](
-    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
-) raises -> Scalar[dtype] where dtype.is_floating_point():
+](src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int, nworkers: Int) raises -> Scalar[
+    dtype
+] where dtype.is_floating_point():
     # Worker partials accumulate in Float64 to bound the f32 catastrophic-
     # cancellation surface, mirroring reduce_sum_par_typed. Empty chunks
     # contribute the identity element (1.0) — safe to multiply across.
-    var nworkers = worker_count(size)
     if nworkers <= 1:
         return reduce_prod_typed[dtype](src_ptr, size)
 
@@ -610,17 +616,11 @@ def _reduce_axis_last_contiguous_typed[
                 acc = acc / Float64(cols)
             set_logical_from_f64(result, row, acc)
         elif op == ReduceOp.PROD.value:
-            set_logical_from_f64(
-                result, row, Float64(reduce_prod_typed[dt](ptr + base, cols))
-            )
+            set_logical_from_f64(result, row, Float64(reduce_prod_typed[dt](ptr + base, cols)))
         elif op == ReduceOp.MIN.value:
-            set_logical_from_f64(
-                result, row, Float64(reduce_min_typed[dt](ptr + base, cols))
-            )
+            set_logical_from_f64(result, row, Float64(reduce_min_typed[dt](ptr + base, cols)))
         elif op == ReduceOp.MAX.value:
-            set_logical_from_f64(
-                result, row, Float64(reduce_max_typed[dt](ptr + base, cols))
-            )
+            set_logical_from_f64(result, row, Float64(reduce_max_typed[dt](ptr + base, cols)))
     result.backend_code = BackendKind.FUSED.value
 
 
@@ -751,14 +751,16 @@ def maybe_reduce_contiguous(src: Array, mut result: Array, op: Int) raises -> Bo
         var acc: Float64
         if src.dtype_code == ArrayDType.FLOAT32.value:
             var ptr = contiguous_ptr[DType.float32](src)
-            if should_parallelize_bytes(src.size_value * 4, REDUCE_GRAIN):
-                acc = reduce_sum_par_typed[DType.float32](ptr, src.size_value)
+            var nworkers = worker_count_for_bytes(src.size_value, src.size_value * 4, REDUCE_GRAIN)
+            if nworkers > 1:
+                acc = reduce_sum_par_typed[DType.float32](ptr, src.size_value, nworkers)
             else:
                 acc = reduce_sum_typed[DType.float32](ptr, src.size_value)
         elif src.dtype_code == ArrayDType.FLOAT64.value:
             var ptr = contiguous_ptr[DType.float64](src)
-            if should_parallelize_bytes(src.size_value * 8, REDUCE_GRAIN):
-                acc = reduce_sum_par_typed[DType.float64](ptr, src.size_value)
+            var nworkers = worker_count_for_bytes(src.size_value, src.size_value * 8, REDUCE_GRAIN)
+            if nworkers > 1:
+                acc = reduce_sum_par_typed[DType.float64](ptr, src.size_value, nworkers)
             else:
                 acc = reduce_sum_typed[DType.float64](ptr, src.size_value)
         else:
@@ -771,14 +773,16 @@ def maybe_reduce_contiguous(src: Array, mut result: Array, op: Int) raises -> Bo
         var acc: Float64
         if src.dtype_code == ArrayDType.FLOAT32.value:
             var ptr = contiguous_ptr[DType.float32](src)
-            if should_parallelize_bytes(src.size_value * 4, REDUCE_GRAIN):
-                acc = Float64(reduce_prod_par_typed[DType.float32](ptr, src.size_value))
+            var nworkers = worker_count_for_bytes(src.size_value, src.size_value * 4, REDUCE_GRAIN)
+            if nworkers > 1:
+                acc = Float64(reduce_prod_par_typed[DType.float32](ptr, src.size_value, nworkers))
             else:
                 acc = Float64(reduce_prod_typed[DType.float32](ptr, src.size_value))
         elif src.dtype_code == ArrayDType.FLOAT64.value:
             var ptr = contiguous_ptr[DType.float64](src)
-            if should_parallelize_bytes(src.size_value * 8, REDUCE_GRAIN):
-                acc = Float64(reduce_prod_par_typed[DType.float64](ptr, src.size_value))
+            var nworkers = worker_count_for_bytes(src.size_value, src.size_value * 8, REDUCE_GRAIN)
+            if nworkers > 1:
+                acc = Float64(reduce_prod_par_typed[DType.float64](ptr, src.size_value, nworkers))
             else:
                 acc = Float64(reduce_prod_typed[DType.float64](ptr, src.size_value))
         else:
@@ -791,28 +795,28 @@ def maybe_reduce_contiguous(src: Array, mut result: Array, op: Int) raises -> Bo
         var acc: Float64
         if src.dtype_code == ArrayDType.FLOAT32.value:
             var ptr = contiguous_ptr[DType.float32](src)
-            var go_par = should_parallelize_bytes(src.size_value * 4, REDUCE_GRAIN)
+            var nworkers = worker_count_for_bytes(src.size_value, src.size_value * 4, REDUCE_GRAIN)
             if op == ReduceOp.MIN.value:
-                if go_par:
-                    acc = Float64(reduce_min_par_typed[DType.float32](ptr, src.size_value))
+                if nworkers > 1:
+                    acc = Float64(reduce_min_par_typed[DType.float32](ptr, src.size_value, nworkers))
                 else:
                     acc = Float64(reduce_min_typed[DType.float32](ptr, src.size_value))
             else:
-                if go_par:
-                    acc = Float64(reduce_max_par_typed[DType.float32](ptr, src.size_value))
+                if nworkers > 1:
+                    acc = Float64(reduce_max_par_typed[DType.float32](ptr, src.size_value, nworkers))
                 else:
                     acc = Float64(reduce_max_typed[DType.float32](ptr, src.size_value))
         elif src.dtype_code == ArrayDType.FLOAT64.value:
             var ptr = contiguous_ptr[DType.float64](src)
-            var go_par = should_parallelize_bytes(src.size_value * 8, REDUCE_GRAIN)
+            var nworkers = worker_count_for_bytes(src.size_value, src.size_value * 8, REDUCE_GRAIN)
             if op == ReduceOp.MIN.value:
-                if go_par:
-                    acc = Float64(reduce_min_par_typed[DType.float64](ptr, src.size_value))
+                if nworkers > 1:
+                    acc = Float64(reduce_min_par_typed[DType.float64](ptr, src.size_value, nworkers))
                 else:
                     acc = Float64(reduce_min_typed[DType.float64](ptr, src.size_value))
             else:
-                if go_par:
-                    acc = Float64(reduce_max_par_typed[DType.float64](ptr, src.size_value))
+                if nworkers > 1:
+                    acc = Float64(reduce_max_par_typed[DType.float64](ptr, src.size_value, nworkers))
                 else:
                     acc = Float64(reduce_max_typed[DType.float64](ptr, src.size_value))
         else:
