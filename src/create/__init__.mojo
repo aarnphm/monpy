@@ -188,6 +188,8 @@ from .ops.linalg import (
     inv_ops,
     lstsq_ops,
     matmul_ops,
+    norm2_all_ops,
+    norm2_last_axis_ops,
     outer_ops,
     pinv_ops,
     qr_ops,

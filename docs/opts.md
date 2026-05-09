@@ -3436,3 +3436,59 @@ Verification:
 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/create/ops/linalg.mojo src/create/ops/__init__.mojo src/create/__init__.mojo src/lib.mojo
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py -q
 ```
+
+### 2026-05-09 native L2 and Frobenius norm
+
+Fresh array-only rerun after native `outer`, using the live dirty tree:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-array-20260509-vecdot-frontier --no-progress --no-stdout
+```
+
+The frontier moved again:
+
+| row                                      | monpy us | numpy us | ratio  |
+| ---------------------------------------- | -------: | -------: | -----: |
+| `array/linalg_api/norm_vec2_32_f64`      |   11.440 |    2.809 | 3.987x |
+| `array/linalg_api/matrix_norm_fro_16_f64` |   14.047 |    3.968 | 3.529x |
+| `array/linalg_api/vecdot_axis1_8x4_f64`  |    7.385 |    3.009 | 2.454x |
+
+Patch:
+
+- Added `_native.linalg_norm2_all` for vector L2 and rank-2 Frobenius norm.
+- Added `_native.linalg_norm2_last_axis` for row-wise vector norms.
+- The contiguous float32/float64 path does one SIMD sum-of-squares pass and
+  writes the square root directly. No square temporary, no generic
+  `sum(axis=...)`, no second trip through Python.
+- Kept the route narrow in Python: float32/float64 only, `keepdims=False`, and
+  the exact L2/Frobenius cases the current facade already handles.
+
+Post-patch array rerun:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-array-20260509-native-norm2 --no-progress --no-stdout
+```
+
+Key movement:
+
+| row                                      | before us | after us | before ratio | after ratio | speedup |
+| ---------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/linalg_api/norm_vec2_32_f64`      |    11.440 |    3.188 |       3.987x |      1.165x |  3.59:1 |
+| `array/linalg_api/matrix_norm_fro_16_f64` |    14.047 |    4.679 |       3.529x |      1.172x |  3.00:1 |
+| `array/linalg_api/vector_norm_axis1_8x4_f64` | 7.715 |    3.913 |       1.867x |      0.960x |  1.97:1 |
+
+Read:
+
+- The top two norm rows stopped being the top problem. Good.
+- The new top row is back to `array/linalg_api/vecdot_axis1_8x4_f64` at
+  2.828x slower (`7.973 us` vs `2.819 us`).
+- That row still does `multiply(A, B)` plus `sum(axis=1)`. The next kernel
+  should be row-wise vecdot, not another facade shuffle.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/create/ops/linalg.mojo src/create/ops/__init__.mojo src/create/__init__.mojo src/lib.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py -q
+```

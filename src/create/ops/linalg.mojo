@@ -135,6 +135,120 @@ def outer_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObje
     return PythonObject(alloc=result^)
 
 
+def norm2_sumsq_contiguous_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin], size: Int
+) raises -> Float64 where dtype.is_floating_point():
+    comptime width = simd_width_of[dtype]()
+    var a0 = SIMD[dtype, width](0)
+    var a1 = SIMD[dtype, width](0)
+    var a2 = SIMD[dtype, width](0)
+    var a3 = SIMD[dtype, width](0)
+    var i = 0
+    comptime block = width * 4
+    while i + block <= size:
+        var v0 = src_ptr.load[width=width](i)
+        var v1 = src_ptr.load[width=width](i + width)
+        var v2 = src_ptr.load[width=width](i + 2 * width)
+        var v3 = src_ptr.load[width=width](i + 3 * width)
+        a0 += v0 * v0
+        a1 += v1 * v1
+        a2 += v2 * v2
+        a3 += v3 * v3
+        i += block
+    var acc_vec = (a0 + a1) + (a2 + a3)
+    while i + width <= size:
+        var v = src_ptr.load[width=width](i)
+        acc_vec += v * v
+        i += width
+    var acc = Float64(acc_vec.reduce_add()[0])
+    while i < size:
+        var v = Float64(src_ptr[i])
+        acc += v * v
+        i += 1
+    return acc
+
+
+def norm2_all_ops(array_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    var shape = List[Int]()
+    var result = make_empty_array(src[].dtype_code, shape^)
+    if is_c_contiguous(src[]):
+        if src[].dtype_code == ArrayDType.FLOAT32.value:
+            set_logical_from_f64(
+                result,
+                0,
+                _sqrt(
+                    norm2_sumsq_contiguous_typed[DType.float32](contiguous_ptr[DType.float32](src[]), src[].size_value)
+                ),
+            )
+            return PythonObject(alloc=result^)
+        if src[].dtype_code == ArrayDType.FLOAT64.value:
+            set_logical_from_f64(
+                result,
+                0,
+                _sqrt(
+                    norm2_sumsq_contiguous_typed[DType.float64](contiguous_ptr[DType.float64](src[]), src[].size_value)
+                ),
+            )
+            return PythonObject(alloc=result^)
+    var acc = 0.0
+    for i in range(src[].size_value):
+        var v = get_logical_as_f64(src[], i)
+        acc += v * v
+    set_logical_from_f64(result, 0, _sqrt(acc))
+    return PythonObject(alloc=result^)
+
+
+def norm2_last_axis_contiguous_typed[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    rows: Int,
+    cols: Int,
+) raises where dtype.is_floating_point():
+    for row in range(rows):
+        out_ptr[row] = Scalar[dtype](_sqrt(norm2_sumsq_contiguous_typed[dtype](src_ptr + row * cols, cols)))
+
+
+def norm2_last_axis_ops(array_obj: PythonObject) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    if len(src[].shape) != 2:
+        raise Error("linalg_norm2_last_axis requires rank-2 input")
+    var rows = src[].shape[0]
+    var cols = src[].shape[1]
+    var shape = List[Int]()
+    shape.append(rows)
+    var result = make_empty_array(src[].dtype_code, shape^)
+    if is_c_contiguous(src[]):
+        if src[].dtype_code == ArrayDType.FLOAT32.value:
+            norm2_last_axis_contiguous_typed[DType.float32](
+                contiguous_ptr[DType.float32](src[]),
+                contiguous_ptr[DType.float32](result),
+                rows,
+                cols,
+            )
+            return PythonObject(alloc=result^)
+        if src[].dtype_code == ArrayDType.FLOAT64.value:
+            norm2_last_axis_contiguous_typed[DType.float64](
+                contiguous_ptr[DType.float64](src[]),
+                contiguous_ptr[DType.float64](result),
+                rows,
+                cols,
+            )
+            return PythonObject(alloc=result^)
+    for row in range(rows):
+        var acc = 0.0
+        var base = row * cols
+        for col in range(cols):
+            var v = get_logical_as_f64(src[], base + col)
+            acc += v * v
+        set_logical_from_f64(result, row, _sqrt(acc))
+    return PythonObject(alloc=result^)
+
+
 def matmul_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObject:
     var lhs = lhs_obj.downcast_value_ptr[Array]()
     var rhs = rhs_obj.downcast_value_ptr[Array]()

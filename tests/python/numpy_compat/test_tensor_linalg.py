@@ -106,6 +106,18 @@ def test_norm_default_l2() -> None:
   assert float(mp.linalg.norm(a)) == 5.0
 
 
+def test_norm_last_axis_matches_numpy() -> None:
+  a_np = numpy.asarray([[3.0, 4.0], [5.0, 12.0]], dtype=numpy.float64)
+  out = mp.linalg.vector_norm(mp.asarray(a_np, dtype=mp.float64), axis=1)
+  numpy.testing.assert_allclose(numpy.asarray(out), numpy.linalg.vector_norm(a_np, axis=1), rtol=1e-12)
+
+
+def test_matrix_norm_fro_matches_numpy() -> None:
+  a_np = numpy.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=numpy.float64)
+  out = mp.linalg.matrix_norm(mp.asarray(a_np, dtype=mp.float64))
+  numpy.testing.assert_allclose(float(out), float(numpy.linalg.matrix_norm(a_np)), rtol=1e-12)
+
+
 def test_norm_l1_and_inf() -> None:
   import math
   a = mp.asarray([1.0, -2.0, 3.0], dtype=mp.float64)

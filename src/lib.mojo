@@ -57,6 +57,8 @@ from create import (
     materialize_c_contiguous_ops,
     matmul_ops,
     moveaxis_single_ops,
+    norm2_all_ops,
+    norm2_last_axis_ops,
     outer_ops,
     pad_constant_ops,
     pinv_ops,
@@ -202,6 +204,8 @@ def PyInit__native() -> PythonObject:
         module.def_function[dtype_promote_types_py_ops]("_promote_types")
         module.def_function[dtype_can_cast_py_ops]("_can_cast")
         module.def_function[matmul_ops]("matmul")
+        module.def_function[norm2_all_ops]("linalg_norm2_all")
+        module.def_function[norm2_last_axis_ops]("linalg_norm2_last_axis")
         module.def_function[outer_ops]("linalg_outer")
         module.def_function[solve_ops]("linalg_solve")
         module.def_function[inv_ops]("linalg_inv")

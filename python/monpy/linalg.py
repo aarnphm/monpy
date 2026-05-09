@@ -43,6 +43,20 @@ def _array(value:object)->ndarray:
 def _matmul(a:ndarray, b:ndarray)->ndarray:
   return ndarray._wrap(_native.matmul(a._native, b._native))
 
+def _has_norm2_kernel(x:ndarray)->bool:
+  return x.dtype in(float32, float64)
+
+def _norm2_all(x:ndarray)->ndarray:
+  return ndarray._wrap(_w(_native.linalg_norm2_all, x._native))
+
+def _norm2_last_axis(x:ndarray)->ndarray:
+  return ndarray._wrap(_w(_native.linalg_norm2_last_axis, x._native))
+
+def _normalize_axis(axis:int, ndim:int)->int:
+  ax=axis+ndim if axis<0 else axis
+  if ax<0 or ax>=ndim:raise ValueError("axis out of range")
+  return ax
+
 _INF=float("inf")
 _NEG_INF=float("-inf")
 
@@ -191,6 +205,12 @@ def trace(a:object, offset:int=0, axis1:int=0, axis2:int=1, dtype:object=None)->
 
 def norm(x:object, ord:object=None, axis:object=None, keepdims:bool=False)->object:
   X=_array(x)
+  if _has_norm2_kernel(X) and not keepdims and (ord is None or ord==2):
+    if axis is None and X.ndim in(1, 2):return _norm2_all(X)
+    if isinstance(axis, int):
+      ax=_normalize_axis(axis, X.ndim)
+      if X.ndim==1 and ax==0:return _norm2_all(X)
+      if X.ndim==2 and ax==1:return _norm2_last_axis(X)
   if axis is None and X.ndim==1:axis=0
   if axis is None and X.ndim==2 and ord is None:
     return sqrt(_sum(square(X)))
@@ -220,6 +240,9 @@ def vector_norm(x:object, axis:object=None, keepdims:bool=False, ord:object=2)->
 def matrix_norm(x:object, axis:object=(-2, -1), keepdims:bool=False, ord:object=None)->object:
   if ord is not None:raise NotImplementedError("matrix_norm with ord != None not implemented in v1")
   X=_array(x)
+  if _has_norm2_kernel(X) and X.ndim==2 and not keepdims:
+    axes=tuple(sorted(_normalize_axis(a, X.ndim) for a in _axis_tuple(axis)))
+    if axes==(0, 1):return _norm2_all(X)
   return sqrt(_sum(square(X), axis=axis, keepdims=keepdims))
 
 def matrix_rank(M:object, tol:object=None, hermitian:bool=False)->int:
