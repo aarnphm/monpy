@@ -5,11 +5,11 @@ per row, layer-norm does mean+variance+normalize per row. Per-row work
 has scalar-only scratch (no buffer allocation), so rows can be sliced
 across worker threads without contention.
 
-Parallel path: `worker_count_for_rows(rows)` picks a row-budgeted worker
-count, then partitions the row range via `sync_parallelize`.
-Each worker handles a contiguous slice of rows — same per-row body as
-the serial path, just stitched. The `result.backend_code = ...` writes
-stay outside the parallel region so worker bodies remain pure.
+Parallel path: `worker_count_for_row_elements(rows, cols, ...)` picks a
+shape-budgeted worker count, then partitions the row range via
+`sync_parallelize`. Each worker handles a contiguous slice of rows — same
+per-row body as the serial path, just stitched. The `result.backend_code = ...`
+writes stay outside the parallel region so worker bodies remain pure.
 """
 
 from std.algorithm import sync_parallelize
@@ -18,7 +18,7 @@ from std.math import ceildiv, exp as _exp, sqrt as _sqrt
 from array import Array, contiguous_ptr
 from domain import BackendKind
 
-from elementwise.kernels.parallel import worker_count_for_rows
+from elementwise.kernels.parallel import ROW_HEAVY_GRAIN_ELEMS, worker_count_for_row_elements
 
 
 def _softmax_last_axis_f32(src: Array, mut result: Array) raises:
@@ -45,7 +45,7 @@ def _softmax_last_axis_f32(src: Array, mut result: Array) raises:
             for col in range(cols):
                 out_ptr[base + col] *= inv_denom
 
-    var nw = worker_count_for_rows(rows)
+    var nw = worker_count_for_row_elements(rows, cols, ROW_HEAVY_GRAIN_ELEMS)
     if nw > 1:
         var chunk = ceildiv(rows, nw)
 
@@ -104,7 +104,7 @@ def _scaled_masked_softmax_last_axis_f32(
                 var index = base + col
                 out_ptr[index] *= inv_denom
 
-    var nw = worker_count_for_rows(rows)
+    var nw = worker_count_for_row_elements(rows, cols, ROW_HEAVY_GRAIN_ELEMS)
     if nw > 1:
         var chunk = ceildiv(rows, nw)
 
@@ -153,7 +153,7 @@ def layer_norm_last_axis_typed[
                 value = value * Float64(gain_ptr[col]) + Float64(bias_ptr[col])
                 out_ptr[base + col] = Scalar[dt](value)
 
-    var nw = worker_count_for_rows(rows)
+    var nw = worker_count_for_row_elements(rows, cols, ROW_HEAVY_GRAIN_ELEMS)
     if nw > 1:
         var chunk = ceildiv(rows, nw)
 
@@ -201,7 +201,7 @@ def softmax_last_axis_typed[dt: DType](src: Array, mut result: Array) raises whe
             for col in range(cols):
                 out_ptr[base + col] = Scalar[dt](Float64(out_ptr[base + col]) * inv_denom)
 
-    var nw = worker_count_for_rows(rows)
+    var nw = worker_count_for_row_elements(rows, cols, ROW_HEAVY_GRAIN_ELEMS)
     if nw > 1:
         var chunk = ceildiv(rows, nw)
 
@@ -257,7 +257,7 @@ def scaled_masked_softmax_last_axis_typed[
                 var index = base + col
                 out_ptr[index] = Scalar[dt](Float64(out_ptr[index]) * inv_denom)
 
-    var nw = worker_count_for_rows(rows)
+    var nw = worker_count_for_row_elements(rows, cols, ROW_HEAVY_GRAIN_ELEMS)
     if nw > 1:
         var chunk = ceildiv(rows, nw)
 

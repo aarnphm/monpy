@@ -53,12 +53,14 @@ from .parallel import (
     ELEMENTWISE_LIGHT_GRAIN,
     PER_ROW_MIN,
     REDUCE_GRAIN,
+    ROW_HEAVY_GRAIN_ELEMS,
     is_serial_only,
     should_parallelize_bytes,
     should_parallelize_rows,
     thread_limit,
     worker_count,
     worker_count_for_bytes,
+    worker_count_for_row_elements,
     worker_count_for_rows,
 )
 from .reduce import (

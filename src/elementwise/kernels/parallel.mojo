@@ -30,8 +30,8 @@ from std.os.env import getenv
 from std.sys import num_performance_cores
 
 
-# Grain-size constants. These are per-worker byte/row budgets, not
-# total-tensor gates. Reductions reach parity earliest because per-
+# Grain-size constants. These are per-worker byte/row-element budgets,
+# not total-tensor gates. Reductions reach parity earliest because per-
 # worker Float64 partial accumulators are tiny and the combine is O(1).
 # Element-wise light ops (add/mul/cmp) need more bytes because per-
 # element work is one SIMD instruction; element-wise heavy ops (exp/log/
@@ -39,7 +39,8 @@ from std.sys import num_performance_cores
 comptime REDUCE_GRAIN = 1 << 20  # 1MB
 comptime ELEMENTWISE_LIGHT_GRAIN = 1 << 21  # 2MB
 comptime ELEMENTWISE_HEAVY_GRAIN = 1 << 18  # 256KB
-comptime PER_ROW_MIN = 16  # row budget per worker for row-wise kernels
+comptime ROW_HEAVY_GRAIN_ELEMS = 1 << 13  # row elements per worker for softmax/layernorm
+comptime PER_ROW_MIN = 16  # row-slice budget once total row work is large enough
 
 
 def _init_thread_limit() -> Int:
@@ -125,10 +126,9 @@ def worker_count_for_bytes(work_units: Int, byte_count: Int, grain_per_worker: I
 def worker_count_for_rows(row_count: Int) -> Int:
     """Resolve worker count for independent row-wise kernels.
 
-    `PER_ROW_MIN` is a rows-per-worker budget. This means 16 rows do not
-    fan out to every core; 128 rows can buy up to 8 workers, 1024 rows can
-    buy many-core fanout subject to `num_performance_cores()` and
-    `MONPY_THREADS`.
+    This legacy row-only form should be used only when per-row work is known
+    to be heavy. For shape-dependent kernels, prefer
+    `worker_count_for_row_elements`.
     """
     if row_count < PER_ROW_MIN:
         return 1
@@ -138,6 +138,35 @@ def worker_count_for_rows(row_count: Int) -> Int:
         return 1
     if max_by_rows < n:
         n = max_by_rows
+    if n < 1:
+        return 1
+    return n
+
+
+def worker_count_for_row_elements(row_count: Int, elements_per_row: Int, elements_per_worker: Int) -> Int:
+    """Resolve worker count for independent row-wise kernels by total work.
+
+    Row kernels can only split between rows, but row count alone is not enough:
+    a 32x32 softmax loses to spawn overhead, while a 32x4096 softmax has real
+    work in each row. This policy caps by hardware/env, row slices, and total
+    row elements per worker.
+    """
+    if row_count <= 1 or elements_per_row <= 0:
+        return 1
+    var total_elements = row_count * elements_per_row
+    if total_elements < elements_per_worker:
+        return 1
+    var n = worker_count(row_count)
+    var max_by_rows = row_count // PER_ROW_MIN
+    if max_by_rows < 1:
+        max_by_rows = 1
+    var max_by_elements = total_elements // elements_per_worker
+    if max_by_elements < 1:
+        return 1
+    if max_by_rows < n:
+        n = max_by_rows
+    if max_by_elements < n:
+        n = max_by_elements
     if n < 1:
         return 1
     return n
@@ -159,10 +188,8 @@ def should_parallelize_bytes(byte_count: Int, grain: Int) -> Bool:
 def should_parallelize_rows(row_count: Int) -> Bool:
     """Gate for per-row parallelism (softmax, layernorm, axis-reduce).
 
-    Below `PER_ROW_MIN` rows the thread setup (~1-10us) dominates
-    per-row work; serial wins. Above this, even narrow rows can be
-    split across workers profitably because the per-row work itself
-    is non-trivial (max scan, exp scan, normalize for softmax; sum +
-    sumsq scan for layernorm).
+    Below `PER_ROW_MIN` rows the thread setup (~1-10us) dominates unless each
+    row is wide. Production row kernels should prefer
+    `worker_count_for_row_elements` so 32x32 attention does not fan out.
     """
     return worker_count_for_rows(row_count) > 1
