@@ -55,6 +55,7 @@ from create import (
     lstsq_ops,
     materialize_c_contiguous_ops,
     matmul_ops,
+    moveaxis_single_ops,
     pad_constant_ops,
     pinv_ops,
     predicate_ops,
@@ -154,6 +155,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[broadcast_to_ops]("broadcast_to")
         module.def_function[expand_dims_ops]("expand_dims")
         module.def_function[flip_ops]("flip")
+        module.def_function[moveaxis_single_ops]("moveaxis_single")
         module.def_function[astype_ops]("astype")
         module.def_function[materialize_c_contiguous_ops]("materialize_c_contiguous")
         module.def_function[diagonal_ops]("diagonal")

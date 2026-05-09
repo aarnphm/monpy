@@ -169,6 +169,42 @@ def transpose_ops(array_obj: PythonObject, axes_obj: PythonObject) raises -> Pyt
     return PythonObject(alloc=view^)
 
 
+def moveaxis_single_ops(
+    array_obj: PythonObject,
+    source_obj: PythonObject,
+    destination_obj: PythonObject,
+) raises -> PythonObject:
+    # NumPy moveaxis for the overwhelmingly common single-axis case:
+    # remove `source`, then insert it at `destination`, preserving the
+    # order of every other axis.
+    var src = array_obj.downcast_value_ptr[Array]()
+    var ndim = len(src[].shape)
+    var source = Int(py=source_obj)
+    var destination = Int(py=destination_obj)
+    if source < 0:
+        source += ndim
+    if destination < 0:
+        destination += ndim
+    if source < 0 or source >= ndim or destination < 0 or destination >= ndim:
+        raise Error("moveaxis: axis out of range")
+
+    var axes = List[Int]()
+    var next_source_axis = 0
+    for out_axis in range(ndim):
+        if out_axis == destination:
+            axes.append(source)
+        else:
+            while next_source_axis == source:
+                next_source_axis += 1
+            axes.append(next_source_axis)
+            next_source_axis += 1
+
+    var src_layout = as_layout(src[])
+    var permuted = cute_select(src_layout, axes)
+    var view = array_with_layout(src[], permuted)
+    return PythonObject(alloc=view^)
+
+
 def swapaxes_ops(array_obj: PythonObject, axis1_obj: PythonObject, axis2_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
     var ndim = len(src[].shape)

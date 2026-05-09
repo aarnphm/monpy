@@ -1077,6 +1077,9 @@ def squeeze(x:object, axis:int|Sequence[int]|None=None)->ndarray:
 
 def moveaxis(x:object, source:int|Sequence[int], destination:int|Sequence[int])->ndarray:
   arr=asarray(x)
+  if isinstance(source, builtins.int) and isinstance(destination, builtins.int):
+    try:return ndarray._wrap(_native.moveaxis_single(arr._native, source, destination), base=arr)
+    except Exception as exc:raise ValueError(str(exc)) from exc
   n=arr.ndim
   src=(source,) if isinstance(source, builtins.int) else tuple(source)
   dst=(destination,) if isinstance(destination, builtins.int) else tuple(destination)

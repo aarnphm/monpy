@@ -2373,3 +2373,79 @@ The current stdlib sweep can make `sin` and `add` look worse than the public
 NumPy path, so the next pass should run `bench_parallel.mojo`, then decide
 whether static unary fast paths should stay serial for cheap ops and fan out
 only for wide transcendentals.
+
+### 2026-05-09 single-axis moveaxis native view
+
+The saved array slice initially made `flip_axis0_f32` look like the worst view
+row: 10.137 us for monpy vs 3.233 us for NumPy, a 3.122x ratio. That was a
+low-loop false lead. A direct 50k-loop `BenchCase` probe put the same row at
+3.263-3.305 us for monpy vs 3.151-3.169 us for NumPy, a 1.030x-1.049x range.
+
+The stable target was `moveaxis_f32`:
+
+- before: 7.670-7.722 us for monpy vs 3.904-3.984 us for NumPy,
+  a 1.935x-1.964x range inside the repo runner.
+- clean inner loop before: `mnp.moveaxis(s_mp, 0, -1)` took about 5.23 us, while
+  the equivalent `s_mp.transpose((1, 2, 0))` took about 2.95 us.
+- primary source check: NumPy's `moveaxis` normalizes axes, removes `source`
+  from the axis order, inserts it at `destination`, then calls `transpose`.
+
+`src/create/ops/shape.mojo` now exposes `moveaxis_single_ops` for the common
+`int -> int` case. It builds the remove-then-insert permutation in Mojo and
+returns the same layout-algebra view as `transpose_ops`, without Python tuple,
+set, list, and axes-object parsing on the hot path. Sequence `moveaxis` still
+uses the older generic Python path.
+
+After the patch:
+
+| row                  | monpy us       | NumPy us       | ratio range     |
+| -------------------- | -------------: | -------------: | --------------: |
+| `views/moveaxis_f32` | 4.591 .. 4.611 | 3.828 .. 3.847 | 1.196x .. 1.205x |
+
+Clean inner-loop timing moved `mnp.moveaxis(s_mp, 0, -1)` to about 2.38 us, with
+the raw native `moveaxis_single` call at about 2.20 us. That is roughly a 2.2:1
+direct-call speedup from the original 5.23 us path. It still does not beat NumPy
+in the repo runner because these 24-element view rows are mostly Python and
+benchmark-harness overhead; the native layout work is now the smaller part of
+the row.
+
+The saved low-loop array sweep at
+`results/local-sweep-20260509-moveaxis-single-after-0753` reported
+`moveaxis_f32` at 4.831 us for monpy vs 4.083 us for NumPy, a 1.184x median
+ratio with a 1.109x-1.259x round range. The same low-loop sweep still has noisy
+unrelated rows (`eigh_8_f64` at 2.285x), so use the direct focused probe for the
+moveaxis delta and the saved sweep for ranking the next blocker.
+
+Verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+.venv/bin/python - <<'PY'
+import numpy as np
+import monpy as mnp
+for shape in [(2, 3, 4), (3, 4), (5,), (2, 3, 4, 5)]:
+    src = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+    arr = mnp.asarray(src)
+    for source in range(-len(shape), len(shape)):
+        for dest in range(-len(shape), len(shape)):
+            got = np.asarray(mnp.moveaxis(arr, source, dest))
+            expected = np.moveaxis(src, source, dest)
+            assert got.shape == expected.shape
+            assert np.array_equal(got, expected)
+PY
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_creation_helpers.py -q
+.venv/bin/python - <<'PY'
+from monpy._bench.core import build_cases, run_case
+cases = {case.name: case for case in build_cases(vector_size=1024, vector_sizes=(65536,), matrix_sizes=(16,), linalg_sizes=(2,))}
+case = cases["moveaxis_f32"]
+for i in range(1, 4):
+    sample = run_case(case, loops=50000, repeats=7, round_index=i)
+    print(sample)
+PY
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types array --loops 10 --repeats 3 --rounds 2 --vector-sizes 65536,1048576 --matrix-sizes 32 --linalg-sizes 8 --format json --sort ratio --output-dir results/local-sweep-20260509-moveaxis-single-after-0753 --no-progress --no-stdout
+```
+
+Next target: split `squeeze_axis0_f32` before optimizing it. The current row is
+stable at about 1.80x, but its benchmark body creates a fresh NumPy zero array
+and calls `mnp.asarray(...)` inside the timed lambda, so it is not a clean
+squeeze-only signal yet. `fliplr_f32` is the next clean view row at about 1.50x.
