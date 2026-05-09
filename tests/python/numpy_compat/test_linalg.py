@@ -73,6 +73,18 @@ def test_trace_dtype_argument_casts_accumulator() -> None:
   assert_same_values(trace_f32_out, trace_f32_oracle)
 
 
+def test_linalg_trace_rank2_uses_numpy_dtype_and_offset_contract() -> None:
+  arr = np.arange(16, dtype=np.float64).reshape(4, 4)
+  oracle = numpy.arange(16, dtype=numpy.float64).reshape(4, 4)
+
+  trace_out = np.linalg.trace(arr, offset=1, dtype=np.float32)
+  trace_oracle = numpy.linalg.trace(oracle, offset=1, dtype=numpy.float32)
+
+  assert_same_result_kind(trace_out, trace_oracle)
+  assert_same_shape_dtype(trace_out, trace_oracle)
+  assert_same_values(trace_out, trace_oracle)
+
+
 def test_linalg_solve_inv_and_det_match_numpy() -> None:
   a = np.asarray([[3.0, 1.0], [1.0, 2.0]], dtype=np.float64)
   b = np.asarray([9.0, 8.0], dtype=np.float64)

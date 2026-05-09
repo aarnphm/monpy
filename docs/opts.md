@@ -3802,6 +3802,89 @@ Read:
   matmul `1.008x`. Threading still has the old policy shape: `threads1` mean
   `1.059x`, `threads4` mean `0.620x`, and `auto` mean `0.764x`.
 
+### 2026-05-09 native linalg trace facade
+
+Fresh frontier after the meshgrid patch:
+
+| row                                            | monpy us | numpy us | ratio  |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `array/interop/asarray_squeeze_axis0_f32`      |    4.408 |    2.351 | 1.922x |
+| `array/views/transpose_add_f32`                |    4.724 |    2.581 | 1.825x |
+| `array/linalg_api/trace_16_f64`                |    6.392 |    3.328 | 1.732x |
+| `array/copy/ascontiguousarray_transpose_f32`   |    4.033 |    2.436 | 1.697x |
+
+I did a read-only pass on `asarray_squeeze_axis0_f32` first. The row is real,
+but the honest fix is shared buffer-ingress metadata work, not a fused
+`asarray+squeeze` trick. `asarray` is already observable as an `ndarray`; by
+the time `squeeze` runs, the wrapper exists. The next clean seam there is
+`src/buffer.mojo`, probably rank-small metadata construction.
+
+`trace_16_f64` was cleaner. `mnp.linalg.trace` still composed
+`diagonal + sum` in Python, while top-level `mnp.trace` already called the
+native `_native.trace` primitive. Same contract, different facade. Bonk.
+
+Profile before patch:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/linalg_api/trace_16_f64 --types array,attention --candidate monpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-trace16-linalg-before --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/linalg_api/trace_16_f64 --types array,attention --candidate numpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-trace16-numpy-before --sample --no-perf-stat
+```
+
+Read:
+
+- `monpy-profile`: monpy `5.713 us/call`, NumPy `3.462 us/call`.
+- cProfile for 50k calls: `1.25M` calls and `0.370 s` wall.
+- The split was `0.231 s` in `sum`, `0.092 s` in `diagonal`, then native
+  reduce. This was facade composition, not a kernel deficit.
+
+Patch:
+
+- `python/monpy/linalg.py::trace` now routes rank-2 inputs through
+  `_native.trace`.
+- Scalar extraction uses `Array.get_scalar(0)` directly, avoiding a temporary
+  `ndarray` wrapper for a known scalar-shaped native result.
+- Batched `linalg.trace` stays on the old diagonal/reduction path because
+  current native `trace_ops` is scalar-shaped.
+
+Post-patch rerun:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_linalg.py -q
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py -q
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/linalg_api/trace_16_f64 --types array,attention --candidate monpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-trace16-linalg-native-scalar --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-array-20260509-native-linalg-trace-scalar --no-progress --no-stdout
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo --include-numojo --include-threading --thread-caps auto,1,2,4,8 --format json --sort slowest --output-dir results/local-20260509-2305-mojo-frontier --no-stdout --timeout 240
+```
+
+Key movement:
+
+| row                             | before us | after us | before ratio | after ratio | speedup |
+| ------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/linalg_api/trace_16_f64` |     6.392 |    3.463 |       1.732x |      1.055x |  1.85:1 |
+
+Profile movement:
+
+| probe                         | before | after | movement |
+| ----------------------------- | -----: | ----: | -------: |
+| `monpy-profile` us/call       |  5.713 | 3.786 |  1.51:1 |
+| cProfile calls for 50k calls  |  1.25M | 0.30M |  4.17:1 |
+| cProfile wall for 50k calls   | 0.370s | 0.089s |  4.16:1 |
+
+Read:
+
+- The row is now near parity. In the benchmark run, monpy was `3.463 us` vs
+  NumPy `3.455 us`.
+- The patch removed the `diagonal + sum` facade stack. The remaining trace cost
+  is one native call plus scalar extraction.
+- The current top cluster is back to shared metadata and view work:
+  `concatenate_axis0_8x128_f64` at `1.843x`, `transpose_add_f32` at `1.799x`,
+  and `asarray_squeeze_axis0_f32` at `1.773x`.
+- Pure Mojo remains a separate policy/kernel frontier: 114 rows, elementwise
+  mean `0.924x`, reductions `1.008x`, matmul `1.131x`, `threads1` mean
+  `1.074x`, `threads4` mean `0.703x`. Worst row in this run was
+  `elementwise/exp_par_f64_262144` at `1.760x`; that points at the parallel exp
+  policy/kernel, not this Python linalg facade.
+
 ### 2026-05-09 empty-like shape override allocator
 
 Fresh frontier before patch:

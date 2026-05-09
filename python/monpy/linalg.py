@@ -4,6 +4,7 @@ from __future__ import annotations
 import typing, builtins, operator # used by einsum (zip, etc.)
 from . import (
   _native,
+  _resolve_dtype,
   asarray,
   ascontiguousarray,
   cumsum,
@@ -227,7 +228,14 @@ def vecdot(a:object, b:object, axis:int=-1)->object:
   return _sum(multiply(A, B), axis=axis)
 
 def trace(a:object, offset:int=0, axis1:int=0, axis2:int=1, dtype:object=None)->object:
-  d=diagonal(a, offset=offset, axis1=axis1, axis2=axis2)
+  A=_array(a)
+  if A.ndim==2:
+    dc=-1 if dtype is None else _resolve_dtype(dtype).code
+    try:
+      out=_native.trace(A._native, builtins.int(offset), builtins.int(axis1), builtins.int(axis2), dc)
+    except Exception as exc:raise ValueError(str(exc)) from exc
+    return out.get_scalar(0)
+  d=diagonal(A, offset=offset, axis1=axis1, axis2=axis2)
   return _sum(d, dtype=dtype) if d.ndim==1 else _sum(d, axis=-1, dtype=dtype)
 
 def norm(x:object, ord:object=None, axis:object=None, keepdims:bool=False)->object:
