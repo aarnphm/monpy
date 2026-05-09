@@ -54,6 +54,7 @@ from .linalg import (
     eig_ops,
     eigh_ops,
     inv_ops,
+    kron_ops,
     lstsq_ops,
     matmul_ops,
     norm2_all_ops,

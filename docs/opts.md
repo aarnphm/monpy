@@ -3656,3 +3656,60 @@ MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarn
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_linalg.py tests/python/numpy_compat/test_numeric.py -q
 ```
+
+### 2026-05-09 native Kronecker product
+
+The next fresh array sweep made `kron_2x2_f64` the best target that was not
+already trapped behind scalar-return facade cost:
+
+| row                                         | monpy us | numpy us | ratio  |
+| ------------------------------------------- | -------: | -------: | -----: |
+| `array/linalg_api/inner_32_f64`             |    5.570 |    2.413 | 2.309x |
+| `array/linalg_api/kron_2x2_f64`             |   22.563 |    9.853 | 2.290x |
+| `array/linalg_api/tensorinv_2x2x2x2_f64`    |   12.997 |    5.580 | 2.288x |
+| `array/linalg_api/dot_1d_32_f64`            |    5.458 |    2.415 | 2.259x |
+| `array/linalg_api/tensorsolve_2x3x2x3_f64`  |   14.827 |    6.600 | 2.246x |
+
+Patch:
+
+- Added `_native.linalg_kron`.
+- The rank-2 contiguous float32/float64 path writes the Kronecker blocks
+  directly, with SIMD over the right-hand innermost axis.
+- The generic fallback keeps NumPy's rank-left-padding behavior and covers
+  strided and complex inputs by mapping each output coordinate back to source
+  logical indices.
+- Routed `monpy.linalg.kron` through the native leaf. The old Python path did
+  `reshape(A)`, `reshape(B)`, `multiply`, then `reshape(out)`.
+
+Post-patch array rerun:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-array-20260509-native-kron --no-progress --no-stdout
+```
+
+Key movement:
+
+| row                             | before us | after us | before ratio | after ratio | speedup |
+| ------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/linalg_api/kron_2x2_f64` |    22.563 |    3.301 |       2.290x |      0.341x |  6.84:1 |
+
+Read:
+
+- `kron_2x2_f64` moved from 2.29x slower than NumPy to faster than NumPy. On
+  median times, the row is now about 3.03:1 faster than NumPy.
+- The win came from removing four Python/native transitions and one temporary
+  array from a 16-element output. Small arrays are rude like that.
+- The new top rows are `tensorsolve_2x3x2x3_f64` at 2.373x,
+  `tensorinv_2x2x2x2_f64` at 2.315x, and `dot_1d_32_f64` at 2.293x.
+- The next target should be the tensor solve/inv pair. Both currently spend
+  Python work on shape checks, reshape/ravel, and then call the native solve or
+  inverse leaf. The likely win is a native wrapper that fuses the shape contract
+  and metadata reshapes around the existing LAPACK-backed kernel.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/create/ops/linalg.mojo src/create/ops/__init__.mojo src/create/__init__.mojo src/lib.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py tests/python/numpy_compat/test_linalg.py -q
+```

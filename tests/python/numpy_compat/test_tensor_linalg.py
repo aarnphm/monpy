@@ -109,6 +109,22 @@ def test_kron_2x2_with_2x2() -> None:
   numpy.testing.assert_array_equal(numpy.asarray(out), oracle)
 
 
+def test_kron_strided_and_rank_padded_inputs_match_numpy() -> None:
+  a_np = numpy.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=numpy.float64)[:, ::-1]
+  b_np = numpy.asarray([0.5, 1.5, 2.5], dtype=numpy.float64)
+  a = mp.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=mp.float64)[:, ::-1]
+  b = mp.asarray([0.5, 1.5, 2.5], dtype=mp.float64)
+  out = mp.kron(a, b)
+  numpy.testing.assert_allclose(numpy.asarray(out), numpy.kron(a_np, b_np), rtol=1e-12)
+
+
+def test_kron_complex_inputs_match_numpy() -> None:
+  a_np = numpy.asarray([1.0 + 2.0j, 3.0 - 1.0j])
+  b_np = numpy.asarray([[2.0 - 1.0j], [-4.0 + 0.5j]])
+  out = mp.kron(mp.asarray(a_np, dtype=mp.complex128), mp.asarray(b_np, dtype=mp.complex128))
+  numpy.testing.assert_allclose(numpy.asarray(out), numpy.kron(a_np, b_np), rtol=1e-12)
+
+
 def test_cross_3vec() -> None:
   a = mp.asarray([1.0, 0.0, 0.0], dtype=mp.float64)
   b = mp.asarray([0.0, 1.0, 0.0], dtype=mp.float64)

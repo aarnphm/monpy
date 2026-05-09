@@ -8,7 +8,6 @@ from . import (
   ascontiguousarray,
   cumsum,
   diagonal,
-  expand_dims,
   float32,
   float64,
   matmul,
@@ -135,6 +134,9 @@ def outer(a:object, b:object)->ndarray:
   A=_array(a); B=_array(b)
   return ndarray._wrap(_w(_native.linalg_outer, A._native, B._native))
 
+def _kron_native(a:ndarray, b:ndarray)->ndarray:
+  return ndarray._wrap(_w(_native.linalg_kron, a._native, b._native))
+
 def tensordot(a:object, b:object, axes:int|tuple[object, object]=2)->object:
   A=_array(a)
   B=_array(b)
@@ -165,15 +167,7 @@ def tensordot(a:object, b:object, axes:int|tuple[object, object]=2)->object:
 
 def kron(a:object, b:object)->ndarray:
   A=_array(a); B=_array(b)
-  while A.ndim<B.ndim:A=expand_dims(A, 0)
-  while B.ndim<A.ndim:B=expand_dims(B, 0)
-  out_shape=tuple(s_a*s_b for s_a, s_b in zip(A.shape, B.shape, strict=True))
-  a_shape=[]
-  b_shape=[]
-  for s_a, s_b in zip(A.shape, B.shape, strict=True):
-    a_shape.extend((s_a, 1))
-    b_shape.extend((1, s_b))
-  return reshape(multiply(reshape(A, tuple(a_shape)), reshape(B, tuple(b_shape))), out_shape)
+  return _kron_native(A, B)
 
 def cross(a:object, b:object, axisa:int=-1, axisb:int=-1, axisc:int=-1, axis:int|None=None)->ndarray:
   if axis is not None:axisa=axisb=axisc=axis

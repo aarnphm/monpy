@@ -16,6 +16,7 @@ from std.sys import simd_width_of
 
 from array import (
     Array,
+    clone_int_list,
     contiguous_ptr,
     get_logical_as_f64,
     is_c_contiguous,
@@ -132,6 +133,144 @@ def outer_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObje
                     out_index,
                     get_logical_as_f64(lhs[], i) * get_logical_as_f64(rhs[], j),
                 )
+    return PythonObject(alloc=result^)
+
+
+def _left_padded_dim(array: Array, axis: Int, rank: Int) -> Int:
+    var src_axis = axis - (rank - len(array.shape))
+    if src_axis < 0:
+        return 1
+    return array.shape[src_axis]
+
+
+def kron_rank2_contiguous_typed[
+    dtype: DType
+](
+    lhs_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    rhs_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    lhs_rows: Int,
+    lhs_cols: Int,
+    rhs_rows: Int,
+    rhs_cols: Int,
+) raises where dtype.is_floating_point():
+    comptime width = simd_width_of[dtype]()
+    var out_cols = lhs_cols * rhs_cols
+    for lhs_row in range(lhs_rows):
+        var lhs_row_base = lhs_row * lhs_cols
+        for rhs_row in range(rhs_rows):
+            var rhs_row_base = rhs_row * rhs_cols
+            var out_row_base = (lhs_row * rhs_rows + rhs_row) * out_cols
+            for lhs_col in range(lhs_cols):
+                var dst = out_row_base + lhs_col * rhs_cols
+                var scale = SIMD[dtype, width](lhs_ptr[lhs_row_base + lhs_col])
+                var rhs_col = 0
+                while rhs_col + width <= rhs_cols:
+                    out_ptr.store(dst + rhs_col, scale * rhs_ptr.load[width=width](rhs_row_base + rhs_col))
+                    rhs_col += width
+                while rhs_col < rhs_cols:
+                    out_ptr[dst + rhs_col] = lhs_ptr[lhs_row_base + lhs_col] * rhs_ptr[rhs_row_base + rhs_col]
+                    rhs_col += 1
+
+
+def maybe_kron_rank2_contiguous(lhs: Array, rhs: Array, mut result: Array) raises -> Bool:
+    if (
+        len(lhs.shape) != 2
+        or len(rhs.shape) != 2
+        or not is_c_contiguous(lhs)
+        or not is_c_contiguous(rhs)
+        or not is_c_contiguous(result)
+    ):
+        return False
+    if (
+        lhs.dtype_code == ArrayDType.FLOAT32.value
+        and rhs.dtype_code == ArrayDType.FLOAT32.value
+        and result.dtype_code == ArrayDType.FLOAT32.value
+    ):
+        kron_rank2_contiguous_typed[DType.float32](
+            contiguous_ptr[DType.float32](lhs),
+            contiguous_ptr[DType.float32](rhs),
+            contiguous_ptr[DType.float32](result),
+            lhs.shape[0],
+            lhs.shape[1],
+            rhs.shape[0],
+            rhs.shape[1],
+        )
+        return True
+    if (
+        lhs.dtype_code == ArrayDType.FLOAT64.value
+        and rhs.dtype_code == ArrayDType.FLOAT64.value
+        and result.dtype_code == ArrayDType.FLOAT64.value
+    ):
+        kron_rank2_contiguous_typed[DType.float64](
+            contiguous_ptr[DType.float64](lhs),
+            contiguous_ptr[DType.float64](rhs),
+            contiguous_ptr[DType.float64](result),
+            lhs.shape[0],
+            lhs.shape[1],
+            rhs.shape[0],
+            rhs.shape[1],
+        )
+        return True
+    return False
+
+
+def kron_ops(lhs_obj: PythonObject, rhs_obj: PythonObject) raises -> PythonObject:
+    var lhs = lhs_obj.downcast_value_ptr[Array]()
+    var rhs = rhs_obj.downcast_value_ptr[Array]()
+    var rank = len(lhs[].shape)
+    if len(rhs[].shape) > rank:
+        rank = len(rhs[].shape)
+    var out_shape = List[Int]()
+    for axis in range(rank):
+        out_shape.append(_left_padded_dim(lhs[], axis, rank) * _left_padded_dim(rhs[], axis, rank))
+    var result = make_empty_array(
+        result_dtype_for_binary(lhs[].dtype_code, rhs[].dtype_code, BinaryOp.MUL.value),
+        clone_int_list(out_shape),
+    )
+    if maybe_kron_rank2_contiguous(lhs[], rhs[], result):
+        return PythonObject(alloc=result^)
+    var result_is_complex = (
+        result.dtype_code == ArrayDType.COMPLEX64.value or result.dtype_code == ArrayDType.COMPLEX128.value
+    )
+    for out_index in range(result.size_value):
+        var remaining = out_index
+        var lhs_logical = 0
+        var rhs_logical = 0
+        var lhs_logical_stride = 1
+        var rhs_logical_stride = 1
+        for axis in range(rank - 1, -1, -1):
+            var out_dim = out_shape[axis]
+            var coord = remaining % out_dim
+            remaining = remaining // out_dim
+            var rhs_dim = _left_padded_dim(rhs[], axis, rank)
+            var lhs_coord = coord // rhs_dim
+            var rhs_coord = coord % rhs_dim
+            var lhs_axis = axis - (rank - len(lhs[].shape))
+            if lhs_axis >= 0:
+                lhs_logical += lhs_coord * lhs_logical_stride
+                lhs_logical_stride *= lhs[].shape[lhs_axis]
+            var rhs_axis = axis - (rank - len(rhs[].shape))
+            if rhs_axis >= 0:
+                rhs_logical += rhs_coord * rhs_logical_stride
+                rhs_logical_stride *= rhs[].shape[rhs_axis]
+        if result_is_complex:
+            var lhs_re = _complex_real(lhs[], lhs_logical)
+            var lhs_im = _complex_imag(lhs[], lhs_logical)
+            var rhs_re = _complex_real(rhs[], rhs_logical)
+            var rhs_im = _complex_imag(rhs[], rhs_logical)
+            _complex_store(
+                result,
+                out_index,
+                lhs_re * rhs_re - lhs_im * rhs_im,
+                lhs_re * rhs_im + lhs_im * rhs_re,
+            )
+        else:
+            set_logical_from_f64(
+                result,
+                out_index,
+                get_logical_as_f64(lhs[], lhs_logical) * get_logical_as_f64(rhs[], rhs_logical),
+            )
     return PythonObject(alloc=result^)
 
 

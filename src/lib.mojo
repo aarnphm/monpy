@@ -51,6 +51,7 @@ from create import (
     full_ops,
     indices_ops,
     inv_ops,
+    kron_ops,
     layer_norm_last_axis_ops,
     linspace_ops,
     logspace_ops,
@@ -212,6 +213,7 @@ def PyInit__native() -> PythonObject:
         module.def_function[norm2_all_ops]("linalg_norm2_all")
         module.def_function[norm2_last_axis_ops]("linalg_norm2_last_axis")
         module.def_function[outer_ops]("linalg_outer")
+        module.def_function[kron_ops]("linalg_kron")
         module.def_function[vecdot_last_axis_ops]("linalg_vecdot_last_axis")
         module.def_function[solve_ops]("linalg_solve")
         module.def_function[inv_ops]("linalg_inv")
