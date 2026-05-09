@@ -1,3 +1,5 @@
+# fmt: off
+# ruff: noqa
 """Small JAX-shaped eager transforms for monpy."""
 
 from __future__ import annotations
@@ -25,16 +27,13 @@ def _normalize_axis(axis: int, ndim: int, context: str) -> int:
 
 def _positional_axes(in_axes: object, nargs: int) -> tuple[Axis, ...]:
   if _is_axis(in_axes):
-    return tuple(cast(Axis, in_axes) for _ in range(nargs))
+    return (cast(Axis, in_axes),) * nargs
   if isinstance(in_axes, Sequence) and not isinstance(in_axes, (str, bytes)):
     if len(in_axes) != nargs:
       raise ValueError(f"vmap in_axes has {len(in_axes)} entries for {nargs} positional arguments")
-    axes: list[Axis] = []
-    for axis in in_axes:
-      if not _is_axis(axis):
-        raise NotImplementedError("vmap only supports flat positional in_axes in the eager path")
-      axes.append(cast(Axis, axis))
-    return tuple(axes)
+    if any(not _is_axis(axis) for axis in in_axes):
+      raise NotImplementedError("vmap only supports flat positional in_axes in the eager path")
+    return tuple(cast(Axis, axis) for axis in in_axes)
   raise TypeError("vmap in_axes must be an int, None, or a flat sequence of those values")
 
 
@@ -73,8 +72,7 @@ def _axis_size(
   if not sizes:
     raise ValueError("vmap needs at least one mapped argument or an explicit axis_size")
   first = sizes[0]
-  bad = [size for size in sizes[1:] if size != first]
-  if bad:
+  if any(size != first for size in sizes[1:]):
     raise ValueError(f"vmap mapped axes must all have the same size, got {sizes}")
   return first, tuple(normalized_axes), kw_axes
 
@@ -98,17 +96,14 @@ def _output_axes(out_axes: object, arity: int, context: str) -> tuple[object, ..
 
 def _same_value(left: object, right: object) -> bool:
   if isinstance(left, ndarray):
-    if not isinstance(right, ndarray):
-      return False
-    return left.dtype == right.dtype and left.shape == right.shape and left.tolist() == right.tolist()
+    return isinstance(right, ndarray) and left.dtype == right.dtype and left.shape == right.shape and left.tolist() == right.tolist()
   return left == right
 
 
 def _assert_unmapped(outputs: Sequence[object]) -> object:
   first = outputs[0]
-  for output in outputs[1:]:
-    if not _same_value(first, output):
-      raise ValueError("vmap out_axes=None requires an unmapped output")
+  if any(not _same_value(first, output) for output in outputs[1:]):
+    raise ValueError("vmap out_axes=None requires an unmapped output")
   return first
 
 
@@ -132,24 +127,21 @@ def _stack_outputs(outputs: Sequence[object], out_axes: object) -> object:
     return None
   if isinstance(first, tuple):
     tuple_outputs = [cast(tuple[object, ...], output) for output in outputs]
-    for output in tuple_outputs[1:]:
-      if len(output) != len(first):
-        raise ValueError("vmap tuple output arity changed across mapped calls")
+    if any(len(output) != len(first) for output in tuple_outputs[1:]):
+      raise ValueError("vmap tuple output arity changed across mapped calls")
     axes = _output_axes(out_axes, len(first), "vmap tuple output")
     return tuple(_stack_outputs([output[index] for output in tuple_outputs], axes[index]) for index in range(len(first)))
   if isinstance(first, list):
     list_outputs = [cast(list[object], output) for output in outputs]
-    for output in list_outputs[1:]:
-      if len(output) != len(first):
-        raise ValueError("vmap list output arity changed across mapped calls")
+    if any(len(output) != len(first) for output in list_outputs[1:]):
+      raise ValueError("vmap list output arity changed across mapped calls")
     axes = _output_axes(out_axes, len(first), "vmap list output")
     return [_stack_outputs([output[index] for output in list_outputs], axes[index]) for index in range(len(first))]
   if isinstance(first, Mapping):
     keys = tuple(first.keys())
     mapping_outputs = [cast(Mapping[object, object], output) for output in outputs]
-    for output in mapping_outputs[1:]:
-      if tuple(output.keys()) != keys:
-        raise ValueError("vmap output mapping keys changed across mapped calls")
+    if any(tuple(output.keys()) != keys for output in mapping_outputs[1:]):
+      raise ValueError("vmap output mapping keys changed across mapped calls")
     if isinstance(out_axes, Mapping):
       out_axis_mapping = cast(Mapping[object, object], out_axes)
       return {key: _stack_outputs([output[key] for output in mapping_outputs], out_axis_mapping[key]) for key in keys}
@@ -176,10 +168,7 @@ class _VmapFunction:
         arg if axis is None else _slice_axis(arg, axis, index)
         for arg, axis in zip(args, normalized_axes, strict=True)
       )
-      mapped_kwargs = {
-        name: _slice_axis(value, kw_axes[name], index)
-        for name, value in kwargs.items()
-      }
+      mapped_kwargs = {name: _slice_axis(value, kw_axes[name], index) for name, value in kwargs.items()}
       outputs.append(self.fn(*mapped_args, **mapped_kwargs))
     return _stack_outputs(outputs, self.out_axes)
 

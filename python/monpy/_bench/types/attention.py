@@ -1,3 +1,5 @@
+# fmt: off
+# ruff: noqa
 from __future__ import annotations
 
 import math
@@ -31,6 +33,9 @@ class MonpyArray(Protocol):
   def __rtruediv__(self, other: object) -> MonpyArray: ...
   def __matmul__(self, other: object) -> MonpyArray: ...
   def __rmatmul__(self, other: object) -> MonpyArray: ...
+
+
+def _m(x: object) -> MonpyArray: return cast(MonpyArray, x)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +85,7 @@ def _softmax_numpy(scores: FloatArray) -> FloatArray:
 
 
 def _softmax_monpy(scores: MonpyArray) -> MonpyArray:
-  return cast(MonpyArray, mnp.nn.softmax(scores, axis=-1))
+  return _m(mnp.nn.softmax(scores, axis=-1))
 
 
 def _gelu_numpy(x: FloatArray) -> FloatArray:
@@ -89,9 +94,9 @@ def _gelu_numpy(x: FloatArray) -> FloatArray:
 
 
 def _gelu_monpy(x: MonpyArray) -> MonpyArray:
-  cubic = cast(MonpyArray, mnp.power(x, 3.0))
+  cubic = _m(mnp.power(x, 3.0))
   inner = math.sqrt(2.0 / math.pi) * (x + 0.044715 * cubic)
-  return 0.5 * x * (1.0 + cast(MonpyArray, mnp.tanh(inner)))
+  return 0.5 * x * (1.0 + _m(mnp.tanh(inner)))
 
 
 def _layer_norm_numpy(
@@ -114,7 +119,7 @@ def _layer_norm_monpy(
   *,
   eps: float = 1e-5,
 ) -> MonpyArray:
-  return cast(MonpyArray, mnp.nn.layer_norm(x, gain, bias, eps))
+  return _m(mnp.nn.layer_norm(x, gain, bias, eps))
 
 
 def _causal_attention_numpy(
@@ -145,7 +150,7 @@ def _causal_attention_monpy(
   k = x @ w_k
   v = x @ w_v
   scores = q @ k.T
-  weights = cast(MonpyArray, mnp.nn.scaled_masked_softmax(scores, causal_mask, 1.0 / math.sqrt(q.shape[-1])))
+  weights = _m(mnp.nn.scaled_masked_softmax(scores, causal_mask, 1.0 / math.sqrt(q.shape[-1])))
   return (weights @ v) @ w_o
 
 
@@ -183,7 +188,7 @@ def _gpt_logits_monpy(x: MonpyArray, params: MonpyAttentionParams) -> MonpyArray
 
 def _monpy_array(value: FloatArray | BoolArray) -> MonpyArray:
   dtype = mnp.bool if value.dtype == np.bool_ else mnp.float32
-  return cast(MonpyArray, mnp.asarray(value, dtype=dtype, copy=False))
+  return _m(mnp.asarray(value, dtype=dtype, copy=False))
 
 
 def _monpy_params(params: NumpyAttentionParams) -> MonpyAttentionParams:
@@ -236,7 +241,7 @@ def build_cases(
     lm_head=_normal(rng, (hidden, vocab)),
     causal_mask=np.triu(np.ones((seq, seq), dtype=np.bool_), k=1),
   )
-  x_mp = cast(MonpyArray, mnp.asarray(x_np, dtype=mnp.float32, copy=False))
+  x_mp = _m(mnp.asarray(x_np, dtype=mnp.float32, copy=False))
   params_mp = _monpy_params(params_np)
 
   scores_np = (x_np @ x_np.T) / math.sqrt(hidden)
@@ -246,13 +251,8 @@ def build_cases(
     scores_np,
   )
   scores_mp = (x_mp @ x_mp.T) / math.sqrt(hidden)
-  scores_mp = cast(
-    MonpyArray,
-    mnp.where(
-      params_mp.causal_mask,
-      cast(MonpyArray, mnp.full(scores_mp.shape, -1.0e9, dtype=mnp.float32)),
-      scores_mp,
-    ),
+  scores_mp = _m(
+    mnp.where(params_mp.causal_mask, _m(mnp.full(scores_mp.shape, -1.0e9, dtype=mnp.float32)), scores_mp),
   )
 
   cases = [

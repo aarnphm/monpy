@@ -1,3 +1,5 @@
+# fmt: off
+# ruff: noqa
 from __future__ import annotations
 
 import argparse
@@ -100,36 +102,18 @@ def find_mojo(explicit: Path | None = None) -> Path:
 
 
 def standard_command(*, mojo: Path, repo_root: Path) -> list[str]:
-  return [
-    str(mojo),
-    "run",
-    "-I",
-    str(repo_root / "src"),
-    str(repo_root / "benches" / "bench_mojo_sweep.mojo"),
-  ]
+  return [str(mojo), "run", "-I", str(repo_root / "src"), str(repo_root / "benches" / "bench_mojo_sweep.mojo")]
 
 
 def numojo_command(*, mojo: Path, repo_root: Path, numojo_path: Path) -> list[str]:
   return [
-    str(mojo),
-    "run",
-    "--ignore-incompatible-package-errors",
-    "-I",
-    str(repo_root / "src"),
-    "-I",
-    str(numojo_path),
+    str(mojo), "run", "--ignore-incompatible-package-errors", "-I", str(repo_root / "src"), "-I", str(numojo_path),
     str(repo_root / "benches" / "bench_numojo_sweep.mojo"),
   ]
 
 
 def threading_command(*, mojo: Path, repo_root: Path) -> list[str]:
-  return [
-    str(mojo),
-    "run",
-    "-I",
-    str(repo_root / "src"),
-    str(repo_root / "benches" / "bench_threading_sweep.mojo"),
-  ]
+  return [str(mojo), "run", "-I", str(repo_root / "src"), str(repo_root / "benches" / "bench_threading_sweep.mojo")]
 
 
 def parse_thread_caps(value: str) -> tuple[str, ...]:
@@ -139,9 +123,7 @@ def parse_thread_caps(value: str) -> tuple[str, ...]:
     cap = raw.strip().lower()
     if not cap:
       continue
-    if cap == "auto":
-      normalized = "auto"
-    else:
+    if cap != "auto":
       try:
         parsed = int(cap)
       except ValueError as exc:
@@ -153,6 +135,8 @@ def parse_thread_caps(value: str) -> tuple[str, ...]:
           f"thread cap {raw!r} must be 'auto' or a positive integer"
         )
       normalized = str(parsed)
+    else:
+      normalized = "auto"
     if normalized not in seen:
       caps.append(normalized)
       seen.add(normalized)
@@ -176,19 +160,7 @@ def parse_mojo_tsv(output: str) -> list[MojoBenchRow]:
       continue
     if len(fields) != len(TSV_HEADER):
       raise ValueError(f"malformed Mojo benchmark row: {line!r}")
-    rows.append(
-      MojoBenchRow(
-        group=fields[0],
-        name=fields[1],
-        candidate=fields[2],
-        baseline=fields[3],
-        candidate_ns=float(fields[4]),
-        baseline_ns=float(fields[5]),
-        ratio=float(fields[6]),
-        bytes=int(fields[7]),
-        flops=int(fields[8]),
-      )
-    )
+    rows.append(MojoBenchRow(fields[0], fields[1], fields[2], fields[3], float(fields[4]), float(fields[5]), float(fields[6]), int(fields[7]), int(fields[8])))
   if not seen_header:
     raise ValueError("Mojo benchmark output did not include the TSV header")
   return rows
@@ -333,11 +305,7 @@ def render_table(rows: Sequence[MojoBenchRow]) -> str:
   numeric_columns = {4, 5, 6, 7, 8}
 
   def render_row(row: Sequence[str]) -> str:
-    cells = []
-    for index, cell in enumerate(row):
-      cells.append(
-        cell.rjust(widths[index]) if index in numeric_columns else cell.ljust(widths[index])
-      )
+    cells = [cell.rjust(widths[index]) if index in numeric_columns else cell.ljust(widths[index]) for index, cell in enumerate(row)]
     return " | ".join(cells)
 
   separator = "-+-".join("-" * width for width in widths)
@@ -357,8 +325,7 @@ def render_csv(rows: Sequence[MojoBenchRow]) -> str:
   output = io.StringIO()
   writer = csv.DictWriter(output, fieldnames=TSV_HEADER, lineterminator="\n")
   writer.writeheader()
-  for row in rows:
-    writer.writerow(row_record(row))
+  writer.writerows(row_record(row) for row in rows)
   return output.getvalue().rstrip()
 
 
@@ -373,11 +340,7 @@ def render_json(rows: Sequence[MojoBenchRow], *, args: argparse.Namespace) -> st
 def render_markdown(rows: Sequence[MojoBenchRow], *, args: argparse.Namespace) -> str:
   table = table_rows(rows)
   header = "| " + " | ".join(table[0]) + " |"
-  align = (
-    "| "
-    + " | ".join(["---", "---", "---", "---", "---:", "---:", "---:", "---:", "---:"])
-    + " |"
-  )
+  align = "| " + " | ".join(["---", "---", "---", "---", "---:", "---:", "---:", "---:", "---:"]) + " |"
   body = ["| " + " | ".join(row) + " |" for row in table[1:]]
   config = mojo_sweep_config(args)
   summary = (

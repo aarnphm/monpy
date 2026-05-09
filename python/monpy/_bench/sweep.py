@@ -1,3 +1,5 @@
+# fmt: off
+# ruff: noqa
 from __future__ import annotations
 
 import argparse
@@ -47,11 +49,7 @@ def parse_types(value: str) -> tuple[str, ...]:
   unknown = sorted(set(raw_types) - set(SUITE_TYPES))
   if unknown:
     raise argparse.ArgumentTypeError(f"unknown benchmark type(s): {', '.join(unknown)}")
-  ordered = []
-  for suite_type in raw_types:
-    if suite_type not in ordered:
-      ordered.append(suite_type)
-  return tuple(ordered)
+  return tuple(dict.fromkeys(raw_types))
 
 
 def package_version(name: str) -> str:
@@ -133,9 +131,7 @@ def sweep_config(args: argparse.Namespace) -> dict[str, object]:
 
 
 def render_sweep_json(results: Sequence[BenchResult], *, args: argparse.Namespace) -> str:
-  payload = json.loads(
-    render_json(results, rounds=args.rounds, loops=args.loops, repeats=args.repeats)
-  )
+  payload = json.loads(render_json(results, rounds=args.rounds, loops=args.loops, repeats=args.repeats))
   payload["config"].update(sweep_config(args))
   return json.dumps(payload, indent=2, sort_keys=True)
 
@@ -143,7 +139,7 @@ def render_sweep_json(results: Sequence[BenchResult], *, args: argparse.Namespac
 def render_sweep_markdown(results: Sequence[BenchResult], *, args: argparse.Namespace) -> str:
   header = (
     f"suite=sweep types={','.join(args.types)} candidate=monpy baseline=numpy "
-    f"comparison=monpy_us/numpy_us"
+    "comparison=monpy_us/numpy_us"
   )
   return "\n\n".join([
     header,

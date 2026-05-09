@@ -105,37 +105,31 @@ def _c_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
 
 def _dtype_to_dlpack(dtype: object) -> tuple[int, int]:
   import monpy as mp
-  if dtype is mp.bool:return _DLC_BOOL, 8
-  if dtype in (mp.int8, mp.int16, mp.int32, mp.int64):return _DLC_INT, typing.cast(mp.DType, dtype).itemsize * 8
-  if dtype in (mp.uint8, mp.uint16, mp.uint32, mp.uint64):return _DLC_UINT, typing.cast(mp.DType, dtype).itemsize * 8
-  if dtype in (mp.float16, mp.float32, mp.float64):return _DLC_FLOAT, typing.cast(mp.DType, dtype).itemsize * 8
-  if dtype in (mp.complex64, mp.complex128):return _DLC_COMPLEX, typing.cast(mp.DType, dtype).itemsize * 8
-  raise BufferError(f"unsupported dtype for DLPack export: {dtype!r}")
+  table: dict[mp.DType, tuple[int, int]] = {mp.bool: (_DLC_BOOL, 8)}
+  for code, dtypes in (
+    (_DLC_INT, (mp.int8, mp.int16, mp.int32, mp.int64)),
+    (_DLC_UINT, (mp.uint8, mp.uint16, mp.uint32, mp.uint64)),
+    (_DLC_FLOAT, (mp.float16, mp.float32, mp.float64)),
+    (_DLC_COMPLEX, (mp.complex64, mp.complex128)),
+  ):
+    table.update((d, (code, d.itemsize * 8)) for d in dtypes)
+  try:return table[typing.cast(mp.DType, dtype)]
+  except KeyError as exc:raise BufferError(f"unsupported dtype for DLPack export: {dtype!r}") from exc
 
 
 def _dtype_from_dlpack(dl_dtype: _DLDataType) -> object:
   import monpy as mp
   code, bits, lanes = int(dl_dtype.code), int(dl_dtype.bits), int(dl_dtype.lanes)
   if lanes != 1:raise BufferError("monpy DLPack import only supports lanes=1")
-  if code == _DLC_BOOL and bits == 8:return mp.bool
-  if code == _DLC_INT:
-    if bits == 8:return mp.int8
-    if bits == 16:return mp.int16
-    if bits == 32:return mp.int32
-    if bits == 64:return mp.int64
-  if code == _DLC_UINT:
-    if bits == 8:return mp.uint8
-    if bits == 16:return mp.uint16
-    if bits == 32:return mp.uint32
-    if bits == 64:return mp.uint64
-  if code == _DLC_FLOAT:
-    if bits == 16:return mp.float16
-    if bits == 32:return mp.float32
-    if bits == 64:return mp.float64
-  if code == _DLC_COMPLEX:
-    if bits == 64:return mp.complex64
-    if bits == 128:return mp.complex128
-  raise BufferError(f"unsupported DLPack dtype: code={code}, bits={bits}, lanes={lanes}")
+  table = {
+    (_DLC_BOOL, 8): mp.bool,
+    (_DLC_INT, 8): mp.int8, (_DLC_INT, 16): mp.int16, (_DLC_INT, 32): mp.int32, (_DLC_INT, 64): mp.int64,
+    (_DLC_UINT, 8): mp.uint8, (_DLC_UINT, 16): mp.uint16, (_DLC_UINT, 32): mp.uint32, (_DLC_UINT, 64): mp.uint64,
+    (_DLC_FLOAT, 16): mp.float16, (_DLC_FLOAT, 32): mp.float32, (_DLC_FLOAT, 64): mp.float64,
+    (_DLC_COMPLEX, 64): mp.complex64, (_DLC_COMPLEX, 128): mp.complex128,
+  }
+  try:return table[(code, bits)]
+  except KeyError as exc:raise BufferError(f"unsupported DLPack dtype: code={code}, bits={bits}, lanes={lanes}") from exc
 
 
 class _ExportState:

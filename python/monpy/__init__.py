@@ -241,7 +241,7 @@ class Ufunc:
   def __call__(self, *args:object, out:ndarray|None=None, where:object=True, casting:typing.Literal["no", "equiv", "safe", "same_kind", "unsafe"]="same_kind", dtype:object=None)->ndarray:
     if (self.nin==2 and out is not None and dtype is None and where is True and casting=="same_kind" and len(args)==2
         and type(args[0]) is ndarray and type(args[1]) is ndarray and type(out) is ndarray and self._kind=="binary"):
-      _native.binary_into(out._native, typing.cast(ndarray, args[0])._native, typing.cast(ndarray, args[1])._native, self._op)
+      _native.binary_into(out._native, args[0]._native, args[1]._native, self._op)
       return out
     if _has_kernel_arg(args):
       if out is not None or where is not True or dtype is not None:raise NotImplementedError(f"{self.__name__}: staged ufunc out/where/dtype are not implemented")
@@ -603,7 +603,7 @@ class ndarray:
   def astype(self, dtype:object, *, copy:builtins.bool=True, device:object=None)->ndarray:
     if device is not None and device!="cpu":raise NotImplementedError("monpy v1 only supports cpu arrays")
     if type(dtype) is DType:
-      t=typing.cast(DType, dtype)
+      t=dtype
       if not copy and builtins.int(self._native.dtype_code())==t.code:return self
       return ndarray(_native.astype(self._native, t.code))
     t=_resolve_dtype(dtype)

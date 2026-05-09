@@ -1,3 +1,5 @@
+# fmt: off
+# ruff: noqa
 from __future__ import annotations
 
 import argparse
@@ -140,9 +142,7 @@ def verify_shape_dtype(monpy_value: object, numpy_value: object, *, check_dtype:
 
 
 def ratio_value(monpy_us: float, numpy_us: float) -> float:
-  if numpy_us == 0.0:
-    return math.inf
-  return monpy_us / numpy_us
+  return math.inf if numpy_us == 0.0 else monpy_us / numpy_us
 
 
 def scaled_matrix(size: int, dtype: type[np.floating]) -> np.ndarray:
@@ -794,17 +794,13 @@ def summarize(case: BenchCase, samples: Sequence[BenchSample]) -> BenchResult:
 def run_benchmarks(
   cases: Sequence[BenchCase], *, rounds: int, loops: int, repeats: int, progress: bool
 ) -> list[BenchResult]:
-  samples_by_case: dict[tuple[str, str], list[BenchSample]] = {
-    (case.group, case.name): [] for case in cases
-  }
+  samples_by_case: dict[tuple[str, str], list[BenchSample]] = {(case.group, case.name): [] for case in cases}
   total = rounds * len(cases)
   with progress_bar(total=total, enabled=progress) as bar:
     for round_index in range(1, rounds + 1):
       for case in cases:
         key = (case.group, case.name)
-        samples_by_case[key].append(
-          run_case(case, loops=loops, repeats=repeats, round_index=round_index)
-        )
+        samples_by_case[key].append(run_case(case, loops=loops, repeats=repeats, round_index=round_index))
         try:
           bar.set_postfix_str(f"round={round_index} case={case.name}", refresh=False)
           bar.update(1)
@@ -814,15 +810,11 @@ def run_benchmarks(
 
 
 def format_us(value: float) -> str:
-  if math.isinf(value):
-    return "inf"
-  return f"{value:.3f}"
+  return "inf" if math.isinf(value) else f"{value:.3f}"
 
 
 def format_ratio(value: float) -> str:
-  if math.isinf(value):
-    return "inf"
-  return f"{value:.3f}x"
+  return "inf" if math.isinf(value) else f"{value:.3f}x"
 
 
 def format_range(min_value: float, max_value: float, *, ratio: bool = False) -> str:
@@ -865,9 +857,7 @@ def render_table(results: Sequence[BenchResult], *, rounds: int, loops: int, rep
   numeric_columns = {2, 3, 4, 5, 6, 7, 8}
 
   def render_row(row: Sequence[str]) -> str:
-    cells = []
-    for index, cell in enumerate(row):
-      cells.append(cell.rjust(widths[index]) if index in numeric_columns else cell.ljust(widths[index]))
+    cells = [cell.rjust(widths[index]) if index in numeric_columns else cell.ljust(widths[index]) for index, cell in enumerate(row)]
     return " | ".join(cells)
 
   separator = "-+-".join("-" * width for width in widths)
@@ -923,8 +913,7 @@ def render_csv(results: Sequence[BenchResult]) -> str:
   ]
   writer = csv.DictWriter(output, fieldnames=fields, lineterminator="\n")
   writer.writeheader()
-  for result in results:
-    writer.writerow(summary_record(result))
+  writer.writerows(summary_record(result) for result in results)
   return output.getvalue().rstrip()
 
 

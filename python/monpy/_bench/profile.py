@@ -1,3 +1,5 @@
+# fmt: off
+# ruff: noqa
 from __future__ import annotations
 
 import argparse
@@ -14,6 +16,7 @@ import sys
 import time
 import tracemalloc
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -35,12 +38,11 @@ DEFAULT_PERF_EVENTS = "cycles,instructions,cache-references,cache-misses,branche
 
 def positive_float(value: str) -> float:
   parsed = float(value)
-  if parsed <= 0.0:
-    raise argparse.ArgumentTypeError("must be > 0")
+  if parsed <= 0.0: raise argparse.ArgumentTypeError("must be > 0")
   return parsed
 
 
-def default_profile_dir(now: object | None = None) -> Path:
+def default_profile_dir(now: datetime | None = None) -> Path:
   stamp = (now or local_now()).strftime("%Y-%m-%d-%H%M%S")
   return Path("results") / f"profile-{stamp}"
 
@@ -64,9 +66,7 @@ def select_case(cases: Sequence[BenchCase], requested: str) -> BenchCase:
 
 
 def ru_maxrss_bytes(value: int) -> int:
-  if platform.system() == "Darwin":
-    return value
-  return value * 1024
+  return value if platform.system() == "Darwin" else value * 1024
 
 
 def usage_record(before: resource.struct_rusage, after: resource.struct_rusage) -> dict[str, float | int]:
@@ -245,20 +245,13 @@ def run_perf_stat(args: argparse.Namespace, output_dir: Path) -> dict[str, objec
 
 
 def parse_xctrace_templates(value: str) -> tuple[str, ...]:
-  if not value:
-    return ()
+  if not value: return ()
   aliases = {
     "time": "Time Profiler",
     "counters": "CPU Counters",
     "allocations": "Allocations",
   }
-  templates = []
-  for raw in value.split(","):
-    item = raw.strip()
-    if not item:
-      continue
-    templates.append(aliases.get(item, item))
-  return tuple(templates)
+  return tuple(aliases.get(item, item) for raw in value.split(",") if (item := raw.strip()))
 
 
 def xctrace_duration(value: float) -> str:

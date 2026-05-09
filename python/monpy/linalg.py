@@ -33,6 +33,16 @@ def _w(fn, *a):
   try:return fn(*a)
   except Exception as exc:raise LinAlgError(str(exc)) from exc
 
+def _prod(xs):return _math.prod(xs)
+def _strides(sh):
+  out=[1]*len(sh)
+  for d in range(len(sh)-2, -1, -1):out[d]=out[d+1]*sh[d+1]
+  return out
+def _eig_parts(wr, wi, n):
+  r=[float(wr._native.get_scalar(i)) for i in range(n)]
+  im=[float(wi._native.get_scalar(i)) for i in range(n)]
+  return r, im, [complex(r[i], im[i]) for i in range(n)]
+
 # Existing native-backed primitives.
 def solve(a, b):
   l, r=asarray(a), asarray(b)
@@ -95,12 +105,9 @@ def tensordot(a, b, axes=2):
   b_kept=tuple(d for d in range(B.ndim) if d not in b_axes)
   A_perm=transpose(A, tuple(a_kept)+a_axes)
   B_perm=transpose(B, b_axes+b_kept)
-  a_kept_size=1
-  for d in a_kept:a_kept_size*=A.shape[d]
-  contract_size=1
-  for d in a_axes:contract_size*=A.shape[d]
-  b_kept_size=1
-  for d in b_kept:b_kept_size*=B.shape[d]
+  a_kept_size=_prod(A.shape[d] for d in a_kept)
+  contract_size=_prod(A.shape[d] for d in a_axes)
+  b_kept_size=_prod(B.shape[d] for d in b_kept)
   A_mat=ascontiguousarray(A_perm).reshape((a_kept_size, contract_size))
   B_mat=ascontiguousarray(B_perm).reshape((contract_size, b_kept_size))
   out=matmul(A_mat, B_mat)
@@ -113,16 +120,12 @@ def kron(a, b):
   while A.ndim<B.ndim:A=expand_dims(A, 0)
   while B.ndim<A.ndim:B=expand_dims(B, 0)
   out_shape=tuple(s_a*s_b for s_a, s_b in zip(A.shape, B.shape, strict=True))
-  total=1
-  for d in out_shape:total*=d
+  total=_prod(out_shape)
   flat_a=[A._native.get_scalar(i) for i in range(A.size)]
   flat_b=[B._native.get_scalar(i) for i in range(B.size)]
-  in_a_strides=[1]*A.ndim
-  for d in range(A.ndim-2, -1, -1):in_a_strides[d]=in_a_strides[d+1]*A.shape[d+1]
-  in_b_strides=[1]*B.ndim
-  for d in range(B.ndim-2, -1, -1):in_b_strides[d]=in_b_strides[d+1]*B.shape[d+1]
-  out_strides=[1]*A.ndim
-  for d in range(A.ndim-2, -1, -1):out_strides[d]=out_strides[d+1]*out_shape[d+1]
+  in_a_strides=_strides(A.shape)
+  in_b_strides=_strides(B.shape)
+  out_strides=_strides(out_shape)
   out=[]
   for i in range(total):
     rem=i
@@ -246,10 +249,8 @@ def tensorinv(a, ind=2):
   if A.ndim<ind:raise ValueError("tensorinv: ind must be < a.ndim")
   out_shape=A.shape[:ind]
   in_shape=A.shape[ind:]
-  out_size=1
-  for d in out_shape:out_size*=d
-  in_size=1
-  for d in in_shape:in_size*=d
+  out_size=_prod(out_shape)
+  in_size=_prod(in_shape)
   if out_size!=in_size:raise ValueError("tensorinv: outer / inner volumes must match")
   flat=A.reshape((out_size, in_size))
   inverse=inv(flat)
@@ -269,14 +270,12 @@ def tensorsolve(a, b, axes=None):
     for ax in sorted(axes, reverse=True):a_axes.pop(ax)
     a_axes+=list(axes)
     A=transpose(A, tuple(a_axes))
-  prod_b=1
-  for d in B.shape:prod_b*=d
+  prod_b=_prod(B.shape)
   # Leading axes of A correspond to b's shape; trailing axes are x's shape.
   if A.ndim<B.ndim or A.shape[:B.ndim]!=B.shape:
     raise ValueError("tensorsolve: leading axes of a must match b.shape")
   x_shape=A.shape[B.ndim:]
-  prod_x=1
-  for d in x_shape:prod_x*=d
+  prod_x=_prod(x_shape)
   if prod_b!=prod_x:raise ValueError("tensorsolve: square reshape required")
   flat_a=A.reshape((prod_b, prod_x))
   flat_b=ravel(B)
@@ -418,9 +417,7 @@ def eig(a):
   # are the eigenvectors as-is; complex pairs use vr[:,j] + i*vr[:,j+1]
   # for the +bi eigenvalue and the conjugate for -bi.
   n=X.shape[0]
-  wr_flat=[float(wr._native.get_scalar(i)) for i in range(n)]
-  wi_flat=[float(wi._native.get_scalar(i)) for i in range(n)]
-  w_complex=[complex(wr_flat[i], wi_flat[i]) for i in range(n)]
+  wr_flat, wi_flat, w_complex=_eig_parts(wr, wi, n)
   w_arr=ndarray(_native.from_flat(w_complex, (n,), complex128.code))
   def vr_value(row:int, col:int)->float:return float(vr._native.get_scalar(row*n+col))
   v_complex=[]
@@ -435,10 +432,7 @@ def eig(a):
       for i in range(n):v_complex.append(complex(vr_value(i, j), -vr_value(i, j+1)))
       j+=2
   # v_complex is column-major (column-by-column appended); reshape needs row-major.
-  v_row_major=[]
-  for i in range(n):
-    for c in range(n):
-      v_row_major.append(v_complex[c*n+i])
+  v_row_major=[v_complex[c*n+i] for i in range(n) for c in range(n)]
   v_arr=ndarray(_native.from_flat(v_row_major, (n, n), complex128.code))
   return w_arr, v_arr
 
@@ -450,9 +444,7 @@ def eigvals(a):
   wr, wi, _, all_real=ndarray(out[0]), ndarray(out[1]), ndarray(out[2]), bool(out[3])
   if all_real:return wr
   n=X.shape[0]
-  wr_flat=[float(wr._native.get_scalar(i)) for i in range(n)]
-  wi_flat=[float(wi._native.get_scalar(i)) for i in range(n)]
-  w_complex=[complex(wr_flat[i], wi_flat[i]) for i in range(n)]
+  _, _, w_complex=_eig_parts(wr, wi, n)
   return ndarray(_native.from_flat(w_complex, (n,), complex128.code))
 
 def svd(a, full_matrices=True, compute_uv=True, hermitian=False):
