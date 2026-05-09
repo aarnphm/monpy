@@ -18,6 +18,7 @@ each note is self-contained but the corpus cross-references freely. organized by
 | [memory-alignment.md](memory-alignment.md)               | cache-line alignment, SIMD width, AoS vs SoA, false sharing, allocator proposal for monpy                         |
 | [einsum-contraction.md](einsum-contraction.md)           | contraction order NP-hardness, opt_einsum strategies, BLAS-friendly reductions, cost model                        |
 | [simd-vectorisation.md](simd-vectorisation.md)           | width selection, roofline / arithmetic-intensity argument, strided loads, f16 fallbacks, reductions               |
+| [recent-field-notes.md](recent-field-notes.md)           | May 8-9 implementation field notes: wrappers, interop, views, threading policy, linalg API frontier               |
 
 ## conventions
 
@@ -37,3 +38,7 @@ each note is self-contained but the corpus cross-references freely. organized by
     - worth a regression test.
 - cute:
   - the bijectivity criterion via prefix-product induction rather than the cleaner tree-depth induction; flagged for a possible 200-word firmer-up.
+- recent-field-notes:
+  - current local macOS Python-facing frontier is fixed-cost heavy: after the tiny-linalg pass, 145/243 rows are slower than NumPy, 55 are above 1.25x, 17 are above 1.5x, and none are above 2x.
+  - pure Mojo kernel rows are mostly healthy: 114 rows, median 0.980x, one row above 1.25x in the full local sweep.
+  - next formal notes should cover buffer ingress, view construction economics, threading thresholds, and linalg small-matrix/API fixed costs.

@@ -490,7 +490,7 @@ class ndarray:
     return self.shape[0]
   def __iter__(self)->Iterable[object]:
     for i in range(len(self)):yield self[i]
-  def __repr__(self)->str:return f"monpy.asarray({self.tolist()!r}, dtype={self.dtype!r})"
+  def __repr__(self)->str:return f"monpy.array({self.tolist()!r}, dtype={self.dtype!r})"
   def __getitem__(self, k:typing.Any)->object:
     if type(k) is tuple and len(k)==3 and k[1] is None:                                                                        # exact rank-2 `a[:, None, :]` view
       p0, p2=k[0], k[2]

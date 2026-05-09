@@ -36,7 +36,7 @@ monpy should be a mojo array library with numpy-shaped python APIs.
 | linalg    | `solve` / `inv` / `det` / `qr` / `cholesky` / `eigh` / `eig` / `svd` / `lstsq` via Accelerate LAPACK; `pinv` / `matrix_rank` / `einsum` / `tensorinv` / `tensorsolve` in python |
 | creation  | `empty` / `full` / `zeros` / `ones` / `arange` / `linspace` / `eye` / `tri` / `tril` / `triu` / `concatenate` / `pad` (constant mode) native                                    |
 | views     | slicing, reshape, transpose, broadcast, expand_dims, flip, diagonal — all stride-only, no copies                                                                                |
-| random    | explicit `key` / `split` / `fold_in`, `random` / `uniform` / `normal` / `randint`, numpy legacy helpers, and minimal `default_rng` wrapper over native mojo samplers             |
+| random    | explicit `key` / `split` / `fold_in`, `random` / `uniform` / `normal` / `randint`, numpy legacy helpers, and minimal `default_rng` wrapper over native mojo samplers            |
 | io        | `__array_interface__` export, dlpack round-trips, explicit `runtime.ops_numpy` conversion, and cpython buffer protocol fast paths via `buffer.mojo`                             |
 
 v1 non-goals: full `numpy.random` bit-generator/distribution parity, `numpy.fft`, `numpy.ma`, `numpy.strings`, `numpy.io`. see [[numpy-port-gaps]].

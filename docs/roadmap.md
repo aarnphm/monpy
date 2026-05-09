@@ -63,6 +63,10 @@ and compatibility modules.
   `svd`, `lstsq`, `pinv`, and rank helpers use Accelerate/LAPACK where
   available, with mojo fallbacks for the smaller v1 surface. backend markers
   remain observable on array results.
+- scipy/jax-shaped linalg should keep the same three-layer contract: Python
+  facade for API spelling, native monpy primitive for shape/dtype/backend
+  ownership, then BLAS/LAPACK or typed Mojo kernels. performance work belongs in
+  the primitive/backend layers, not in facade-level Python loops.
 
 ## still out of scope
 

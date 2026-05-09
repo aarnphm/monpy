@@ -2690,26 +2690,26 @@ for `auto,1`. The cap sweep lives at
 
 Useful rows:
 
-| row             | cap       | internal ns | monpy ns | ratio |
-| --------------- | --------: | ----------: | -------: | ----: |
-| `add_f32_64k`   |         1 |        6449 |     6368 | 1.013x |
-| `add_f32_64k`   |         2 |        6363 |     6495 | 0.980x |
-| `add_f32_64k`   |      auto |        6534 |     6460 | 1.011x |
-| `add_f32_1m`    |         1 |      113117 |   109349 | 1.034x |
-| `add_f32_1m`    |         2 |       66470 |   111947 | 0.594x |
-| `add_f32_1m`    |         4 |       63684 |   106159 | 0.600x |
-| `add_f32_1m`    |      auto |       60245 |   122483 | 0.492x |
-| `neg_f32_64k`   |      auto |        5901 |     5193 | 1.136x |
-| `neg_f32_16m`   |         4 |     1054300 |  1931000 | 0.546x |
-| `neg_f32_16m`   |      auto |     1092455 |  2022286 | 0.540x |
-| `exp_f32_64k`   |      auto |       32139 |    29102 | 1.104x |
-| `exp_f32_256k`  |         2 |       66579 |   116345 | 0.572x |
-| `exp_f32_256k`  |         4 |       39772 |   117491 | 0.339x |
-| `exp_f32_256k`  |      auto |       36883 |   117439 | 0.314x |
-| `exp_f32_1m`    |         4 |      130396 |   462611 | 0.282x |
-| `exp_f32_1m`    |      auto |      212934 |   471889 | 0.451x |
-| `add_f64_1m`    |         4 |       97427 |   331087 | 0.294x |
-| `exp_f64_256k`  |         4 |       91219 |   307480 | 0.297x |
+| row            |  cap | internal ns | monpy ns |  ratio |
+| -------------- | ---: | ----------: | -------: | -----: |
+| `add_f32_64k`  |    1 |        6449 |     6368 | 1.013x |
+| `add_f32_64k`  |    2 |        6363 |     6495 | 0.980x |
+| `add_f32_64k`  | auto |        6534 |     6460 | 1.011x |
+| `add_f32_1m`   |    1 |      113117 |   109349 | 1.034x |
+| `add_f32_1m`   |    2 |       66470 |   111947 | 0.594x |
+| `add_f32_1m`   |    4 |       63684 |   106159 | 0.600x |
+| `add_f32_1m`   | auto |       60245 |   122483 | 0.492x |
+| `neg_f32_64k`  | auto |        5901 |     5193 | 1.136x |
+| `neg_f32_16m`  |    4 |     1054300 |  1931000 | 0.546x |
+| `neg_f32_16m`  | auto |     1092455 |  2022286 | 0.540x |
+| `exp_f32_64k`  | auto |       32139 |    29102 | 1.104x |
+| `exp_f32_256k` |    2 |       66579 |   116345 | 0.572x |
+| `exp_f32_256k` |    4 |       39772 |   117491 | 0.339x |
+| `exp_f32_256k` | auto |       36883 |   117439 | 0.314x |
+| `exp_f32_1m`   |    4 |      130396 |   462611 | 0.282x |
+| `exp_f32_1m`   | auto |      212934 |   471889 | 0.451x |
+| `add_f64_1m`   |    4 |       97427 |   331087 | 0.294x |
+| `exp_f64_256k` |    4 |       91219 |   307480 | 0.297x |
 
 Read:
 
@@ -2757,8 +2757,8 @@ still collapses the wrapper back to serial through `worker_count_for_bytes`.
 
 Fresh run:
 
-| row                | production ns | serial ns | ratio |
-| ------------------ | ------------: | --------: | ----: |
+| row                | production ns | serial ns |  ratio |
+| ------------------ | ------------: | --------: | -----: |
 | `exp_par_f32_256k` |        40,600 |   118,086 | 0.344x |
 | `exp_par_f32_1m`   |       329,400 |   472,278 | 0.697x |
 | `exp_par_f64_256k` |       241,400 |   320,480 | 0.753x |
@@ -2766,8 +2766,8 @@ Fresh run:
 
 Serial escape-hatch run with `MONPY_THREADS=1`:
 
-| row                | production ns | serial ns | ratio |
-| ------------------ | ------------: | --------: | ----: |
+| row                | production ns | serial ns |  ratio |
+| ------------------ | ------------: | --------: | -----: |
 | `exp_par_f32_256k` |       117,186 |   117,102 | 1.001x |
 | `exp_par_f32_1m`   |       480,944 |   464,167 | 1.036x |
 | `exp_par_f64_256k` |       310,960 |   309,840 | 1.004x |
@@ -2779,12 +2779,12 @@ contract; not a reason to make the hot path branchier.
 
 I also reran the direct cap-4 threading harness after one noisy saved outlier:
 
-| row             | threaded ns | serial ns | ratio |
-| --------------- | ----------: | --------: | ----: |
-| `exp_f32_64k`   |      31,569 |    29,488 | 1.071x |
-| `exp_f32_256k`  |      39,389 |   114,000 | 0.346x |
-| `exp_f32_1m`    |     143,962 |   487,632 | 0.295x |
-| `exp_f64_256k`  |      89,905 |   320,280 | 0.281x |
+| row            | threaded ns | serial ns |  ratio |
+| -------------- | ----------: | --------: | -----: |
+| `exp_f32_64k`  |      31,569 |    29,488 | 1.071x |
+| `exp_f32_256k` |      39,389 |   114,000 | 0.346x |
+| `exp_f32_1m`   |     143,962 |   487,632 | 0.295x |
+| `exp_f64_256k` |      89,905 |   320,280 | 0.281x |
 
 Read:
 
@@ -2848,16 +2848,16 @@ Local macOS, Python-facing rows:
 
 Worst local macOS rows:
 
-| row | monpy us | NumPy us | ratio |
-| --- | -------: | -------: | ----: |
-| `array/views/transpose_add_f32` | 4.826 | 2.506 | 1.942x |
-| `array/decomp/eigh_2_f64` | 9.590 | 4.901 | 1.927x |
-| `array/interop/asarray_squeeze_axis0_f32` | 4.258 | 2.299 | 1.893x |
-| `array/decomp/eigh_4_f64` | 10.382 | 5.509 | 1.883x |
-| `array/creation/empty_like_shape_override_f32` | 4.337 | 2.294 | 1.877x |
-| `strides/elementwise/rank3_transpose_add_f32` | 14.006 | 7.977 | 1.782x |
-| `array/decomp/eigh_2_f32` | 9.560 | 5.375 | 1.775x |
-| `array/decomp/eigh_8_f64` | 11.276 | 6.569 | 1.707x |
+| row                                            | monpy us | NumPy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `array/views/transpose_add_f32`                |    4.826 |    2.506 | 1.942x |
+| `array/decomp/eigh_2_f64`                      |    9.590 |    4.901 | 1.927x |
+| `array/interop/asarray_squeeze_axis0_f32`      |    4.258 |    2.299 | 1.893x |
+| `array/decomp/eigh_4_f64`                      |   10.382 |    5.509 | 1.883x |
+| `array/creation/empty_like_shape_override_f32` |    4.337 |    2.294 | 1.877x |
+| `strides/elementwise/rank3_transpose_add_f32`  |   14.006 |    7.977 | 1.782x |
+| `array/decomp/eigh_2_f32`                      |    9.560 |    5.375 | 1.775x |
+| `array/decomp/eigh_8_f64`                      |   11.276 |    6.569 | 1.707x |
 
 Read:
 
@@ -2885,15 +2885,15 @@ Local macOS, pure Mojo rows:
 
 Worst pure Mojo rows:
 
-| row | monpy ns | baseline ns | ratio |
-| --- | -------: | ----------: | ----: |
-| `threading.threads1/neg_f32_1m` | 108,778 | 86,164 | 1.262x |
-| `threading.threads4/exp_f32_64k` | 35,574 | 30,155 | 1.180x |
-| `elementwise/add_f32_1m` | 130,696 | 113,130 | 1.155x |
-| `threading.threads1/neg_f64_1m` | 240,625 | 208,605 | 1.153x |
-| `elementwise/add_par_f64_16m` | 6,264,500 | 5,479,750 | 1.143x |
-| `threading.auto/exp_f32_64k` | 31,500 | 28,741 | 1.096x |
-| `matmul/small_matmul_f32_8` | 60 | 57 | 1.053x |
+| row                              |  monpy ns | baseline ns |  ratio |
+| -------------------------------- | --------: | ----------: | -----: |
+| `threading.threads1/neg_f32_1m`  |   108,778 |      86,164 | 1.262x |
+| `threading.threads4/exp_f32_64k` |    35,574 |      30,155 | 1.180x |
+| `elementwise/add_f32_1m`         |   130,696 |     113,130 | 1.155x |
+| `threading.threads1/neg_f64_1m`  |   240,625 |     208,605 | 1.153x |
+| `elementwise/add_par_f64_16m`    | 6,264,500 |   5,479,750 | 1.143x |
+| `threading.auto/exp_f32_64k`     |    31,500 |      28,741 | 1.096x |
+| `matmul/small_matmul_f32_8`      |        60 |          57 | 1.053x |
 
 Read:
 
@@ -2917,16 +2917,16 @@ Remote GitHub Linux, same remote commit `644f22a`:
 
 Worst Linux rows:
 
-| row | monpy us | NumPy us | ratio |
-| --- | -------: | -------: | ----: |
-| `array/bandwidth/unary_sin_16384_f32` | 94.993 | 32.213 | 2.933x |
-| `strides/elementwise/sliced_unary_sin_f32` | 117.284 | 40.727 | 2.883x |
-| `array/decomp/eigh_2_f64` | 24.329 | 9.925 | 2.451x |
-| `array/decomp/eigh_4_f64` | 26.102 | 11.121 | 2.347x |
-| `array/decomp/eigh_8_f64` | 27.843 | 12.489 | 2.233x |
-| `array/decomp/eigh_2_f32` | 23.718 | 11.177 | 2.090x |
-| `array/ext_dtypes/binary_add_f16` | 24.326 | 11.877 | 2.046x |
-| `array/decomp/eigh_4_f32` | 26.072 | 12.871 | 2.026x |
+| row                                        | monpy us | NumPy us |  ratio |
+| ------------------------------------------ | -------: | -------: | -----: |
+| `array/bandwidth/unary_sin_16384_f32`      |   94.993 |   32.213 | 2.933x |
+| `strides/elementwise/sliced_unary_sin_f32` |  117.284 |   40.727 | 2.883x |
+| `array/decomp/eigh_2_f64`                  |   24.329 |    9.925 | 2.451x |
+| `array/decomp/eigh_4_f64`                  |   26.102 |   11.121 | 2.347x |
+| `array/decomp/eigh_8_f64`                  |   27.843 |   12.489 | 2.233x |
+| `array/decomp/eigh_2_f32`                  |   23.718 |   11.177 | 2.090x |
+| `array/ext_dtypes/binary_add_f16`          |   24.326 |   11.877 | 2.046x |
+| `array/decomp/eigh_4_f32`                  |   26.072 |   12.871 | 2.026x |
 
 Remote GitHub macOS, same remote commit `644f22a`:
 
@@ -2936,16 +2936,16 @@ Remote GitHub macOS, same remote commit `644f22a`:
 
 Worst remote macOS rows:
 
-| row | monpy us | NumPy us | ratio |
-| --- | -------: | -------: | ----: |
-| `array/views/moveaxis_f32` | 19.551 | 4.880 | 2.772x |
-| `array/casts/astype_i64_to_i64` | 7.301 | 3.025 | 2.414x |
-| `array/views/diagonal_64_f64` | 7.172 | 3.010 | 2.214x |
-| `array/creation/meshgrid_xy_f32` | 25.725 | 11.108 | 2.149x |
-| `array/interop/asarray_zero_copy_f32` | 5.153 | 2.426 | 2.124x |
-| `array/views/hstack_f32` | 8.761 | 3.679 | 2.124x |
-| `strides/elementwise/rank3_transpose_add_f32` | 20.294 | 8.859 | 2.021x |
-| `array/creation/empty_like_shape_override_f32` | 6.173 | 3.080 | 2.004x |
+| row                                            | monpy us | NumPy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `array/views/moveaxis_f32`                     |   19.551 |    4.880 | 2.772x |
+| `array/casts/astype_i64_to_i64`                |    7.301 |    3.025 | 2.414x |
+| `array/views/diagonal_64_f64`                  |    7.172 |    3.010 | 2.214x |
+| `array/creation/meshgrid_xy_f32`               |   25.725 |   11.108 | 2.149x |
+| `array/interop/asarray_zero_copy_f32`          |    5.153 |    2.426 | 2.124x |
+| `array/views/hstack_f32`                       |    8.761 |    3.679 | 2.124x |
+| `strides/elementwise/rank3_transpose_add_f32`  |   20.294 |    8.859 | 2.021x |
+| `array/creation/empty_like_shape_override_f32` |    6.173 |    3.080 | 2.004x |
 
 Platform split:
 
@@ -2965,11 +2965,11 @@ Platform split:
 
 Focused profiles:
 
-| case | us/call | backend | traced alloc peak | sample read |
-| ---- | ------: | ------- | ----------------: | ----------- |
-| `array/views/transpose_add_f32` | 4.691 | fused native | 1,760 B | view construction plus fused arithmetic |
-| `array/interop/asarray_squeeze_axis0_f32` | 4.438 | native bridge/view | 1,800 B | buffer ingress plus squeeze wrapper |
-| `array/decomp/eigh_2_f64` | 9.860 | Accelerate/LAPACK | 147,887 B | Python evaluation plus tiny LAPACK |
+| case                                      | us/call | backend            | traced alloc peak | sample read                             |
+| ----------------------------------------- | ------: | ------------------ | ----------------: | --------------------------------------- |
+| `array/views/transpose_add_f32`           |   4.691 | fused native       |           1,760 B | view construction plus fused arithmetic |
+| `array/interop/asarray_squeeze_axis0_f32` |   4.438 | native bridge/view |           1,800 B | buffer ingress plus squeeze wrapper     |
+| `array/decomp/eigh_2_f64`                 |   9.860 | Accelerate/LAPACK  |         147,887 B | Python evaluation plus tiny LAPACK      |
 
 Next iteration:
 
@@ -3017,19 +3017,19 @@ backend code, data pointer, byte length, and offset.
 
 Local read:
 
-| row | before us | after us | speedup |
-| --- | --------: | -------: | ------: |
-| `array/views/transpose_add_f32` | 4.826 | 4.518 | 1.07:1 |
-| `array/views/squeeze_axis0_f32` | 3.181 | 3.124 | 1.02:1 |
-| `array/interop/asarray_squeeze_axis0_f32` | 4.258 | 4.227 | 1.01:1 |
+| row                                       | before us | after us | speedup |
+| ----------------------------------------- | --------: | -------: | ------: |
+| `array/views/transpose_add_f32`           |     4.826 |    4.518 |  1.07:1 |
+| `array/views/squeeze_axis0_f32`           |     3.181 |    3.124 |  1.02:1 |
+| `array/interop/asarray_squeeze_axis0_f32` |     4.258 |    4.227 |  1.01:1 |
 
 The direct native microtiming moved harder:
 
-| call | before ns | after ns | speedup |
-| ---- | --------: | -------: | ------: |
-| raw `_native.squeeze_axis(..., 0)` | 713 | 578 | 1.23:1 |
-| `mnp.squeeze(existing_monpy, axis=0)` | 918 | 926 | 0.99:1 |
-| `mnp.squeeze(mnp.asarray(numpy), axis=0)` | 2,031 | 1,957 | 1.04:1 |
+| call                                      | before ns | after ns | speedup |
+| ----------------------------------------- | --------: | -------: | ------: |
+| raw `_native.squeeze_axis(..., 0)`        |       713 |      578 |  1.23:1 |
+| `mnp.squeeze(existing_monpy, axis=0)`     |       918 |      926 |  0.99:1 |
+| `mnp.squeeze(mnp.asarray(numpy), axis=0)` |     2,031 |    1,957 |  1.04:1 |
 
 Read:
 
@@ -3099,15 +3099,15 @@ reference stealing. I switched the linalg multi-return ops to that path:
 
 Local array sweep:
 
-| row | before us | after us | before ratio | after ratio | speedup |
-| --- | --------: | -------: | -----------: | ----------: | ------: |
-| `array/decomp/eigh_2_f64` | 9.705 | 5.636 | 1.988x | 1.180x | 1.72:1 |
-| `array/decomp/eigh_2_f32` | 9.305 | 5.570 | 1.780x | 1.060x | 1.67:1 |
-| `array/decomp/eigh_4_f64` | 10.014 | 6.847 | 1.835x | 1.285x | 1.46:1 |
-| `array/decomp/eigh_4_f32` | 10.147 | 6.716 | 1.623x | 1.105x | 1.51:1 |
-| `array/decomp/svd_2_f64` | 9.239 | 5.214 | 1.275x | 0.746x | 1.77:1 |
-| `array/decomp/svd_4_f64` | 10.234 | 6.186 | 1.247x | 0.758x | 1.65:1 |
-| `array/decomp/qr_2_f64` | 8.726 | 5.360 | 0.744x | 0.476x | 1.63:1 |
+| row                       | before us | after us | before ratio | after ratio | speedup |
+| ------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/decomp/eigh_2_f64` |     9.705 |    5.636 |       1.988x |      1.180x |  1.72:1 |
+| `array/decomp/eigh_2_f32` |     9.305 |    5.570 |       1.780x |      1.060x |  1.67:1 |
+| `array/decomp/eigh_4_f64` |    10.014 |    6.847 |       1.835x |      1.285x |  1.46:1 |
+| `array/decomp/eigh_4_f32` |    10.147 |    6.716 |       1.623x |      1.105x |  1.51:1 |
+| `array/decomp/svd_2_f64`  |     9.239 |    5.214 |       1.275x |      0.746x |  1.77:1 |
+| `array/decomp/svd_4_f64`  |    10.234 |    6.186 |       1.247x |      0.758x |  1.65:1 |
+| `array/decomp/qr_2_f64`   |     8.726 |    5.360 |       0.744x |      0.476x |  1.63:1 |
 
 Read:
 
@@ -3156,30 +3156,30 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 
 Post-iteration full sweep:
 
-| slice | slow rows | >1.25x | >1.5x | median ratio |
-| ----- | --------: | -----: | ----: | -----------: |
-| before | 154 | 67 | 21 | 1.092x |
-| after  | 145 | 55 | 17 | 1.083x |
+| slice  | slow rows | >1.25x | >1.5x | median ratio |
+| ------ | --------: | -----: | ----: | -----------: |
+| before |       154 |     67 |    21 |       1.092x |
+| after  |       145 |     55 |    17 |       1.083x |
 
 Key full-sweep deltas:
 
-| row | before us | after us | speedup |
-| --- | --------: | -------: | ------: |
-| `array/decomp/eigh_2_f64` | 9.590 | 5.766 | 1.66:1 |
-| `array/decomp/eigh_2_f32` | 9.560 | 5.705 | 1.68:1 |
-| `array/decomp/eigh_4_f64` | 10.382 | 6.841 | 1.52:1 |
-| `array/decomp/svd_2_f64` | 9.157 | 5.390 | 1.70:1 |
-| `array/decomp/svd_4_f64` | 10.221 | 6.255 | 1.63:1 |
-| `array/views/transpose_add_f32` | 4.826 | 4.522 | 1.07:1 |
+| row                             | before us | after us | speedup |
+| ------------------------------- | --------: | -------: | ------: |
+| `array/decomp/eigh_2_f64`       |     9.590 |    5.766 |  1.66:1 |
+| `array/decomp/eigh_2_f32`       |     9.560 |    5.705 |  1.68:1 |
+| `array/decomp/eigh_4_f64`       |    10.382 |    6.841 |  1.52:1 |
+| `array/decomp/svd_2_f64`        |     9.157 |    5.390 |  1.70:1 |
+| `array/decomp/svd_4_f64`        |    10.221 |    6.255 |  1.63:1 |
+| `array/views/transpose_add_f32` |     4.826 |    4.522 |  1.07:1 |
 
 The remaining top rows after both iterations:
 
-| row | monpy us | NumPy us | ratio |
-| --- | -------: | -------: | ----: |
-| `array/creation/empty_like_shape_override_f32` | 4.494 | 2.308 | 1.948x |
-| `array/interop/asarray_squeeze_axis0_f32` | 4.241 | 2.298 | 1.845x |
-| `array/views/transpose_add_f32` | 4.522 | 2.493 | 1.793x |
-| `strides/elementwise/rank3_transpose_add_f32` | 13.970 | 8.166 | 1.711x |
+| row                                            | monpy us | NumPy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `array/creation/empty_like_shape_override_f32` |    4.494 |    2.308 | 1.948x |
+| `array/interop/asarray_squeeze_axis0_f32`      |    4.241 |    2.298 | 1.845x |
+| `array/views/transpose_add_f32`                |    4.522 |    2.493 | 1.793x |
+| `strides/elementwise/rank3_transpose_add_f32`  |   13.970 |    8.166 | 1.711x |
 
 Artifact: `results/local-full-20260509-post-linalg`.
 
@@ -3220,16 +3220,16 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 
 Worst new linalg API rows:
 
-| row | monpy us | NumPy us | ratio |
-| --- | -------: | -------: | ----: |
-| `array/linalg_api/kron_2x2_f64` | 73.044 | 9.889 | 7.398x |
-| `array/linalg_api/tensordot_axes1_4x5_5x3_f64` | 27.478 | 5.879 | 4.672x |
-| `array/linalg_api/vecmat_16_f64` | 11.684 | 2.691 | 4.343x |
-| `array/linalg_api/vdot_32_f64` | 9.849 | 2.480 | 3.973x |
-| `array/linalg_api/matvec_16_f64` | 10.515 | 2.652 | 3.965x |
-| `array/linalg_api/dot_1d_32_f64` | 9.195 | 2.419 | 3.803x |
-| `array/linalg_api/inner_32_f64` | 10.300 | 2.845 | 3.660x |
-| `array/linalg_api/outer_32_f64` | 12.992 | 4.084 | 3.181x |
+| row                                            | monpy us | NumPy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `array/linalg_api/kron_2x2_f64`                |   73.044 |    9.889 | 7.398x |
+| `array/linalg_api/tensordot_axes1_4x5_5x3_f64` |   27.478 |    5.879 | 4.672x |
+| `array/linalg_api/vecmat_16_f64`               |   11.684 |    2.691 | 4.343x |
+| `array/linalg_api/vdot_32_f64`                 |    9.849 |    2.480 | 3.973x |
+| `array/linalg_api/matvec_16_f64`               |   10.515 |    2.652 | 3.965x |
+| `array/linalg_api/dot_1d_32_f64`               |    9.195 |    2.419 | 3.803x |
+| `array/linalg_api/inner_32_f64`                |   10.300 |    2.845 | 3.660x |
+| `array/linalg_api/outer_32_f64`                |   12.992 |    4.084 | 3.181x |
 
 Read:
 
@@ -3283,9 +3283,9 @@ Patch:
 
 Micro row:
 
-| row | before us | after us | speedup |
-| --- | --------: | -------: | ------: |
-| `array/linalg_api/slogdet_16_f64` | 4.753 | 4.178 | 1.14:1 |
+| row                               | before us | after us | speedup |
+| --------------------------------- | --------: | -------: | ------: |
+| `array/linalg_api/slogdet_16_f64` |     4.753 |    4.178 |  1.14:1 |
 
 Read:
 
@@ -3319,9 +3319,9 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 
 Run shape:
 
-| artifact | cases | duration | slow rows | >1.25x | >1.5x | >2x | median |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `results/local-full-20260509-rerun-numpy-frontier` | 275 | 40.1s | 167 | 67 | 38 | 14 | 1.083x |
+| artifact                                           | cases | duration | slow rows | >1.25x | >1.5x | >2x | median |
+| -------------------------------------------------- | ----: | -------: | --------: | -----: | ----: | --: | -----: |
+| `results/local-full-20260509-rerun-numpy-frontier` |   275 |    40.1s |       167 |     67 |    38 |  14 | 1.083x |
 
 The bad rows were concentrated in `array/linalg_api`, mostly because the facade
 was routing tiny linalg calls through multiple Python-level helpers before
@@ -3346,21 +3346,21 @@ Post-patch full sweep:
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types all --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-full-20260509-linalg-api-fastpaths --no-progress --no-stdout
 ```
 
-| artifact | cases | duration | slow rows | >1.25x | >1.5x | >2x | median |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `results/local-full-20260509-linalg-api-fastpaths` | 275 | 40.4s | 170 | 72 | 32 | 11 | 1.096x |
+| artifact                                           | cases | duration | slow rows | >1.25x | >1.5x | >2x | median |
+| -------------------------------------------------- | ----: | -------: | --------: | -----: | ----: | --: | -----: |
+| `results/local-full-20260509-linalg-api-fastpaths` |   275 |    40.4s |       170 |     72 |    32 |  11 | 1.096x |
 
 Key moved rows:
 
-| row | before us | after us | before ratio | after ratio | speedup |
-| --- | --------: | -------: | -----------: | ----------: | ------: |
-| `array/linalg_api/kron_2x2_f64` | 72.896 | 22.901 | 6.975x | 2.337x | 3.18:1 |
-| `array/linalg_api/tensordot_axes1_4x5_5x3_f64` | 27.552 | 3.746 | 4.837x | 0.669x | 7.36:1 |
-| `array/linalg_api/vecmat_16_f64` | 11.312 | 3.487 | 4.289x | 1.335x | 3.24:1 |
-| `array/linalg_api/matvec_16_f64` | 10.608 | 3.826 | 3.882x | 1.453x | 2.77:1 |
-| `array/linalg_api/vdot_32_f64` | 10.146 | 4.913 | 4.229x | 2.082x | 2.07:1 |
-| `array/linalg_api/inner_32_f64` | 9.456 | 5.259 | 3.731x | 2.081x | 1.80:1 |
-| `array/linalg_api/dot_1d_32_f64` | 9.152 | 5.186 | 3.794x | 2.209x | 1.76:1 |
+| row                                            | before us | after us | before ratio | after ratio | speedup |
+| ---------------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/linalg_api/kron_2x2_f64`                |    72.896 |   22.901 |       6.975x |      2.337x |  3.18:1 |
+| `array/linalg_api/tensordot_axes1_4x5_5x3_f64` |    27.552 |    3.746 |       4.837x |      0.669x |  7.36:1 |
+| `array/linalg_api/vecmat_16_f64`               |    11.312 |    3.487 |       4.289x |      1.335x |  3.24:1 |
+| `array/linalg_api/matvec_16_f64`               |    10.608 |    3.826 |       3.882x |      1.453x |  2.77:1 |
+| `array/linalg_api/vdot_32_f64`                 |    10.146 |    4.913 |       4.229x |      2.082x |  2.07:1 |
+| `array/linalg_api/inner_32_f64`                |     9.456 |    5.259 |       3.731x |      2.081x |  1.80:1 |
+| `array/linalg_api/dot_1d_32_f64`               |     9.152 |    5.186 |       3.794x |      2.209x |  1.76:1 |
 
 Read:
 

@@ -297,11 +297,11 @@ regardless of `MONPY_THREADS`**. An earlier prototype using
 `std.algorithm.sync_parallelize` produced a 4× slowdown and 3.5× variance
 on macOS at 1M f32 sum:
 
-| platform | sum size | serial | parallel | conclusion |
-| -------- | -------: | -----: | -------: | --: |
-| macOS M3 Pro |     1M f32 |  60 µs | **261 µs (range 84..292)** | parallel is loss + unstable |
-| Ubuntu CI 4-vCPU | 1M f32 |  69 µs | **96 µs** | parallel is loss |
-| macOS M3 Pro |    16M f32 |  ~280 µs | ~140 µs theoretical | win possible but variance kills it |
+| platform         | sum size |  serial |                   parallel |                         conclusion |
+| ---------------- | -------: | ------: | -------------------------: | ---------------------------------: |
+| macOS M3 Pro     |   1M f32 |   60 µs | **261 µs (range 84..292)** |        parallel is loss + unstable |
+| Ubuntu CI 4-vCPU |   1M f32 |   69 µs |                  **96 µs** |                   parallel is loss |
+| macOS M3 Pro     |  16M f32 | ~280 µs |        ~140 µs theoretical | win possible but variance kills it |
 
 The cost atom is `std.algorithm.sync_parallelize`: it allocates and
 synchronizes a CPU `DeviceContext` per call, ~200 µs on Apple Silicon.
