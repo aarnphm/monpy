@@ -3182,3 +3182,81 @@ The remaining top rows after both iterations:
 | `strides/elementwise/rank3_transpose_add_f32` | 13.970 | 8.166 | 1.711x |
 
 Artifact: `results/local-full-20260509-post-linalg`.
+
+### 2026-05-09 linalg benchmark surface
+
+The array suite had real linalg scaling rows, but the public API surface was
+patchy: solve/inv/det and a few decomposition paths were visible, while the
+wrapper-heavy linalg functions could regress without showing up in the table.
+
+Patch:
+
+- Added an `array/linalg_api` group with fixed f64 rows for the full
+  `monpy.linalg` export surface, excluding `LinAlgError`.
+- Kept the existing sized rows for scaling: `solve`, `inv`, `det`, `qr`,
+  `cholesky`, `eigvalsh`, `svdvals`, and `pinv`.
+- Renamed the old decomp rows that were lying by omission:
+  `eigh_*` now reports as `eigvalsh_*`, and `svd_*` now reports as
+  `svdvals_*`. Historical notes above still use the old artifact names.
+- Covered the missing wrapper/API rows: `dot`, `vdot`, `inner`, `outer`,
+  `matmul`, `matrix_transpose`, `matvec`, `vecmat`, `vecdot`, `tensordot`,
+  `kron`, `cross`, `trace`, `norm`, `vector_norm`, `matrix_norm`,
+  `matrix_rank`, `matrix_power`, `slogdet`, `multi_dot`, `tensorinv`,
+  `tensorsolve`, `eigh`, `eig`, `eigvals`, `svd`, `lstsq`, plus rectangular
+  `pinv` and matrix-RHS `solve`.
+
+Coverage check:
+
+- `monpy.linalg.__all__ - {"LinAlgError"}`: 35 public names.
+- Benchmark mapping: 35/35 names covered.
+- New manifest shape for the smoke sweep: 158 array cases total,
+  32 `array/linalg_api` rows.
+
+Smoke sweep:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 20 --repeats 3 --rounds 2 --vector-sizes 16384 --matrix-sizes 16 --linalg-sizes 2 --format json --sort ratio --output-dir results/local-sweep-20260509-linalg-api-coverage --no-progress --no-stdout
+```
+
+Worst new linalg API rows:
+
+| row | monpy us | NumPy us | ratio |
+| --- | -------: | -------: | ----: |
+| `array/linalg_api/kron_2x2_f64` | 73.044 | 9.889 | 7.398x |
+| `array/linalg_api/tensordot_axes1_4x5_5x3_f64` | 27.478 | 5.879 | 4.672x |
+| `array/linalg_api/vecmat_16_f64` | 11.684 | 2.691 | 4.343x |
+| `array/linalg_api/vdot_32_f64` | 9.849 | 2.480 | 3.973x |
+| `array/linalg_api/matvec_16_f64` | 10.515 | 2.652 | 3.965x |
+| `array/linalg_api/dot_1d_32_f64` | 9.195 | 2.419 | 3.803x |
+| `array/linalg_api/inner_32_f64` | 10.300 | 2.845 | 3.660x |
+| `array/linalg_api/outer_32_f64` | 12.992 | 4.084 | 3.181x |
+
+Read:
+
+- The linalg frontier is no longer hidden in the generic matmul/decomp rows.
+  The slow rows are mostly Python wrapper loops and shape plumbing, not LAPACK.
+- `kron` is the big embarrassing number: it walks Python lists and native scalar
+  getters for a 2x2 input, so the 7.4x ratio is expected and now tracked.
+- `tensordot` pays transpose/contiguous/reshape setup before the actual matmul.
+  That is the next high-upside native path after the current random feature dust
+  settles.
+- `dot`/`vdot`/`inner`/`matvec`/`vecmat` are wrapper-bound at 16 to 32 elements.
+  The fix is not "more LAPACK"; it is fewer Python crossings for scalar-product
+  and matrix-vector paths.
+
+Verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/python - <<'PY'
+from monpy._bench.core import build_cases, run_case
+
+cases = build_cases(vector_size=1024, vector_sizes=(16384,), matrix_sizes=(16,), linalg_sizes=(2,))
+selected = [case for case in cases if case.group in {"linalg", "decomp", "linalg_api"}]
+for case in selected:
+  run_case(case, loops=1, repeats=1, round_index=1)
+print(len(selected))
+PY
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_tensor_linalg.py tests/python/numpy_compat/test_einsum.py -q
+```
+
+Artifact: `results/local-sweep-20260509-linalg-api-coverage`.

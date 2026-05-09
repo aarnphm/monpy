@@ -623,9 +623,8 @@ def build_cases(
         ),
       ])
 
-  # Phase-6d LAPACK-backed decompositions: qr / cholesky / eigh / svd /
-  # lstsq / pinv. Sizes use a subset of linalg_sizes; SVD/EIG are quadratic
-  # so we cap at 64 to keep runtime reasonable.
+  # Phase-6d LAPACK-backed decompositions. Sizes use a subset of linalg_sizes;
+  # SVD/EIG are quadratic, so cap at 64 to keep runtime reasonable.
   decomp_sizes = tuple(s for s in linalg_sizes if s <= 64) or linalg_sizes[:1]
   for size in decomp_sizes:
     for dtype in (np.float32, np.float64):
@@ -657,16 +656,16 @@ def build_cases(
         ),
         BenchCase(
           "decomp",
-          f"eigh_{size}_{suffix}",
+          f"eigvalsh_{size}_{suffix}",
           lambda x=sym_mp: mnp.linalg.eigvalsh(x),
           lambda x=sym_np: np.linalg.eigvalsh(x),
           check_values=False,
         ),
         BenchCase(
           "decomp",
-          f"svd_{size}_{suffix}",
+          f"svdvals_{size}_{suffix}",
           lambda x=qr_mp: mnp.linalg.svdvals(x),
-          lambda x=qr_np: np.linalg.svd(x, compute_uv=False),
+          lambda x=qr_np: np.linalg.svdvals(x),
           check_values=False,
         ),
         BenchCase(
@@ -678,6 +677,91 @@ def build_cases(
           atol=tolerance,
         ),
       ])
+
+  # Public linalg API breadth. The sized decomp rows above track scaling for
+  # the heavy LAPACK-backed primitives; these fixed f64 rows keep every public
+  # linalg entrypoint visible in the ratio table, including wrappers that tend
+  # to regress through Python-side shape/rank plumbing.
+  la_vec_np = np.linspace(0.25, 2.25, 32, dtype=np.float64)
+  la_vec_b_np = np.linspace(2.25, 4.25, 32, dtype=np.float64)
+  la_vec_mp = mnp.asarray(la_vec_np, dtype=mnp.float64, copy=True)
+  la_vec_b_mp = mnp.asarray(la_vec_b_np, dtype=mnp.float64, copy=True)
+  la_vec_2d_mp = mnp.reshape(la_vec_mp, (8, 4))
+  la_vec_b_2d_mp = mnp.reshape(la_vec_b_mp, (8, 4))
+  la_vec_2d_np = la_vec_np.reshape(8, 4)
+  la_vec_b_2d_np = la_vec_b_np.reshape(8, 4)
+  la_mat16_np = well_conditioned_matrix(16, np.float64)
+  la_mat16_mp = mnp.asarray(la_mat16_np, dtype=mnp.float64, copy=True)
+  la_rhs16_np = np.linspace(0.5, 8.5, 16, dtype=np.float64)
+  la_rhs16_mp = mnp.asarray(la_rhs16_np, dtype=mnp.float64, copy=True)
+  la_rhs16_2_np = np.stack([la_rhs16_np, la_rhs16_np + 1.0], axis=1)
+  la_rhs16_2_mp = mnp.asarray(la_rhs16_2_np, dtype=mnp.float64, copy=True)
+  la_a_np = np.arange(20, dtype=np.float64).reshape(4, 5) / 7.0
+  la_b_np = np.arange(15, dtype=np.float64).reshape(5, 3) / 5.0
+  la_a_mp = mnp.asarray(la_a_np, dtype=mnp.float64, copy=True)
+  la_b_mp = mnp.asarray(la_b_np, dtype=mnp.float64, copy=True)
+  la_small_np = np.array([[2.0, 1.0], [1.0, 3.0]], dtype=np.float64)
+  la_small_mp = mnp.asarray(la_small_np, dtype=mnp.float64, copy=True)
+  la_rank_np = np.array([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [1.0, 0.0, 1.0]], dtype=np.float64)
+  la_rank_mp = mnp.asarray(la_rank_np, dtype=mnp.float64, copy=True)
+  la_multi_a_np = np.array([[1.0, 2.0]], dtype=np.float64)
+  la_multi_b_np = la_small_np
+  la_multi_c_np = np.array([[3.0], [4.0]], dtype=np.float64)
+  la_multi_a_mp = mnp.asarray(la_multi_a_np, dtype=mnp.float64, copy=True)
+  la_multi_b_mp = mnp.asarray(la_multi_b_np, dtype=mnp.float64, copy=True)
+  la_multi_c_mp = mnp.asarray(la_multi_c_np, dtype=mnp.float64, copy=True)
+  la_tensor_inv_np = np.eye(4, dtype=np.float64).reshape(2, 2, 2, 2)
+  la_tensor_inv_mp = mnp.asarray(la_tensor_inv_np, dtype=mnp.float64, copy=True)
+  la_tensor_solve_np = well_conditioned_matrix(6, np.float64).reshape(2, 3, 2, 3)
+  la_tensor_solve_mp = mnp.asarray(la_tensor_solve_np, dtype=mnp.float64, copy=True)
+  la_tensor_rhs_np = np.linspace(1.0, 6.0, 6, dtype=np.float64).reshape(2, 3)
+  la_tensor_rhs_mp = mnp.asarray(la_tensor_rhs_np, dtype=mnp.float64, copy=True)
+  la_rect_np = np.linspace(0.2, 6.4, 32, dtype=np.float64).reshape(8, 4)
+  la_rect_mp = mnp.asarray(la_rect_np, dtype=mnp.float64, copy=True)
+  la_rect_rhs_np = np.linspace(1.0, 8.0, 8, dtype=np.float64)
+  la_rect_rhs_mp = mnp.asarray(la_rect_rhs_np, dtype=mnp.float64, copy=True)
+  la_rect_rcond = np.finfo(np.float64).eps * max(la_rect_np.shape)
+  la_tri_np = np.diag([1.0, 2.0, 3.0, 4.0]) + np.triu(np.ones((4, 4), dtype=np.float64) * 0.05, 1)
+  la_tri_mp = mnp.asarray(la_tri_np, dtype=mnp.float64, copy=True)
+  la_cross_a_np = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+  la_cross_b_np = np.array([4.0, 5.0, 6.0], dtype=np.float64)
+  la_cross_a_mp = mnp.asarray(la_cross_a_np, dtype=mnp.float64, copy=True)
+  la_cross_b_mp = mnp.asarray(la_cross_b_np, dtype=mnp.float64, copy=True)
+  np_linalg_vecdot: Any = np.linalg.vecdot
+  cases.extend([
+    BenchCase("linalg_api", "dot_1d_32_f64", lambda: mnp.linalg.dot(la_vec_mp, la_vec_b_mp), lambda: np.dot(la_vec_np, la_vec_b_np), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "vdot_32_f64", lambda: mnp.linalg.vdot(la_vec_mp, la_vec_b_mp), lambda: np.vdot(la_vec_np, la_vec_b_np), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "inner_32_f64", lambda: mnp.linalg.inner(la_vec_mp, la_vec_b_mp), lambda: np.inner(la_vec_np, la_vec_b_np), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "outer_32_f64", lambda: mnp.linalg.outer(la_vec_mp, la_vec_b_mp), lambda: np.linalg.outer(la_vec_np, la_vec_b_np), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "matmul_16_f64", lambda: mnp.linalg.matmul(la_mat16_mp, la_mat16_mp), lambda: np.linalg.matmul(la_mat16_np, la_mat16_np), rtol=1e-9, atol=1e-9),
+    BenchCase("linalg_api", "matvec_16_f64", lambda: mnp.linalg.matvec(la_mat16_mp, la_rhs16_mp), lambda: np.matvec(la_mat16_np, la_rhs16_np), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "vecmat_16_f64", lambda: mnp.linalg.vecmat(la_rhs16_mp, la_mat16_mp), lambda: np.vecmat(la_rhs16_np, la_mat16_np), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "vecdot_axis1_8x4_f64", lambda: mnp.linalg.vecdot(la_vec_2d_mp, la_vec_b_2d_mp, axis=1), lambda: np_linalg_vecdot(la_vec_2d_np, la_vec_b_2d_np, axis=1), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "tensordot_axes1_4x5_5x3_f64", lambda: mnp.linalg.tensordot(la_a_mp, la_b_mp, axes=1), lambda: np.linalg.tensordot(la_a_np, la_b_np, axes=1), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "kron_2x2_f64", lambda: mnp.linalg.kron(la_small_mp, la_small_mp), lambda: np.kron(la_small_np, la_small_np), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "cross_3_f64", lambda: mnp.linalg.cross(la_cross_a_mp, la_cross_b_mp), lambda: np.linalg.cross(la_cross_a_np, la_cross_b_np), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "trace_16_f64", lambda: mnp.linalg.trace(la_mat16_mp), lambda: np.linalg.trace(la_mat16_np), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "matrix_transpose_16_f64", lambda: mnp.linalg.matrix_transpose(la_mat16_mp), lambda: np.linalg.matrix_transpose(la_mat16_np), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "norm_vec2_32_f64", lambda: mnp.linalg.norm(la_vec_mp), lambda: np.linalg.norm(la_vec_np), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "norm_vec1_32_f64", lambda: mnp.linalg.norm(la_vec_mp, ord=1), lambda: np.linalg.norm(la_vec_np, ord=1), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "vector_norm_axis1_8x4_f64", lambda: mnp.linalg.vector_norm(la_vec_2d_mp, axis=1), lambda: np.linalg.vector_norm(la_vec_2d_np, axis=1), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "matrix_norm_fro_16_f64", lambda: mnp.linalg.matrix_norm(la_mat16_mp), lambda: np.linalg.matrix_norm(la_mat16_np), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "matrix_rank_3_f64", lambda: mnp.linalg.matrix_rank(la_rank_mp), lambda: np.linalg.matrix_rank(la_rank_np), check_dtype=False),
+    BenchCase("linalg_api", "matrix_power_2_n3_f64", lambda: mnp.linalg.matrix_power(la_small_mp, 3), lambda: np.linalg.matrix_power(la_small_np, 3), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "slogdet_16_f64", lambda: mnp.linalg.slogdet(la_mat16_mp)[1], lambda: np.linalg.slogdet(la_mat16_np)[1], rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "multi_dot_2x2_f64", lambda: mnp.linalg.multi_dot([la_multi_a_mp, la_multi_b_mp, la_multi_c_mp]), lambda: np.linalg.multi_dot([la_multi_a_np, la_multi_b_np, la_multi_c_np]), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "tensorinv_2x2x2x2_f64", lambda: mnp.linalg.tensorinv(la_tensor_inv_mp), lambda: np.linalg.tensorinv(la_tensor_inv_np), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "tensorsolve_2x3x2x3_f64", lambda: mnp.linalg.tensorsolve(la_tensor_solve_mp, la_tensor_rhs_mp), lambda: np.linalg.tensorsolve(la_tensor_solve_np, la_tensor_rhs_np), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "solve_matrix_rhs_16_f64", lambda: mnp.linalg.solve(la_mat16_mp, la_rhs16_2_mp), lambda: np.linalg.solve(la_mat16_np, la_rhs16_2_np), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "qr_r_8x4_f64", lambda: mnp.linalg.qr(la_rect_mp, mode="r"), lambda: np.linalg.qr(la_rect_np, mode="r"), check_values=False),
+    BenchCase("linalg_api", "eigh_full_2_f64", lambda: mnp.linalg.eigh(la_small_mp)[0], lambda: np.linalg.eigh(la_small_np)[0], rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "eigvals_4_f64", lambda: mnp.linalg.eigvals(la_tri_mp), lambda: np.linalg.eigvals(la_tri_np), rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "eig_full_4_f64", lambda: mnp.linalg.eig(la_tri_mp)[0], lambda: np.linalg.eig(la_tri_np)[0], rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "svd_full_8x4_f64", lambda: mnp.linalg.svd(la_rect_mp, full_matrices=False)[1], lambda: np.linalg.svd(la_rect_np, full_matrices=False)[1], check_values=False),
+    BenchCase("linalg_api", "svdvals_8x4_f64", lambda: mnp.linalg.svdvals(la_rect_mp), lambda: np.linalg.svdvals(la_rect_np), check_values=False),
+    BenchCase("linalg_api", "lstsq_8x4_f64", lambda: mnp.linalg.lstsq(la_rect_mp, la_rect_rhs_mp)[0], lambda: np.linalg.lstsq(la_rect_np, la_rect_rhs_np, rcond=None)[0], rtol=1e-10, atol=1e-10),
+    BenchCase("linalg_api", "pinv_rect_8x4_f64", lambda: mnp.linalg.pinv(la_rect_mp, rcond=la_rect_rcond), lambda: np.linalg.pinv(la_rect_np, rcond=la_rect_rcond), rtol=1e-10, atol=1e-10),
+  ])
 
   # Phase-5b unsigned int + phase-5c float16 dtype family coverage.
   # These are wrapper-bound for now (dispatch goes through the f64 round-trip
