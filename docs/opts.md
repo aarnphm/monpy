@@ -2822,3 +2822,182 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 Next target: scalar MUL and tiny matmul. The current worst rows are single-digit
 percent losses, which is exactly where dispatch overhead, scalar-left branches,
 and benchmark harness noise all start wearing the same coat.
+
+### 2026-05-09 full benchmark frontier
+
+I ran the full local macOS Python suite, the pure Mojo suite with NuMojo rows,
+the native row/reduction harnesses, and pulled the latest GitHub Benchmark Sweep
+artifacts for Linux/macOS. The local macOS rows are current working tree. The
+GitHub Linux/macOS rows are from remote commit `644f22a`, not this local HEAD,
+so they are platform evidence and not a clean current-regression verdict.
+
+Artifacts:
+
+- `results/local-full-20260509-macos-python`
+- `results/local-full-20260509-macos-mojo`
+- `results/local-full-20260509-macos-native/bench_parallel.txt`
+- `results/local-full-20260509-macos-native/bench_reduce.txt`
+- `results/github-benchmark-25594119804/monpy-bench-ubuntu-latest-644f22a8c1c9883d39c4ae5117556c803214d4cf`
+- `results/github-benchmark-25594119804/monpy-bench-macos-15-644f22a8c1c9883d39c4ae5117556c803214d4cf`
+
+Local macOS, Python-facing rows:
+
+| slice | rows | slow rows | >1.25x | >1.5x | >2x | median ratio |
+| ----- | ---: | --------: | -----: | ----: | --: | -----------: |
+| all   |  243 |       154 |     67 |    21 |   0 |       1.092x |
+
+Worst local macOS rows:
+
+| row | monpy us | NumPy us | ratio |
+| --- | -------: | -------: | ----: |
+| `array/views/transpose_add_f32` | 4.826 | 2.506 | 1.942x |
+| `array/decomp/eigh_2_f64` | 9.590 | 4.901 | 1.927x |
+| `array/interop/asarray_squeeze_axis0_f32` | 4.258 | 2.299 | 1.893x |
+| `array/decomp/eigh_4_f64` | 10.382 | 5.509 | 1.883x |
+| `array/creation/empty_like_shape_override_f32` | 4.337 | 2.294 | 1.877x |
+| `strides/elementwise/rank3_transpose_add_f32` | 14.006 | 7.977 | 1.782x |
+| `array/decomp/eigh_2_f32` | 9.560 | 5.375 | 1.775x |
+| `array/decomp/eigh_8_f64` | 11.276 | 6.569 | 1.707x |
+
+Read:
+
+- The current macOS frontier is mostly wrapper/view/linalg overhead, not a
+  memory-bandwidth disaster. No Python-facing row is over 2x slower in this
+  full run.
+- `eigh_*` remains high because tiny LAPACK calls pay fixed wrapper/workspace
+  cost. The sample stack backs this up: `eigh_2_f64` spent visible time in
+  `std::python::python::Python::evaluate`, `lapack_eigh_into`, and `DSYEV`,
+  while the benchmark matrix is only 2x2.
+- `asarray_squeeze_axis0_f32` is still an ingress-plus-view row. It crosses
+  native once for `asarray_from_buffer_ops`, then again for `squeeze_axis_ops`.
+  That makes it a better first iteration target than tiny eigens, because the
+  fix should be a bridge/view contraction rather than new numerical code.
+- `transpose_add_f32` is a fused arithmetic win path that still pays the view
+  construction toll (`transpose_full_reverse_ops`, `make_view_array`) before
+  the fused add. This is probably a second iteration after the ingress/view
+  path, unless a fused transpose-add native entry falls out cleanly.
+
+Local macOS, pure Mojo rows:
+
+| slice | rows | slow rows | >1.25x | >1.5x | >2x | median ratio |
+| ----- | ---: | --------: | -----: | ----: | --: | -----------: |
+| all   |  114 |        36 |      1 |     0 |   0 |       0.980x |
+
+Worst pure Mojo rows:
+
+| row | monpy ns | baseline ns | ratio |
+| --- | -------: | ----------: | ----: |
+| `threading.threads1/neg_f32_1m` | 108,778 | 86,164 | 1.262x |
+| `threading.threads4/exp_f32_64k` | 35,574 | 30,155 | 1.180x |
+| `elementwise/add_f32_1m` | 130,696 | 113,130 | 1.155x |
+| `threading.threads1/neg_f64_1m` | 240,625 | 208,605 | 1.153x |
+| `elementwise/add_par_f64_16m` | 6,264,500 | 5,479,750 | 1.143x |
+| `threading.auto/exp_f32_64k` | 31,500 | 28,741 | 1.096x |
+| `matmul/small_matmul_f32_8` | 60 | 57 | 1.053x |
+
+Read:
+
+- Against Mojo/stdlib and NuMojo, the native core is mostly fine. The remaining
+  deficits are policy thresholds and tiny dispatch costs, not broad SIMD
+  failure.
+- The native row harness gives the clearest threading rule: small row kernels
+  should not fan out. `par_layernorm_f32_32x32` was roughly two orders of
+  magnitude slower than serial because the work is too small for
+  `sync_parallelize`. Large rows are different: 1024x4096 softmax and layernorm
+  won by about 6:1 and 5.8:1 respectively.
+- Parallel reductions should stay gated to very large buffers. The native
+  reduction harness showed `sumP_f32_16M` and `sumP_f32_128M` around 2:1 faster
+  than serial/std, but small reductions do not justify the thread toll.
+
+Remote GitHub Linux, same remote commit `644f22a`:
+
+| slice | rows | slow rows | >1.25x | >1.5x | >2x | median ratio |
+| ----- | ---: | --------: | -----: | ----: | --: | -----------: |
+| all   |  242 |       169 |     67 |    36 |   8 |       1.089x |
+
+Worst Linux rows:
+
+| row | monpy us | NumPy us | ratio |
+| --- | -------: | -------: | ----: |
+| `array/bandwidth/unary_sin_16384_f32` | 94.993 | 32.213 | 2.933x |
+| `strides/elementwise/sliced_unary_sin_f32` | 117.284 | 40.727 | 2.883x |
+| `array/decomp/eigh_2_f64` | 24.329 | 9.925 | 2.451x |
+| `array/decomp/eigh_4_f64` | 26.102 | 11.121 | 2.347x |
+| `array/decomp/eigh_8_f64` | 27.843 | 12.489 | 2.233x |
+| `array/decomp/eigh_2_f32` | 23.718 | 11.177 | 2.090x |
+| `array/ext_dtypes/binary_add_f16` | 24.326 | 11.877 | 2.046x |
+| `array/decomp/eigh_4_f32` | 26.072 | 12.871 | 2.026x |
+
+Remote GitHub macOS, same remote commit `644f22a`:
+
+| slice | rows | slow rows | >1.25x | >1.5x | >2x | median ratio |
+| ----- | ---: | --------: | -----: | ----: | --: | -----------: |
+| all   |  242 |       140 |     78 |    35 |   8 |       1.099x |
+
+Worst remote macOS rows:
+
+| row | monpy us | NumPy us | ratio |
+| --- | -------: | -------: | ----: |
+| `array/views/moveaxis_f32` | 19.551 | 4.880 | 2.772x |
+| `array/casts/astype_i64_to_i64` | 7.301 | 3.025 | 2.414x |
+| `array/views/diagonal_64_f64` | 7.172 | 3.010 | 2.214x |
+| `array/creation/meshgrid_xy_f32` | 25.725 | 11.108 | 2.149x |
+| `array/interop/asarray_zero_copy_f32` | 5.153 | 2.426 | 2.124x |
+| `array/views/hstack_f32` | 8.761 | 3.679 | 2.124x |
+| `strides/elementwise/rank3_transpose_add_f32` | 20.294 | 8.859 | 2.021x |
+| `array/creation/empty_like_shape_override_f32` | 6.173 | 3.080 | 2.004x |
+
+Platform split:
+
+- Linux is uniquely bad on `sin` rows. `unary_sin_16384_f32` is 2.933x on
+  Linux but 0.315x on the remote macOS artifact. That is a backend/library
+  split, not a generic elementwise problem: macOS can lean on the Accelerate-ish
+  path, while Linux is paying scalar/libm/SIMD policy costs. Current-head Linux
+  needs a fresh runner before committing a math-kernel patch.
+- Linux and macOS both dislike tiny `eigh`. The ratios differ, but the shape is
+  the same: very small matrices run through a large fixed-cost path. This wants
+  either a tiny closed-form eigensolver for 2x2/4x4 or a cheaper LAPACK wrapper
+  that avoids Python evaluation and per-call workspace churn.
+- The old remote macOS view/interop rows are not the current local frontier.
+  `moveaxis`, `asarray_zero_copy`, and related rows have already moved down in
+  this local tree. Current macOS is now dominated by `transpose_add`,
+  `asarray_squeeze`, `empty_like_shape_override`, and tiny eigens.
+
+Focused profiles:
+
+| case | us/call | backend | traced alloc peak | sample read |
+| ---- | ------: | ------- | ----------------: | ----------- |
+| `array/views/transpose_add_f32` | 4.691 | fused native | 1,760 B | view construction plus fused arithmetic |
+| `array/interop/asarray_squeeze_axis0_f32` | 4.438 | native bridge/view | 1,800 B | buffer ingress plus squeeze wrapper |
+| `array/decomp/eigh_2_f64` | 9.860 | Accelerate/LAPACK | 147,887 B | Python evaluation plus tiny LAPACK |
+
+Next iteration:
+
+- First target: reduce the actual `asarray_squeeze_axis0_f32` components, not a
+  fantasy fused Python expression. Once `mnp.asarray(...)` returns, `squeeze`
+  only sees a monpy array. The honest patch surface is either a cheaper common
+  `squeeze_axis` view constructor or a faster buffer-ingress path for small
+  external arrays.
+- Expected ceiling: the row is 4.258 us vs 2.299 us today. A targeted
+  `squeeze_axis` specialization can only remove part of the roughly 0.7 us
+  native squeeze toll. A buffer-ingress cleanup has the bigger ceiling, but it
+  also has a higher chance of hitting CPython protocol cost we cannot wish away.
+- Second target: `empty_like_shape_override_f32`, because it is current-mac slow
+  and avoids Linux math-library ambiguity.
+- Linux target after a fresh current-head runner: `sin` rows. Do not rewrite
+  transcendental math from stale `644f22a` numbers alone. That way lies fake
+  victory and a checksum shaped headache.
+
+Verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types all --loops 200 --repeats 5 --rounds 3 --format json --sort ratio --output-dir results/local-full-20260509-macos-python --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --include-numojo --strict-numojo --include-threading --thread-caps auto,1,2,4,8 --format json --sort ratio --output-dir results/local-full-20260509-macos-mojo --no-stdout --timeout 300
+MONPY_THREADS=4 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo run -I src benches/bench_parallel.mojo
+MONPY_THREADS=4 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo run -I src benches/bench_reduce.mojo
+gh run download 25594119804 -R aarnphm/monpy --dir results/github-benchmark-25594119804
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/views/transpose_add_f32 --types array,strides,complex,attention --candidate monpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-full-transpose-add-monpy --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/interop/asarray_squeeze_axis0_f32 --types array,strides,complex,attention --candidate monpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-full-asarray-squeeze-monpy --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/decomp/eigh_2_f64 --types array,strides,complex,attention --candidate monpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-full-eigh2-f64-monpy --sample --no-perf-stat
+```
