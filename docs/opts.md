@@ -2106,3 +2106,88 @@ under `results/local-profile-20260509-attention-softmax-f32-*`.
 Next target should return to complex128 add/mul, or add a larger attention
 matrix-size row so the attention benchmark can expose when softmax stops being
 wrapper-sized and starts becoming cache/bandwidth sized.
+
+### 2026-05-09 static unary typed kernels
+
+The next refresh split the frontier again. The public NumPy-facing complex
+slice was still led by small wrapper/facade rows:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `complex/interop/asarray_complex64` | 2.880 | 2.129 | 1.348x |
+| `complex/elementwise/binary_add_complex64` | 3.306 | 2.512 | 1.258x |
+| `complex/elementwise/binary_add_complex128` | 3.249 | 2.969 | 1.223x |
+| `complex/interop/array_copy_complex128` | 3.390 | 2.661 | 1.207x |
+| `complex/elementwise/binary_mul_complex64` | 3.075 | 2.550 | 1.207x |
+
+The attention slice stayed ahead of NumPy after the Float32 softmax patch:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `attention/attention/causal_attention_t32_d32_f32` | 20.904 | 22.658 | 0.887x |
+| `attention/gpt/tiny_gpt_logits_t32_d32_v128_f32` | 81.802 | 107.356 | 0.750x |
+| `attention/softmax/causal_scores_t32_f32` | 7.181 | 10.331 | 0.694x |
+
+The pure-Mojo stdlib comparison exposed the real leaf-level miss:
+
+| row | candidate | stdlib | ratio |
+| --- | --------: | -----: | ----: |
+| `elementwise/sin_f64_64k` | 394342 ns | 187974 ns | 2.098x |
+| `elementwise/add_f64_1k` | 222.7 ns | 185.0 ns | 1.204x |
+| `matmul/small_matmul_f32_16` | 452.9 ns | 401.5 ns | 1.128x |
+
+`unary_contig_typed` was still calling `apply_unary_typed_vec(..., op)` inside
+the vector loop. For common unary ops that means each SIMD chunk entered the
+runtime `op` dispatcher before reaching `sin`, `cos`, `exp`, etc. The stdlib
+baseline spells the operation directly as `std_sin(load[width])`. The typed
+kernel now mirrors the binary-kernel pattern: `try_unary_contig_typed_static`
+routes common ops (`SIN`, `COS`, `EXP`, `LOG`, `TANH`, `SQRT`, `NEGATE`,
+`POSITIVE`, `SQUARE`) into a comptime-`op` static loop, removing the per-vector
+runtime branch.
+
+Focused verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/elementwise/kernels/typed.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_umath.py::test_unary_math_matches_numpy_float_dtypes tests/python/numpy_compat/test_umath.py::test_unary_math_preserves_float32_result_dtype tests/python/numpy_compat/test_umath.py::test_unary_math_is_a_full_numpy_ufunc tests/python/numpy_compat/test_numeric.py::test_fused_sin_add_mul_matches_numpy tests/python/numpy_compat/test_numeric.py::test_numpy_shaped_expression_lowers_to_fused_kernel -q
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/python -m monpy._bench.mojo_sweep --format json --sort ratio --output-dir results/local-sweep-20260509-mojo-unary-static-0444 --no-stdout --timeout 300
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types array --loops 50 --repeats 7 --rounds 5 --vector-sizes 65536 --matrix-sizes 64 --linalg-sizes 8 --format json --sort ratio --output-dir results/local-sweep-20260509-array-unary-static-0444 --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case array/bandwidth/unary_sin_65536_f32 --types array --vector-sizes 65536 --matrix-sizes 64 --linalg-sizes 8 --candidate monpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-unary-sin-static-monpy --sample --no-perf-stat
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/python -m monpy._bench.profile --case array/bandwidth/unary_sin_65536_f32 --types array --vector-sizes 65536 --matrix-sizes 64 --linalg-sizes 8 --candidate numpy --duration 3 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-unary-sin-static-numpy --sample --no-perf-stat
+```
+
+Post-fix pure-Mojo stdlib result:
+
+| row | before | after | delta |
+| --- | -----: | ----: | ----: |
+| `elementwise/sin_f64_64k` | 394342 ns vs 187974 ns, 2.098x | 167833 ns vs 167000 ns, 1.005x | ratio gap removed |
+| `elementwise/sin_f32_64k` | 118877 ns vs 116339 ns, 1.022x | below top deficits | no visible remaining gap |
+
+The remaining stdlib frontier is much flatter: `scalar_mul_f64_64k` leads at
+1.086x, `sum_f32_1k` is 1.033x, and `small_matmul_f32_16` is 1.029x. That is a
+clean drop from a 2.10x top leaf to low-single-digit misses.
+
+The public NumPy-facing array sweep still uses the macOS Accelerate path for
+large f32 sine (`backend_code = 1` in profile), so this patch mainly closes the
+pure Mojo leaf gap rather than the public facade row. The post-fix public
+bandwidth row was still comfortably ahead of NumPy:
+
+| row | monpy us | numpy us | ratio |
+| --- | -------: | -------: | ----: |
+| `array/bandwidth/unary_sin_65536_f32` | 32.139 | 101.894 | 0.313x |
+| `array/bandwidth/fused_sin_add_mul_65536_f32` | 39.788 | 115.449 | 0.347x |
+| `array/elementwise/unary_sin_f32` | 4.523 | 3.792 | 1.191x |
+
+The sample profile for `array/bandwidth/unary_sin_65536_f32` reported monpy at
+32.483 us/call and NumPy at 102.304 us/call. Monpy used backend code 1, the
+Accelerate path, with a 1,656 byte traced allocation peak; NumPy peaked at
+525,512 bytes. The sample call graph showed monpy spending the hot loop in
+`VVSINF` through `create::ops::elementwise::unary_ops`, while NumPy spent the
+hot path in `_multiarray_umath`'s `simd_sincos_f32` ufunc loop. No PMU counters
+were collected because the profile command used `--no-perf-stat`; captures live
+under `results/local-profile-20260509-unary-sin-static-*`.
+
+Next target should be the new pure-Mojo `scalar_mul_f64_64k` stdlib gap or the
+public complex64 add/asarray wrapper cluster. The former is a cleaner leaf
+kernel target; the latter is the larger NumPy-facing ratio.

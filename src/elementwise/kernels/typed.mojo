@@ -11,8 +11,7 @@ via `simd_width_of[dtype]()`. Two flavours per shape:
   - The comptime-`op` flavour (`*_static[dtype, width, op]`,
     `try_*_static[dtype]`) inlines the op selection into the kernel body
     so the inner loop has no per-iteration branch. The `try_*` helpers
-    cover ADD/SUB/MUL/DIV (the high-frequency ops) and fall back to the
-    runtime path for the rest.
+    cover high-frequency ops and fall back to the runtime path for the rest.
 
 f16 caveat: `atan2`, `hypot`, `copysign` have no `*f16` extern in Mojo
 KGEN. The runtime kernel raises for those (gated `comptime if dtype !=
@@ -503,6 +502,39 @@ def apply_unary_typed_vec[
     raise Error("unknown unary op")
 
 
+def apply_unary_typed_vec_static[
+    dtype: DType, width: Int, op: Int
+](value: SIMD[dtype, width]) raises -> SIMD[dtype, width] where dtype.is_floating_point():
+    comptime if op == UnaryOp.SIN.value:
+        return sin(value)
+    else:
+        comptime if op == UnaryOp.COS.value:
+            return cos(value)
+        else:
+            comptime if op == UnaryOp.EXP.value:
+                return exp(value)
+            else:
+                comptime if op == UnaryOp.LOG.value:
+                    return log(value)
+                else:
+                    comptime if op == UnaryOp.TANH.value:
+                        return tanh(value)
+                    else:
+                        comptime if op == UnaryOp.SQRT.value:
+                            return sqrt(value)
+                        else:
+                            comptime if op == UnaryOp.NEGATE.value:
+                                return -value
+                            else:
+                                comptime if op == UnaryOp.POSITIVE.value:
+                                    return value
+                                else:
+                                    comptime if op == UnaryOp.SQUARE.value:
+                                        return value * value
+                                    else:
+                                        return apply_unary_typed_vec[dtype, width](value, op)
+
+
 def binary_row_broadcast_contig_typed[
     dtype: DType
 ](
@@ -604,6 +636,8 @@ def unary_contig_typed[
     size: Int,
     op: Int,
 ) raises where dtype.is_floating_point():
+    if try_unary_contig_typed_static[dtype](src_ptr, out_ptr, size, op):
+        return
     # Comptime-typed unary kernel. SIMD width derives from dtype.
     comptime width = simd_width_of[dtype]()
     var i = 0
@@ -616,6 +650,64 @@ def unary_contig_typed[
     while i < size:
         out_ptr[i] = apply_unary_typed_vec[dtype, 1](SIMD[dtype, 1](src_ptr[i]), op)[0]
         i += 1
+
+
+def unary_contig_typed_static[
+    dtype: DType, op: Int
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    size: Int,
+) raises where dtype.is_floating_point():
+    comptime width = simd_width_of[dtype]()
+    var i = 0
+    while i + width <= size:
+        out_ptr.store(
+            i,
+            apply_unary_typed_vec_static[dtype, width, op](src_ptr.load[width=width](i)),
+        )
+        i += width
+    while i < size:
+        out_ptr[i] = apply_unary_typed_vec_static[dtype, 1, op](SIMD[dtype, 1](src_ptr[i]))[0]
+        i += 1
+
+
+def try_unary_contig_typed_static[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    size: Int,
+    op: Int,
+) raises -> Bool where dtype.is_floating_point():
+    if op == UnaryOp.SIN.value:
+        unary_contig_typed_static[dtype, UnaryOp.SIN.value](src_ptr, out_ptr, size)
+        return True
+    if op == UnaryOp.COS.value:
+        unary_contig_typed_static[dtype, UnaryOp.COS.value](src_ptr, out_ptr, size)
+        return True
+    if op == UnaryOp.EXP.value:
+        unary_contig_typed_static[dtype, UnaryOp.EXP.value](src_ptr, out_ptr, size)
+        return True
+    if op == UnaryOp.LOG.value:
+        unary_contig_typed_static[dtype, UnaryOp.LOG.value](src_ptr, out_ptr, size)
+        return True
+    if op == UnaryOp.TANH.value:
+        unary_contig_typed_static[dtype, UnaryOp.TANH.value](src_ptr, out_ptr, size)
+        return True
+    if op == UnaryOp.SQRT.value:
+        unary_contig_typed_static[dtype, UnaryOp.SQRT.value](src_ptr, out_ptr, size)
+        return True
+    if op == UnaryOp.NEGATE.value:
+        unary_contig_typed_static[dtype, UnaryOp.NEGATE.value](src_ptr, out_ptr, size)
+        return True
+    if op == UnaryOp.POSITIVE.value:
+        unary_contig_typed_static[dtype, UnaryOp.POSITIVE.value](src_ptr, out_ptr, size)
+        return True
+    if op == UnaryOp.SQUARE.value:
+        unary_contig_typed_static[dtype, UnaryOp.SQUARE.value](src_ptr, out_ptr, size)
+        return True
+    return False
 
 
 def apply_unary_preserve_typed_vec[
