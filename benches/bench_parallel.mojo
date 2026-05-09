@@ -1,22 +1,19 @@
 """Head-to-head benchmark: monpy parallel layer vs single-thread serial baseline.
 
-Three workloads at five sizes per dtype:
+Five workloads per dtype:
 
-  ser_add — `binary_same_shape_contig_typed_static[ADD]`, one thread.
-  par_add — same kernel, chunked across `num_performance_cores()` threads
-            via `sync_parallelize`. Measures the parallel-add primitive
-            without the dispatch ladder's static fast-path interfering.
-  ser_neg — single-thread `unary_contig_typed_static[NEGATE]`. Light op
-            (1 SIMD instruction per element).
-  par_neg — same kernel, parallel chunked. Tests whether 2MB
-            `ELEMENTWISE_LIGHT_GRAIN` is the correct gate for cheap unary.
-  ser_exp — single-thread `unary_contig_typed_static[EXP]`. Heavy op
-            (libm-class call per lane).
-  par_exp — parallel chunked. Tests whether 256KB
-            `ELEMENTWISE_HEAVY_GRAIN` is the correct gate for transcendentals.
+  ser_add / par_add — `binary_same_shape_contig_typed_static[ADD]`, light op.
+  ser_neg / par_neg — `unary_contig_typed_static[NEGATE]`, light op.
+  ser_exp / par_exp — `unary_contig_typed_static[EXP]`, heavy op.
+  ser_softmax_row / par_softmax_row — softmax over the last axis.
+                                       Mirrors `_softmax_last_axis_f32` in
+                                       `src/elementwise/kernels/nn.mojo`.
+  ser_layernorm_row / par_layernorm_row — layernorm over the last axis.
+                                           Mirrors `layer_norm_last_axis_typed`.
 
-Sweep: 256KB, 1MB, 4MB, 16MB, 64MB. Picked to span both grain gates and
-the L1/L2/DRAM transitions.
+Element-wise sweep: 256KB, 1MB, 4MB, 16MB, 64MB.
+Row-kernel sweep: 32x32 (below ROW_HEAVY_GRAIN_ELEMS=8K — parallel
+should NOT help), 256x512, 1024x512, 1024x4096 (transformer-scale).
 
 Why this exists separately from `bench_reduce.mojo` and `bench_mojo_sweep.mojo`:
 
@@ -51,7 +48,7 @@ from std.benchmark import (
     ThroughputMeasure,
     keep,
 )
-from std.math import ceildiv
+from std.math import ceildiv, exp as _exp, sqrt as _sqrt
 from std.memory.unsafe_pointer import alloc
 from std.sys import num_performance_cores, size_of
 
@@ -263,6 +260,233 @@ def bench_par_exp[dtype: DType, n: Int](mut b: Bencher) raises where dtype.is_fl
 
 
 # ===-----------------------------------------------------------------------===
+# Row kernels — softmax + layernorm last-axis
+# ===-----------------------------------------------------------------------===
+# Mirror the per-row body from `src/elementwise/kernels/nn.mojo`. The
+# parallel wrapper does row-range partitioning identical to the
+# production `_softmax_last_axis_f32`; we keep the bench standalone
+# so MONPY_THREADS doesn't influence the parallel side.
+
+def _softmax_rows[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    row_start: Int,
+    row_end: Int,
+    cols: Int,
+) raises where dtype.is_floating_point():
+    for row in range(row_start, row_end):
+        var base = row * cols
+        var row_max = Float64(src_ptr[base])
+        for col in range(1, cols):
+            var v = Float64(src_ptr[base + col])
+            if v > row_max:
+                row_max = v
+        var denom = 0.0
+        for col in range(cols):
+            var w = _exp(Float64(src_ptr[base + col]) - row_max)
+            denom += w
+            out_ptr[base + col] = Scalar[dtype](w)
+        var inv = 1.0 / denom
+        for col in range(cols):
+            out_ptr[base + col] = Scalar[dtype](Float64(out_ptr[base + col]) * inv)
+
+
+def softmax_row_serial[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    rows: Int,
+    cols: Int,
+) raises where dtype.is_floating_point():
+    _softmax_rows[dtype](src_ptr, out_ptr, 0, rows, cols)
+
+
+def softmax_row_parallel[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    rows: Int,
+    cols: Int,
+    nworkers: Int,
+) raises where dtype.is_floating_point():
+    if nworkers <= 1 or rows < nworkers:
+        _softmax_rows[dtype](src_ptr, out_ptr, 0, rows, cols)
+        return
+    var chunk = ceildiv(rows, nworkers)
+
+    @parameter
+    def chunk_worker(i: Int) raises:
+        var start = i * chunk
+        var end = start + chunk
+        if end > rows:
+            end = rows
+        if start >= rows:
+            return
+        _softmax_rows[dtype](src_ptr, out_ptr, start, end, cols)
+
+    sync_parallelize[chunk_worker](nworkers)
+
+
+def _layernorm_rows[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    gain_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    bias_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    row_start: Int,
+    row_end: Int,
+    cols: Int,
+    eps: Float64,
+) raises where dtype.is_floating_point():
+    for row in range(row_start, row_end):
+        var base = row * cols
+        var sum = 0.0
+        var sumsq = 0.0
+        for col in range(cols):
+            var value = Float64(src_ptr[base + col])
+            sum += value
+            sumsq += value * value
+        var mean = sum / Float64(cols)
+        var variance = sumsq / Float64(cols) - mean * mean
+        if variance < 0.0:
+            variance = 0.0
+        var inv_std = 1.0 / _sqrt(variance + eps)
+        for col in range(cols):
+            var v = (Float64(src_ptr[base + col]) - mean) * inv_std
+            v = v * Float64(gain_ptr[col]) + Float64(bias_ptr[col])
+            out_ptr[base + col] = Scalar[dtype](v)
+
+
+def layernorm_row_serial[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    gain_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    bias_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    rows: Int,
+    cols: Int,
+    eps: Float64,
+) raises where dtype.is_floating_point():
+    _layernorm_rows[dtype](src_ptr, gain_ptr, bias_ptr, out_ptr, 0, rows, cols, eps)
+
+
+def layernorm_row_parallel[
+    dtype: DType
+](
+    src_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    gain_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    bias_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    rows: Int,
+    cols: Int,
+    nworkers: Int,
+    eps: Float64,
+) raises where dtype.is_floating_point():
+    if nworkers <= 1 or rows < nworkers:
+        _layernorm_rows[dtype](src_ptr, gain_ptr, bias_ptr, out_ptr, 0, rows, cols, eps)
+        return
+    var chunk = ceildiv(rows, nworkers)
+
+    @parameter
+    def chunk_worker(i: Int) raises:
+        var start = i * chunk
+        var end = start + chunk
+        if end > rows:
+            end = rows
+        if start >= rows:
+            return
+        _layernorm_rows[dtype](src_ptr, gain_ptr, bias_ptr, out_ptr, start, end, cols, eps)
+
+    sync_parallelize[chunk_worker](nworkers)
+
+
+@parameter
+def bench_ser_softmax_row[dtype: DType, rows: Int, cols: Int](mut b: Bencher) raises where dtype.is_floating_point():
+    var src = alloc[Scalar[dtype]](rows * cols)
+    var out = alloc[Scalar[dtype]](rows * cols)
+    fill_buffer(src, rows * cols)
+
+    @always_inline
+    @parameter
+    def call_fn() raises:
+        softmax_row_serial[dtype](src, out, rows, cols)
+        keep(out[0])
+
+    b.iter[call_fn]()
+    src.free()
+    out.free()
+
+
+@parameter
+def bench_par_softmax_row[dtype: DType, rows: Int, cols: Int](mut b: Bencher) raises where dtype.is_floating_point():
+    var src = alloc[Scalar[dtype]](rows * cols)
+    var out = alloc[Scalar[dtype]](rows * cols)
+    fill_buffer(src, rows * cols)
+
+    @always_inline
+    @parameter
+    def call_fn() raises:
+        softmax_row_parallel[dtype](src, out, rows, cols, num_performance_cores())
+        keep(out[0])
+
+    b.iter[call_fn]()
+    src.free()
+    out.free()
+
+
+@parameter
+def bench_ser_layernorm_row[dtype: DType, rows: Int, cols: Int](mut b: Bencher) raises where dtype.is_floating_point():
+    var src = alloc[Scalar[dtype]](rows * cols)
+    var out = alloc[Scalar[dtype]](rows * cols)
+    var gain = alloc[Scalar[dtype]](cols)
+    var bias = alloc[Scalar[dtype]](cols)
+    fill_buffer(src, rows * cols)
+    fill_buffer(gain, cols)
+    fill_buffer(bias, cols)
+
+    @always_inline
+    @parameter
+    def call_fn() raises:
+        layernorm_row_serial[dtype](src, gain, bias, out, rows, cols, 1e-5)
+        keep(out[0])
+
+    b.iter[call_fn]()
+    src.free()
+    out.free()
+    gain.free()
+    bias.free()
+
+
+@parameter
+def bench_par_layernorm_row[dtype: DType, rows: Int, cols: Int](mut b: Bencher) raises where dtype.is_floating_point():
+    var src = alloc[Scalar[dtype]](rows * cols)
+    var out = alloc[Scalar[dtype]](rows * cols)
+    var gain = alloc[Scalar[dtype]](cols)
+    var bias = alloc[Scalar[dtype]](cols)
+    fill_buffer(src, rows * cols)
+    fill_buffer(gain, cols)
+    fill_buffer(bias, cols)
+
+    @always_inline
+    @parameter
+    def call_fn() raises:
+        layernorm_row_parallel[dtype](src, gain, bias, out, rows, cols, num_performance_cores(), 1e-5)
+        keep(out[0])
+
+    b.iter[call_fn]()
+    src.free()
+    out.free()
+    gain.free()
+    bias.free()
+
+
+# ===-----------------------------------------------------------------------===
 # Throughput measures
 # ===-----------------------------------------------------------------------===
 
@@ -280,12 +504,22 @@ def _flops[n: Int]() -> ThroughputMeasure:
     return ThroughputMeasure(BenchMetric.flops, n)
 
 
+def _bytes_row[dtype: DType, rows: Int, cols: Int]() -> ThroughputMeasure:
+    # Softmax: 2 reads + 1 write per element. Layernorm: 3 reads + 1 write
+    # per element (gain/bias touched once per column row but counted once).
+    return ThroughputMeasure(BenchMetric.bytes, 3 * rows * cols * size_of[Scalar[dtype]]())
+
+
 def _binary_measures[dtype: DType, n: Int]() -> List[ThroughputMeasure]:
     return [_bytes_binary[dtype, n](), _flops[n]()]
 
 
 def _unary_measures[dtype: DType, n: Int]() -> List[ThroughputMeasure]:
     return [_bytes_unary[dtype, n](), _flops[n]()]
+
+
+def _row_measures[dtype: DType, rows: Int, cols: Int]() -> List[ThroughputMeasure]:
+    return [_bytes_row[dtype, rows, cols](), _flops[rows * cols]()]
 
 
 # ===-----------------------------------------------------------------------===
@@ -355,5 +589,41 @@ def main() raises:
 
     m.bench_function[bench_ser_exp[DType.float64, 1048576]](BenchId("ser_exp_f64_1m"), _unary_measures[DType.float64, 1048576]())
     m.bench_function[bench_par_exp[DType.float64, 1048576]](BenchId("par_exp_f64_1m"), _unary_measures[DType.float64, 1048576]())
+
+    # Row kernels — softmax + layernorm last-axis at production attention
+    # shapes. The gate `worker_count_for_row_elements` keeps tiny shapes
+    # serial; these rows test (a) that the gate makes the right call at
+    # 32x32 and (b) that parallel actually wins at the larger shapes.
+
+    # Tiny: below ROW_HEAVY_GRAIN_ELEMS=8K. Parallel wrapper short-circuits
+    # back to serial inside the function — the par_ row should match ser_.
+    m.bench_function[bench_ser_softmax_row[DType.float32, 32, 32]](BenchId("ser_softmax_f32_32x32"), _row_measures[DType.float32, 32, 32]())
+    m.bench_function[bench_par_softmax_row[DType.float32, 32, 32]](BenchId("par_softmax_f32_32x32"), _row_measures[DType.float32, 32, 32]())
+
+    # Mid: 256 rows x 512 cols = 131K elements. 16x ROW_HEAVY_GRAIN_ELEMS;
+    # parallel should fan out to ceil(131K / 8K) = 17 workers (capped by hw).
+    m.bench_function[bench_ser_softmax_row[DType.float32, 256, 512]](BenchId("ser_softmax_f32_256x512"), _row_measures[DType.float32, 256, 512]())
+    m.bench_function[bench_par_softmax_row[DType.float32, 256, 512]](BenchId("par_softmax_f32_256x512"), _row_measures[DType.float32, 256, 512]())
+
+    # Large: 1024 rows x 512 cols = 524K elements.
+    m.bench_function[bench_ser_softmax_row[DType.float32, 1024, 512]](BenchId("ser_softmax_f32_1024x512"), _row_measures[DType.float32, 1024, 512]())
+    m.bench_function[bench_par_softmax_row[DType.float32, 1024, 512]](BenchId("par_softmax_f32_1024x512"), _row_measures[DType.float32, 1024, 512]())
+
+    # Vocab projection scale: 1024 rows x 4096 cols = 4M elements.
+    m.bench_function[bench_ser_softmax_row[DType.float32, 1024, 4096]](BenchId("ser_softmax_f32_1024x4096"), _row_measures[DType.float32, 1024, 4096]())
+    m.bench_function[bench_par_softmax_row[DType.float32, 1024, 4096]](BenchId("par_softmax_f32_1024x4096"), _row_measures[DType.float32, 1024, 4096]())
+
+    # Layernorm — same shape sweep, with extra gain/bias bandwidth.
+    m.bench_function[bench_ser_layernorm_row[DType.float32, 32, 32]](BenchId("ser_layernorm_f32_32x32"), _row_measures[DType.float32, 32, 32]())
+    m.bench_function[bench_par_layernorm_row[DType.float32, 32, 32]](BenchId("par_layernorm_f32_32x32"), _row_measures[DType.float32, 32, 32]())
+
+    m.bench_function[bench_ser_layernorm_row[DType.float32, 256, 512]](BenchId("ser_layernorm_f32_256x512"), _row_measures[DType.float32, 256, 512]())
+    m.bench_function[bench_par_layernorm_row[DType.float32, 256, 512]](BenchId("par_layernorm_f32_256x512"), _row_measures[DType.float32, 256, 512]())
+
+    m.bench_function[bench_ser_layernorm_row[DType.float32, 1024, 512]](BenchId("ser_layernorm_f32_1024x512"), _row_measures[DType.float32, 1024, 512]())
+    m.bench_function[bench_par_layernorm_row[DType.float32, 1024, 512]](BenchId("par_layernorm_f32_1024x512"), _row_measures[DType.float32, 1024, 512]())
+
+    m.bench_function[bench_ser_layernorm_row[DType.float32, 1024, 4096]](BenchId("ser_layernorm_f32_1024x4096"), _row_measures[DType.float32, 1024, 4096]())
+    m.bench_function[bench_par_layernorm_row[DType.float32, 1024, 4096]](BenchId("par_layernorm_f32_1024x4096"), _row_measures[DType.float32, 1024, 4096]())
 
     m.dump_report()
