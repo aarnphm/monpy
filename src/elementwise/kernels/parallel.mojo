@@ -10,12 +10,12 @@ non-deterministic numerical results, NUMA experiments, or when monpy is
 called from a host-side thread pool that already saturates the CPU.
 
 Grain sizes are per-worker work thresholds, not global "parallel yes/no"
-thresholds. Empirically calibrated from `benches/bench_reduce.mojo`:
-`sum_par` reaches parity with `sum8` at ~1MB on M3 Pro, beats it ~2x by
-16MB. On many-core Ubuntu boxes this prevents a 1MB tensor from being
-split into dozens of cache-cold scraps. Element-wise heavy (exp/log/sin)
-amortises spawn cost earlier because per-element work is heavier; light
-ops (add/mul) need more bytes to break even.
+thresholds. Reductions currently stay serial until very large tensors because
+`sync_parallelize` creates and synchronizes a CPU context for each call; the
+local public path measured faster and steadier with `MONPY_THREADS=1` at 1M and
+16M f32 reductions. Element-wise heavy ops (exp/log/sin) amortise spawn cost
+earlier because per-element work is heavier; light ops (add/mul) need more
+bytes to break even.
 
 Reference patterns:
   - `_Global` lazy singleton: `src/accelerate.mojo:445-449`
@@ -36,7 +36,7 @@ from std.sys import num_performance_cores
 # Element-wise light ops (add/mul/cmp) need more bytes because per-
 # element work is one SIMD instruction; element-wise heavy ops (exp/log/
 # sin) amortize earlier because per-element FLOPs are higher.
-comptime REDUCE_GRAIN = 1 << 20  # 1MB
+comptime REDUCE_GRAIN = 1 << 30  # 1GB, serial until CPU worker setup is amortized
 comptime ELEMENTWISE_LIGHT_GRAIN = 1 << 21  # 2MB
 comptime ELEMENTWISE_HEAVY_GRAIN = 1 << 18  # 256KB
 comptime ROW_HEAVY_GRAIN_ELEMS = 1 << 13  # row elements per worker for softmax/layernorm
@@ -107,8 +107,8 @@ def worker_count_for_bytes(work_units: Int, byte_count: Int, grain_per_worker: I
     """Resolve worker count by hardware cap and byte budget per worker.
 
     `work_units` is usually element count, while `byte_count` is
-    `work_units * sizeof(dtype)`. On a 64-core system a 1MB reduction should
-    stay serial instead of becoming 64 workers with 16KB slices.
+    `work_units * sizeof(dtype)`. On a 64-core system a small reduction should
+    stay serial instead of becoming many cache-cold slices.
     """
     if byte_count < grain_per_worker:
         return 1

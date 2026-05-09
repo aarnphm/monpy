@@ -2321,3 +2321,55 @@ Next target: add a larger attention-size sweep so the row-element policy can be
 calibrated beyond the 32x32 smoke. The intended curve is serial for tiny
 attention, then gradual fanout as `rows * cols / ROW_HEAVY_GRAIN_ELEMS` grows,
 capped by row slices, hardware performance cores, and `MONPY_THREADS`.
+
+### 2026-05-09 reduction parallel gate rollback
+
+The live strict Mojo sweep made the problem visible: the default stdlib
+comparison had started ranking calibration rows instead of production rows.
+`reduce_*_par_typed` was being called directly with `num_performance_cores()`,
+and those rows dominated the table with ratios like `max_par_f32_1m` at 57.5x
+slower than the serial 8-accumulator reducer.
+
+The public path had the same smell. A separate Python probe compared normal
+execution against `MONPY_THREADS=1` in fresh processes:
+
+- before the gate change, `sum/min/max` over 1M f32 could hit hundreds of
+  microseconds on the auto path while the serial path sat around 54-55 us.
+- after the gate change, the auto path no longer fans out below 1GB of reduction
+  input, so 1M and 16M f32 reductions use the same serial reducer as
+  `MONPY_THREADS=1`.
+- the cause is not SIMD. The SIMD reducer is fine. The expensive atom is
+  `sync_parallelize`: the stdlib path creates a CPU `DeviceContext`, enqueues
+  tasks, and synchronizes for each call. Until monpy has a persistent worker
+  context or a better reduction scheduler, that overhead eats the reduction.
+
+Code changes:
+
+- `REDUCE_GRAIN` moved from 1MB to 1GB. This keeps production reductions serial
+  for the sizes that currently matter in the benchmark suite.
+- `bench_mojo_sweep.mojo` stopped emitting direct parallel-reduction calibration
+  rows. Those belong in `bench_parallel.mojo` or `bench_reduce.mojo`; the default
+  stdlib sweep should rank stdlib/kernel deficits, not non-production probes.
+
+Verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/pytest tests/python/numpy_compat/test_numeric.py::test_reductions_match_numpy_for_axis_none tests/python/numpy_compat/test_numeric.py::test_axis_reductions_match_numpy tests/python/numpy_compat/test_numeric.py::test_float_axis_last_reductions_match_numpy tests/python/test_mojo_bench_sweep.py -q
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --include-numojo --strict-numojo --format json --sort ratio --output-dir results/local-sweep-20260509-reduce-gate-numojo-strict-0653 --no-stdout --timeout 300
+MOHAUS_EDITABLE_REBUILDING=1 .venv/bin/monpy-bench --types array,attention --loops 10 --repeats 3 --rounds 2 --vector-sizes 65536 --matrix-sizes 32 --linalg-sizes 8 --format json --sort ratio --output-dir results/local-sweep-20260509-reduce-gate-array-attention-0653 --no-progress --no-stdout
+```
+
+After removing the calibration rows from the default Mojo sweep, the top stdlib
+deficit is no longer a fake production blocker. The remaining real stdlib
+frontier is unary/binary elementwise variance (`sin_f64_1m`, `add_f32_64k`) and
+small product reductions. The NumPy-facing slice still shows attention ahead of
+NumPy (`softmax` 0.637x, causal attention 0.782x, GPT logits 0.643x), while the
+array frontier is back in wrapper/copy territory (`full_like_transpose_f32`,
+`astype_f32_to_bool`, `asarray_zero_copy_f32`).
+
+Next target: separate unary-parallel calibration from public array performance.
+The current stdlib sweep can make `sin` and `add` look worse than the public
+NumPy path, so the next pass should run `bench_parallel.mojo`, then decide
+whether static unary fast paths should stay serial for cheap ops and fan out
+only for wide transcendentals.

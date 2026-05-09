@@ -608,14 +608,10 @@ def emit_family[dtype: DType]() raises where dtype.is_floating_point():
     emit_prod[dtype, 1024]()
     emit_prod[dtype, 65536]()
     # Parallel-vs-serial head-to-head at sizes that exceed the
-    # REDUCE_GRAIN (1MB) and ELEMENTWISE_LIGHT_GRAIN (2MB) gates.
+    # ELEMENTWISE_LIGHT_GRAIN (2MB) gates. Parallel-reduction calibration
+    # lives in bench_parallel.mojo / bench_reduce.mojo so stdlib deficit
+    # ranking is not dominated by non-production calibration rows.
     # These are the rows that surface multi-thread regressions.
-    emit_sum_par[dtype, 1048576]()
-    emit_sum_par[dtype, 16777216]()
-    emit_min_par[dtype, 1048576]()
-    emit_min_par[dtype, 16777216]()
-    emit_max_par[dtype, 1048576]()
-    emit_max_par[dtype, 16777216]()
     emit_binary_add_par[dtype, 16777216]()
     emit_matmul_small[dtype, 8]()
     emit_matmul_small[dtype, 16]()
