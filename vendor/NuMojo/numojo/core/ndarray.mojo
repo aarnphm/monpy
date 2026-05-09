@@ -73,15 +73,23 @@ from numojo.routines.io.formatting import (
     PrintOptions,
 )
 import numojo.routines.logic.comparison as comparison
+import numojo.routines.indexing as indexing
+import numojo.routines.manipulation as manipulation
+import numojo.routines.sorting as sorting
 
 # ===----------------------------------------------------------------------===#
 # numojo routines (math / bitwise / searching)
 # ===----------------------------------------------------------------------===#
 import numojo.routines.bitwise as bitwise
 import numojo.routines.math.arithmetic as arithmetic
+import numojo.routines.math.extrema as extrema
+import numojo.routines.math.misc as math_misc
+import numojo.routines.math.products as products
 import numojo.routines.math.rounding as rounding
+import numojo.routines.math.sums as sums
 import numojo.routines.linalg as linalg
 import numojo.routines.searching as searching
+import numojo.routines.statistics as statistics
 from numojo.routines.statistics.averages import stddev
 
 comptime IndexTypes = Variant[Int, NewAxis, EllipsisType, Slice]
@@ -4010,7 +4018,7 @@ struct NDArray[dtype: DType = DType.float64](
             The indices of the sorted NDArray.
         """
 
-        return numojo.sorting.argsort(self)
+        return sorting.argsort(self)
 
     def argsort(mut self, axis: Int) raises -> NDArray[DType.int]:
         """Sorts the NDArray and returns the sorted indices. See
@@ -4020,7 +4028,7 @@ struct NDArray[dtype: DType = DType.float64](
             The indices of the sorted NDArray.
         """
 
-        return numojo.sorting.argsort(self, axis=axis)
+        return sorting.argsort(self, axis=axis)
 
     def astype[target: DType](self) raises -> NDArray[target]:
         """Converts the type of the array.
@@ -4039,7 +4047,7 @@ struct NDArray[dtype: DType = DType.float64](
         """Limits the values in an array between `[a_min, a_max]`.
 
         If `a_min` is greater than `a_max`, the value is equal to `a_max`. See
-        `numojo.clip()` for more details.
+        `math_misc.clip()` for more details.
 
         Args:
             a_min: The minimum value.
@@ -4049,7 +4057,7 @@ struct NDArray[dtype: DType = DType.float64](
             An array with the clipped values.
         """
 
-        return numojo.clip(self, a_min, a_max)
+        return math_misc.clip(self, a_min, a_max)
 
     def compress(
         self, condition: NDArray[DType.bool], axis: Int
@@ -4076,7 +4084,7 @@ struct NDArray[dtype: DType = DType.float64](
             Error: If the condition contains no `True` values.
         """
 
-        return numojo.compress(condition=condition, a=self, axis=axis)
+        return indexing.compress(condition=condition, a=self, axis=axis)
 
     def compress(self, condition: NDArray[DType.bool]) raises -> Self:
         """Returns selected slices of an array along a given axis.
@@ -4099,7 +4107,7 @@ struct NDArray[dtype: DType = DType.float64](
             Error: If the condition contains no `True` values.
         """
 
-        return numojo.compress(condition=condition, a=self)
+        return indexing.compress(condition=condition, a=self)
 
     def contiguous(self) raises -> Self:
         """Returns a new C-contiguous array owning a copy of the data.
@@ -4187,7 +4195,7 @@ struct NDArray[dtype: DType = DType.float64](
         Returns:
             The cumulative product of all items.
         """
-        return numojo.math.cumprod[Self.dtype](self)
+        return products.cumprod[Self.dtype](self)
 
     def cumprod(self, axis: Int) raises -> NDArray[Self.dtype]:
         """Returns the cumulative product of the array along the given axis.
@@ -4198,7 +4206,7 @@ struct NDArray[dtype: DType = DType.float64](
         Returns:
             The cumulative product along the axis.
         """
-        return numojo.math.cumprod[Self.dtype](self.copy(), axis=axis)
+        return products.cumprod[Self.dtype](self.copy(), axis=axis)
 
     def cumsum(self) raises -> NDArray[Self.dtype]:
         """Returns the cumulative sum of all items of an array. The array is
@@ -4207,7 +4215,7 @@ struct NDArray[dtype: DType = DType.float64](
         Returns:
             The cumulative sum of all items.
         """
-        return numojo.math.cumsum[Self.dtype](self)
+        return sums.cumsum[Self.dtype](self)
 
     def cumsum(self, axis: Int) raises -> NDArray[Self.dtype]:
         """Returns the cumulative sum of the array along the given axis.
@@ -4218,7 +4226,7 @@ struct NDArray[dtype: DType = DType.float64](
         Returns:
             The cumulative sum along the axis.
         """
-        return numojo.math.cumsum[Self.dtype](self.copy(), axis=axis)
+        return sums.cumsum[Self.dtype](self.copy(), axis=axis)
 
     def diagonal(self, offset: Int = 0) raises -> Self:
         """Returns specific diagonals.
@@ -4235,7 +4243,7 @@ struct NDArray[dtype: DType = DType.float64](
             Error: If the array is not 2D.
             Error: If the offset is beyond the shape of the array.
         """
-        return numojo.linalg.diagonal(self, offset=offset)
+        return linalg.diagonal(self, offset=offset)
 
     def fill(mut self, val: Scalar[Self.dtype]):
         """Fills all items of the array with the given value.
@@ -4552,7 +4560,7 @@ struct NDArray[dtype: DType = DType.float64](
             The max value.
         """
 
-        return numojo.math.max(self)
+        return extrema.max(self)
 
     def max(self, axis: Int) raises -> Self:
         """Finds the max value of an array along the axis. The number of
@@ -4567,7 +4575,7 @@ struct NDArray[dtype: DType = DType.float64](
             An array with reduced number of dimensions.
         """
 
-        return numojo.math.max(self, axis=axis)
+        return extrema.max(self, axis=axis)
 
     def mean[
         returned_dtype: DType = DType.float64
@@ -4577,7 +4585,7 @@ struct NDArray[dtype: DType = DType.float64](
         Returns:
             The mean of the array.
         """
-        return numojo.statistics.mean[returned_dtype](self)
+        return statistics.mean[returned_dtype](self)
 
     def mean[
         returned_dtype: DType = DType.float64
@@ -4590,7 +4598,7 @@ struct NDArray[dtype: DType = DType.float64](
         Returns:
             An NDArray.
         """
-        return numojo.statistics.mean[returned_dtype](self, axis)
+        return statistics.mean[returned_dtype](self, axis)
 
     def median[
         returned_dtype: DType = DType.float64
@@ -4624,7 +4632,7 @@ struct NDArray[dtype: DType = DType.float64](
             The min value.
         """
 
-        return numojo.math.min(self)
+        return extrema.min(self)
 
     def min(self, axis: Int) raises -> Self:
         """Finds the min value of an array along the axis. The number of
@@ -4639,7 +4647,7 @@ struct NDArray[dtype: DType = DType.float64](
             An array with reduced number of dimensions.
         """
 
-        return numojo.math.min(self, axis=axis)
+        return extrema.min(self, axis=axis)
 
     def nditer(self) raises -> _NDIter[origin_of(self._buf.origin), Self.dtype]:
         """Returns an iterator yielding the array elements according to the
@@ -4724,7 +4732,7 @@ struct NDArray[dtype: DType = DType.float64](
         Returns:
             A scalar.
         """
-        return numojo.math.prod(self)
+        return products.prod(self)
 
     def prod(self, axis: Int) raises -> Self:
         """Computes the product of array elements over a given axis.
@@ -4736,7 +4744,7 @@ struct NDArray[dtype: DType = DType.float64](
             An NDArray.
         """
 
-        return numojo.math.prod(self, axis=axis)
+        return products.prod(self, axis=axis)
 
     # TODO: make it inplace?
     def reshape(
@@ -4855,7 +4863,7 @@ struct NDArray[dtype: DType = DType.float64](
                     location="NDArray.sort(axis: Int)",
                 )
             )
-        numojo.sorting.sort_inplace(self, axis=normalized_axis, stable=stable)
+        sorting.sort_inplace(self, axis=normalized_axis, stable=stable)
 
     def std[
         returned_dtype: DType = DType.float64
@@ -4917,9 +4925,9 @@ struct NDArray[dtype: DType = DType.float64](
         Returns:
             The transposed array.
 
-        Defined in `numojo.routines.manipulation.transpose`.
+        Defined in `manipulation.transpose`.
         """
-        return numojo.routines.manipulation.transpose(self, axes)
+        return manipulation.transpose(self, axes)
 
     def T(self) raises -> Self:
         """Transposes the array when `axes` is not given.
@@ -4930,9 +4938,9 @@ struct NDArray[dtype: DType = DType.float64](
         Returns:
             The transposed array.
 
-        Defined in `numojo.routines.manipulation.transpose`.
+        Defined in `manipulation.transpose`.
         """
-        return numojo.routines.manipulation.transpose(self.copy())
+        return manipulation.transpose(self.copy())
 
     def tolist(self) -> List[Scalar[Self.dtype]]:
         """Converts the NDArray to a 1-D list in row-major (C) order.
@@ -5014,7 +5022,7 @@ struct NDArray[dtype: DType = DType.float64](
         Returns:
             The trace of the ndarray.
         """
-        return numojo.linalg.trace[Self.dtype](self, offset, axis1, axis2)
+        return linalg.trace[Self.dtype](self, offset, axis1, axis2)
 
     # TODO: Remove the underscore in the method name when view is supported.
     # def _transpose(self) raises -> Self:
@@ -5298,7 +5306,7 @@ struct _NDArrayIter[
             return result^
 
         else:  # 0-D array
-            var result: NDArray[Self.dtype] = numojo.creation._0darray[
+            var result: NDArray[Self.dtype] = creation._0darray[
                 Self.dtype
             ](self._buf.ptr[self.offset + index])
             return result^

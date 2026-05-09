@@ -13,6 +13,14 @@ Implements rounding, truncation, absolute value, and next-after helpers for NDAr
 import std.math as builtin_math
 from std.utils.numerics import nextafter as builtin_nextafter
 
+from numojo._compat.simd_ops import (
+    simd_abs,
+    simd_floor,
+    simd_ceil,
+    simd_trunc,
+    simd_round,
+    simd_nextafter,
+)
 from numojo.core.ndarray import NDArray
 import numojo.core.matrix as matrix
 from numojo.core.matrix import Matrix
@@ -53,7 +61,7 @@ def tabs[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
     Returns:
         A NDArray equal to abs(array).
     """
-    return HostExecutor.apply_unary[dtype, SIMD.__abs__](array)
+    return HostExecutor.apply_unary[dtype, simd_abs](array)
 
 
 # ===------------------------------------------------------------------------===#
@@ -74,7 +82,7 @@ def tfloor[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
     Returns:
         A NDArray equal to floor(array).
     """
-    return HostExecutor.apply_unary[dtype, SIMD.__floor__](array)
+    return HostExecutor.apply_unary[dtype, simd_floor](array)
 
 
 def tceil[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
@@ -90,7 +98,7 @@ def tceil[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
     Returns:
         A NDArray equal to ceil(array).
     """
-    return HostExecutor.apply_unary[dtype, SIMD.__ceil__](array)
+    return HostExecutor.apply_unary[dtype, simd_ceil](array)
 
 
 def ttrunc[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
@@ -106,7 +114,7 @@ def ttrunc[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
     Returns:
         A NDArray equal to trunc(array).
     """
-    return HostExecutor.apply_unary[dtype, SIMD.__trunc__](array)
+    return HostExecutor.apply_unary[dtype, simd_trunc](array)
 
 
 def tround[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
@@ -122,7 +130,7 @@ def tround[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
     Returns:
         A NDArray equal to round(array).
     """
-    return HostExecutor.apply_unary[dtype, SIMD.__round__](array)
+    return HostExecutor.apply_unary[dtype, simd_round](array)
 
 
 def roundeven[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
@@ -138,7 +146,7 @@ def roundeven[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
     Returns:
         The element-wise rounding of `array` to the nearest integer with ties to even.
     """
-    return HostExecutor.apply_unary[dtype, SIMD.__round__](array)
+    return HostExecutor.apply_unary[dtype, simd_round](array)
 
 
 # def round_half_down[
@@ -208,4 +216,4 @@ def nextafter[
     Returns:
         The element-wise nextafter of `array1` toward `array2`.
     """
-    return HostExecutor.apply_binary[dtype, builtin_nextafter](array1, array2)
+    return HostExecutor.apply_binary[dtype, simd_nextafter](array1, array2)

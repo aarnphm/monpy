@@ -13,6 +13,7 @@ Implements Checking routines: currently not SIMD due to bool bit packing issue
 import std.math as math
 from std.utils.numerics import neg_inf, inf
 
+from numojo._compat.simd_ops import simd_isinf, simd_isfinite, simd_isnan
 from numojo.routines import HostExecutor
 from numojo.core.ndarray import NDArray
 from numojo.core.matrix import Matrix
@@ -45,7 +46,9 @@ from numojo.core.matrix import Matrix
 # ===------------------------------------------------------------------------===#
 
 
-def isinf[dtype: DType](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
+def isinf[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[DType.bool] where dtype.is_floating_point():
     """
     Checks if each element of the input array is infinite.
 
@@ -68,10 +71,12 @@ def isinf[dtype: DType](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
             print(isinf(arr))  # Output: [False, False, False, False, False]
         ```
     """
-    return HostExecutor.apply_unary_predicate[dtype, math.isinf](array)
+    return HostExecutor.apply_unary_predicate[dtype, simd_isinf](array)
 
 
-def isfinite[dtype: DType](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
+def isfinite[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[DType.bool] where dtype.is_floating_point():
     """
     Checks if each element of the input array is finite.
 
@@ -94,10 +99,12 @@ def isfinite[dtype: DType](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
             print(isfinite(arr))  # Output: [True, True, True]
         ```
     """
-    return HostExecutor.apply_unary_predicate[dtype, math.isfinite](array)
+    return HostExecutor.apply_unary_predicate[dtype, simd_isfinite](array)
 
 
-def isnan[dtype: DType](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
+def isnan[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[DType.bool] where dtype.is_floating_point():
     """
     Checks if each element of the input array is NaN.
 
@@ -120,10 +127,12 @@ def isnan[dtype: DType](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
             print(isnan(arr))  # Output: [False, False, False]
         ```
     """
-    return HostExecutor.apply_unary_predicate[dtype, math.isnan](array)
+    return HostExecutor.apply_unary_predicate[dtype, simd_isnan](array)
 
 
-def isneginf[dtype: DType](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
+def isneginf[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[DType.bool] where dtype.is_floating_point():
     """
     Checks if each element of the input array is negative infinity.
 
@@ -149,13 +158,15 @@ def isneginf[dtype: DType](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
 
     def is_neginf[
         dtype: DType, simd_width: Int
-    ](x: SIMD[dtype, simd_width]) -> SIMD[DType.bool, simd_width]:
+    ](x: SIMD[dtype, simd_width]) capturing -> SIMD[DType.bool, simd_width]:
         return x.eq(SIMD[dtype, simd_width](neg_inf[dtype]()))
 
     return HostExecutor.apply_unary_predicate[dtype, is_neginf](array)
 
 
-def isposinf[dtype: DType](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
+def isposinf[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[DType.bool] where dtype.is_floating_point():
     """
     Checks if each element of the input array is positive infinity.
 
@@ -181,7 +192,7 @@ def isposinf[dtype: DType](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
 
     def is_posinf[
         dtype: DType, simd_width: Int
-    ](x: SIMD[dtype, simd_width]) -> SIMD[DType.bool, simd_width]:
+    ](x: SIMD[dtype, simd_width]) capturing -> SIMD[DType.bool, simd_width]:
         return x.eq(SIMD[dtype, simd_width](inf[dtype]()))
 
     return HostExecutor.apply_unary_predicate[dtype, is_posinf](array)

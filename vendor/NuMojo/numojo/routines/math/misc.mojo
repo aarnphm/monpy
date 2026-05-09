@@ -11,6 +11,12 @@ Implements miscellaneous math helpers on NDArrays, including cube root, clipping
 """
 
 from numojo._compat.vectorize import vectorize
+from numojo._compat.simd_ops import (
+    simd_cbrt,
+    simd_rsqrt,
+    simd_sqrt,
+    simd_scalb,
+)
 import std.math as builtin_math
 import std.math.math as stdlib_math
 from std.sys import simd_width_of
@@ -20,7 +26,9 @@ from numojo.routines import HostExecutor
 
 
 # TODO: Implement same routines for Matrix.
-def cbrt[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
+def cbrt[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[dtype] where dtype.is_floating_point():
     """
     Element-wise cube root of a NDArray.
 
@@ -33,7 +41,7 @@ def cbrt[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
     Returns:
         A NDArray equal to array**(1/3).
     """
-    return HostExecutor.apply_unary[dtype, stdlib_math.cbrt](array)
+    return HostExecutor.apply_unary[dtype, simd_cbrt](array)
 
 
 # ===------------------------------------------------------------------------===#
@@ -80,7 +88,7 @@ def clip[
 
 def _mt_rsqrt[
     dtype: DType, simd_width: Int
-](value: SIMD[dtype, simd_width]) -> SIMD[dtype, simd_width]:
+](value: SIMD[dtype, simd_width]) capturing -> SIMD[dtype, simd_width] where dtype.is_floating_point():
     """
     Element-wise reciprocal square root of SIMD.
 
@@ -97,7 +105,9 @@ def _mt_rsqrt[
     return stdlib_math.sqrt(SIMD.__truediv__(SIMD[dtype, simd_width](1), value))
 
 
-def rsqrt[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
+def rsqrt[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[dtype] where dtype.is_floating_point():
     """
     Element-wise reciprocal square root of NDArray.
 
@@ -110,10 +120,12 @@ def rsqrt[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
     Returns:
         A NDArray equal to 1/NDArray**(1/2).
     """
-    return HostExecutor.apply_unary[dtype, _mt_rsqrt](array)
+    return HostExecutor.apply_unary[dtype, simd_rsqrt](array)
 
 
-def sqrt[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
+def sqrt[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[dtype] where dtype.is_floating_point():
     """
     Element-wise square root of a NDArray.
 
@@ -126,7 +138,7 @@ def sqrt[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
     Returns:
         A NDArray equal to NDArray**(1/2).
     """
-    return HostExecutor.apply_unary[dtype, stdlib_math.sqrt](array)
+    return HostExecutor.apply_unary[dtype, simd_sqrt](array)
 
 
 # ===------------------------------------------------------------------------===#
@@ -136,7 +148,7 @@ def sqrt[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
 
 def scalb[
     dtype: DType
-](array1: NDArray[dtype], array2: NDArray[dtype]) raises -> NDArray[dtype]:
+](array1: NDArray[dtype], array2: NDArray[dtype]) raises -> NDArray[dtype] where dtype.is_floating_point():
     """
     Apply scalb element-wise to two arrays.
 
@@ -153,4 +165,4 @@ def scalb[
     Returns:
         A NDArray with values equal to scalb(array1, array2).
     """
-    return HostExecutor.apply_binary[dtype, stdlib_math.scalb](array1, array2)
+    return HostExecutor.apply_binary[dtype, simd_scalb](array1, array2)

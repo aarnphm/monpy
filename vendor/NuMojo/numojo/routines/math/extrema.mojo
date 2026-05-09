@@ -13,6 +13,7 @@ and element-wise comparisons.
 
 from std.algorithm import parallelize
 from numojo._compat.vectorize import vectorize
+from numojo._compat.simd_ops import simd_min, simd_max
 import std.math.math as stdlib_math
 from std.math import max as builtin_max
 from std.math import min as builtin_min
@@ -577,7 +578,7 @@ def minimum[
         var m = nm.minimum(a, b)
         ```
     """
-    return HostExecutor.apply_binary[dtype, builtin_min](array1, array2)
+    return HostExecutor.apply_binary[dtype, simd_min](array1, array2)
 
 
 def maximum[
@@ -606,4 +607,4 @@ def maximum[
         var m = nm.maximum(a, b)
         ```
     """
-    return HostExecutor.apply_binary[dtype, builtin_max](array1, array2)
+    return HostExecutor.apply_binary[dtype, simd_max](array1, array2)

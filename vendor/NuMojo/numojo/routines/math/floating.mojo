@@ -12,6 +12,7 @@ Implements floating-point specific helpers on NDArrays, such as `copysign`.
 
 import std.math as math
 
+from numojo._compat.simd_ops import simd_copysign
 from numojo.routines import HostExecutor
 from numojo.core.ndarray import NDArray
 
@@ -22,7 +23,9 @@ from numojo.core.ndarray import NDArray
 
 def copysign[
     dtype: DType
-](array1: NDArray[dtype], array2: NDArray[dtype]) raises -> NDArray[dtype]:
+](array1: NDArray[dtype], array2: NDArray[dtype]) raises -> NDArray[
+    dtype
+] where dtype.is_floating_point():
     """
     Copy the sign of one array onto another.
 
@@ -39,4 +42,4 @@ def copysign[
     Returns:
         A NDArray with the magnitude of `array2` and the sign of `array1`.
     """
-    return HostExecutor.apply_binary[dtype, math.copysign](array1, array2)
+    return HostExecutor.apply_binary[dtype, simd_copysign](array1, array2)

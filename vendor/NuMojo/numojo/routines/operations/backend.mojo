@@ -38,7 +38,9 @@ struct HostExecutor:
     def apply_unary[
         dtype: DType,
         simd_width: Int,
-        kernel: def[simd_w: Int](SIMD[dtype, simd_w]) capturing -> SIMD[dtype, simd_w],
+        kernel: def[kernel_dtype: DType, simd_w: Int](
+            SIMD[kernel_dtype, simd_w]
+        ) capturing -> SIMD[kernel_dtype, simd_w],
     ](scalar: SIMD[dtype, simd_width]) -> SIMD[dtype, simd_width]:
         """
         Applies a SIMD-compatible unary function to a SIMD value.
@@ -54,15 +56,15 @@ struct HostExecutor:
         Returns:
             A new SIMD value containing the result of applying the function.
         """
-        return kernel(scalar)
+        return kernel[dtype, simd_width](scalar)
 
     @staticmethod
     def apply_binary[
         dtype: DType,
         simd_width: Int,
-        kernel: def[simd_w: Int](
-            SIMD[dtype, simd_w], SIMD[dtype, simd_w]
-        ) capturing -> SIMD[dtype, simd_w],
+        kernel: def[kernel_dtype: DType, simd_w: Int](
+            SIMD[kernel_dtype, simd_w], SIMD[kernel_dtype, simd_w]
+        ) capturing -> SIMD[kernel_dtype, simd_w],
     ](simd1: SIMD[dtype, simd_width], simd2: SIMD[dtype, simd_width]) -> SIMD[
         dtype, simd_width
     ]:
@@ -81,13 +83,15 @@ struct HostExecutor:
         Returns:
             A new SIMD value containing the result of applying the function.
         """
-        return kernel(simd1, simd2)
+        return kernel[dtype, simd_width](simd1, simd2)
 
     @staticmethod
     def apply_unary_predicate[
         dtype: DType,
         simd_width: Int,
-        kernel: def[simd_w: Int](SIMD[dtype, simd_w]) capturing -> SIMD[
+        kernel: def[kernel_dtype: DType, simd_w: Int](
+            SIMD[kernel_dtype, simd_w]
+        ) capturing -> SIMD[
             DType.bool, simd_w
         ],
     ](simd: SIMD[dtype, simd_width]) -> SIMD[DType.bool, simd_width]:
@@ -105,14 +109,14 @@ struct HostExecutor:
         Returns:
             A SIMD boolean value containing the predicate result.
         """
-        return kernel(simd)
+        return kernel[dtype, simd_width](simd)
 
     @staticmethod
     def apply_binary_predicate[
         dtype: DType,
         simd_width: Int,
-        kernel: def[simd_w: Int](
-            SIMD[dtype, simd_w], SIMD[dtype, simd_w]
+        kernel: def[kernel_dtype: DType, simd_w: Int](
+            SIMD[kernel_dtype, simd_w], SIMD[kernel_dtype, simd_w]
         ) capturing -> SIMD[DType.bool, simd_w],
     ](simd1: SIMD[dtype, simd_width], simd2: SIMD[dtype, simd_width]) -> SIMD[
         DType.bool, simd_width
@@ -132,12 +136,14 @@ struct HostExecutor:
         Returns:
             A SIMD boolean value containing the predicate result.
         """
-        return kernel(simd1, simd2)
+        return kernel[dtype, simd_width](simd1, simd2)
 
     @staticmethod
     def apply_unary[
         dtype: DType,
-        kernel: def[simd_w: Int](SIMD[dtype, simd_w]) capturing -> SIMD[dtype, simd_w],
+        kernel: def[kernel_dtype: DType, simd_w: Int](
+            SIMD[kernel_dtype, simd_w]
+        ) capturing -> SIMD[kernel_dtype, simd_w],
     ](array: NDArray[dtype]) raises -> NDArray[dtype]:
         """
         Applies a SIMD-compatible unary function to an NDArray.
@@ -160,7 +166,7 @@ struct HostExecutor:
         # Treat it as a scalar and apply the function
         if array.ndim == 0:
             var result_array = _0darray(
-                val=kernel((array._buf.ptr + array.offset)[])
+                val=kernel[dtype, 1]((array._buf.ptr + array.offset)[])
             )
             return result_array^
 
@@ -170,7 +176,7 @@ struct HostExecutor:
         @parameter
         def closure[simd_w: Int](i: Int) capturing:
             var simd_data = array._buf.ptr.load[width=simd_w](i)
-            result_array._buf.ptr.store(i, kernel(simd_data))
+            result_array._buf.ptr.store(i, kernel[dtype, simd_w](simd_data))
 
         vectorize[width, closure](array.size)
 
@@ -179,9 +185,9 @@ struct HostExecutor:
     @staticmethod
     def apply_binary[
         dtype: DType,
-        kernel: def[simd_w: Int](
-            SIMD[dtype, simd_w], SIMD[dtype, simd_w]
-        ) capturing -> SIMD[dtype, simd_w],
+        kernel: def[kernel_dtype: DType, simd_w: Int](
+            SIMD[kernel_dtype, simd_w], SIMD[kernel_dtype, simd_w]
+        ) capturing -> SIMD[kernel_dtype, simd_w],
     ](array1: NDArray[dtype], array2: NDArray[dtype]) raises -> NDArray[dtype]:
         """
         Applies a SIMD-compatible binary function to two NDArrays.
@@ -229,7 +235,7 @@ struct HostExecutor:
             var simd_data1 = array1._buf.ptr.load[width=simd_w](i)
             var simd_data2 = array2._buf.ptr.load[width=simd_w](i)
             result_array._buf.ptr.store(
-                i, kernel(simd_data1, simd_data2)
+                i, kernel[dtype, simd_w](simd_data1, simd_data2)
             )
 
         vectorize[width, closure](result_array.size)
@@ -238,9 +244,9 @@ struct HostExecutor:
     @staticmethod
     def apply_binary[
         dtype: DType,
-        kernel: def[simd_w: Int](
-            SIMD[dtype, simd_w], SIMD[dtype, simd_w]
-        ) capturing -> SIMD[dtype, simd_w],
+        kernel: def[kernel_dtype: DType, simd_w: Int](
+            SIMD[kernel_dtype, simd_w], SIMD[kernel_dtype, simd_w]
+        ) capturing -> SIMD[kernel_dtype, simd_w],
     ](array: NDArray[dtype], scalar: SIMD[dtype, 1]) raises -> NDArray[dtype]:
         """
         Applies a SIMD-compatible binary function to an NDArray and a scalar.
@@ -263,7 +269,7 @@ struct HostExecutor:
         # For 0darray (numojo scalar)
         # Treat it as a scalar and apply the function
         if array.ndim == 0:
-            var result_array = _0darray(val=kernel(array[], scalar))
+            var result_array = _0darray(val=kernel[dtype, 1](array[], scalar))
             return result_array^
 
         var result_array: NDArray[dtype] = NDArray[dtype](array.shape)
@@ -275,7 +281,9 @@ struct HostExecutor:
         ](i: Int) capturing:
             var simd_data1 = array._buf.ptr.load[width=simd_w](i)
             result_array._buf.ptr.store(
-                i, kernel(simd_data1, scalar)
+                i, kernel[dtype, simd_w](
+                    simd_data1, SIMD[dtype, simd_w](scalar)
+                )
             )
 
         vectorize[width, closure](result_array.size)
@@ -284,9 +292,9 @@ struct HostExecutor:
     @staticmethod
     def apply_binary[
         dtype: DType,
-        kernel: def[simd_w: Int](
-            SIMD[dtype, simd_w], SIMD[dtype, simd_w]
-        ) capturing -> SIMD[dtype, simd_w],
+        kernel: def[kernel_dtype: DType, simd_w: Int](
+            SIMD[kernel_dtype, simd_w], SIMD[kernel_dtype, simd_w]
+        ) capturing -> SIMD[kernel_dtype, simd_w],
     ](scalar: SIMD[dtype, 1], array: NDArray[dtype]) raises -> NDArray[dtype]:
         """
         Applies a SIMD-compatible binary function to a scalar and an NDArray.
@@ -310,7 +318,7 @@ struct HostExecutor:
         # For 0darray (numojo scalar)
         # Treat it as a scalar and apply the function
         if array.ndim == 0:
-            var result_array = _0darray(val=kernel(scalar, array[]))
+            var result_array = _0darray(val=kernel[dtype, 1](scalar, array[]))
             return result_array^
 
         var result_array: NDArray[dtype] = NDArray[dtype](array.shape)
@@ -322,7 +330,10 @@ struct HostExecutor:
         ](i: Int) capturing:
             var simd_data1 = array._buf.ptr.load[width=simd_w](i)
             result_array._buf.ptr.store(
-                i, kernel(scalar, simd_data1)
+                i,
+                kernel[dtype, simd_w](
+                    SIMD[dtype, simd_w](scalar), simd_data1
+                ),
             )
 
         vectorize[width, closure](result_array.size)
@@ -370,8 +381,8 @@ struct HostExecutor:
     @staticmethod
     def apply_binary_predicate[
         dtype: DType,
-        kernel: def[simd_w: Int](
-            SIMD[dtype, simd_w], SIMD[dtype, simd_w]
+        kernel: def[kernel_dtype: DType, simd_w: Int](
+            SIMD[kernel_dtype, simd_w], SIMD[kernel_dtype, simd_w]
         ) capturing -> SIMD[DType.bool, simd_w],
     ](array1: NDArray[dtype], array2: NDArray[dtype]) raises -> NDArray[
         DType.bool
@@ -430,7 +441,7 @@ struct HostExecutor:
             bool_simd_store[simd_w](
                 result_array._buf.ptr,
                 i,
-                kernel(simd_data1, simd_data2),
+                kernel[dtype, simd_w](simd_data1, simd_data2),
             )
 
         vectorize[width, closure](array1.size)
@@ -439,8 +450,8 @@ struct HostExecutor:
     @staticmethod
     def apply_binary_predicate[
         dtype: DType,
-        kernel: def[simd_w: Int](
-            SIMD[dtype, simd_w], SIMD[dtype, simd_w]
+        kernel: def[kernel_dtype: DType, simd_w: Int](
+            SIMD[kernel_dtype, simd_w], SIMD[kernel_dtype, simd_w]
         ) capturing -> SIMD[DType.bool, simd_w],
     ](array1: NDArray[dtype], scalar: SIMD[dtype, 1]) raises -> NDArray[
         DType.bool
@@ -468,7 +479,9 @@ struct HostExecutor:
         # For 0darray (numojo scalar)
         # Treat it as a scalar and apply the function
         if array1.ndim == 0:
-            var result_array = _0darray(val=kernel(array1[], scalar))
+            var result_array = _0darray(
+                val=kernel[dtype, 1](array1[], scalar)
+            )
             return result_array^
 
         var result_array: NDArray[DType.bool] = NDArray[DType.bool](
@@ -485,7 +498,7 @@ struct HostExecutor:
             bool_simd_store[simd_w](
                 result_array.unsafe_ptr(),
                 i,
-                kernel(simd_data1, simd_data2),
+                kernel[dtype, simd_w](simd_data1, simd_data2),
             )
 
         vectorize[width, closure](array1.size)
@@ -494,7 +507,9 @@ struct HostExecutor:
     @staticmethod
     def apply_unary_predicate[
         dtype: DType,
-        kernel: def[simd_w: Int](SIMD[dtype, simd_w]) capturing -> SIMD[
+        kernel: def[kernel_dtype: DType, simd_w: Int](
+            SIMD[kernel_dtype, simd_w]
+        ) capturing -> SIMD[
             DType.bool, simd_w
         ],
     ](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
@@ -524,7 +539,7 @@ struct HostExecutor:
             bool_simd_store[simd_w](
                 result_array._buf.ptr,
                 i,
-                kernel(simd_data),
+                kernel[dtype, simd_w](simd_data),
             )
 
         vectorize[width, closure](array.size)

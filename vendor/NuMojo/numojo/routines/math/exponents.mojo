@@ -15,6 +15,15 @@ from std.algorithm import parallelize
 from std.algorithm import Static2DTileUnitFunc as Tile2DFunc
 from std.utils import Variant
 
+from numojo._compat.simd_ops import (
+    simd_exp,
+    simd_exp2,
+    simd_expm1,
+    simd_log,
+    simd_log2,
+    simd_log10,
+    simd_log1p,
+)
 from numojo.core.ndarray import NDArray
 from numojo.routines import HostExecutor
 
@@ -49,7 +58,7 @@ def exp[
         var result = nm.exp(arr)
         ```
     """
-    return HostExecutor.apply_unary[dtype, math.exp](array)
+    return HostExecutor.apply_unary[dtype, simd_exp](array)
 
 
 def exp[
@@ -105,7 +114,7 @@ def exp2[
         var result = nm.exp2(arr)
         ```
     """
-    return HostExecutor.apply_unary[dtype, math.exp2](array)
+    return HostExecutor.apply_unary[dtype, simd_exp2](array)
 
 
 def exp2[
@@ -160,7 +169,7 @@ def expm1[
         var result = nm.expm1(arr)
         ```
     """
-    return HostExecutor.apply_unary[dtype, math.expm1](array)
+    return HostExecutor.apply_unary[dtype, simd_expm1](array)
 
 
 def expm1[
@@ -219,7 +228,7 @@ def log[
         var result = nm.log(arr)
         ```
     """
-    return HostExecutor.apply_unary[dtype, math.log](array)
+    return HostExecutor.apply_unary[dtype, simd_log](array)
 
 
 def log[
@@ -274,7 +283,7 @@ def log2[
         var result = nm.log2(arr)
         ```
     """
-    return HostExecutor.apply_unary[dtype, math.log2](array)
+    return HostExecutor.apply_unary[dtype, simd_log2](array)
 
 
 def log2[
@@ -327,7 +336,7 @@ def log10[
         var result = nm.log10(arr)
         ```
     """
-    return HostExecutor.apply_unary[dtype, math.log10](array)
+    return HostExecutor.apply_unary[dtype, simd_log10](array)
 
 
 def log10[
@@ -382,7 +391,7 @@ def log1p[
         var result = nm.log1p(arr)
         ```
     """
-    return HostExecutor.apply_unary[dtype, math.log1p](array)
+    return HostExecutor.apply_unary[dtype, simd_log1p](array)
 
 
 def log1p[

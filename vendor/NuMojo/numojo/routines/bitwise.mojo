@@ -11,6 +11,7 @@ This module implements bit-wise operations on NDArrays, such as bitwise AND, OR,
 """
 
 from numojo.routines import HostExecutor
+from numojo._compat.simd_ops import simd_invert
 from numojo.core.ndarray import NDArray
 
 # ===------------------------------------------------------------------------===#
@@ -51,4 +52,4 @@ def invert[
         var result2 = invert(arr2) # result2 is [false, true, false
         ```
     """
-    return HostExecutor.apply_unary[dtype, SIMD.__invert__](array)
+    return HostExecutor.apply_unary[dtype, simd_invert](array)
