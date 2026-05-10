@@ -89,8 +89,9 @@ def test_stateful_sampler_scalarizes_only_numpy_style_calls() -> None:
 
 def test_vmap_maps_over_key_batches() -> None:
   import monpy as mp
+  import monpy.lax as lax
 
   keys = mp.random.split(mp.random.key(0), 3)
-  out = mp.vmap(lambda k: mp.random.normal(k, size=(2,)))(keys)
+  out = lax.vmap(lambda k: mp.random.normal(k, size=(2,)))(keys)
 
   assert out.shape == (3, 2)

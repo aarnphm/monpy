@@ -125,7 +125,11 @@ class LayoutSpec:
   def permute(self, axes: tuple[int, ...]) -> LayoutSpec:
     if sorted(axes) != list(range(len(self.shape))):
       raise ValueError("axes must be a permutation")
-    contiguity = Contiguity.ROW_MAJOR if axes == tuple(range(len(axes))) and self.is_row_major_compact() else Contiguity.NON_CONTIGUOUS
+    contiguity = (
+      Contiguity.ROW_MAJOR
+      if axes == tuple(range(len(axes))) and self.is_row_major_compact()
+      else Contiguity.NON_CONTIGUOUS
+    )
     return LayoutSpec(
       shape=tuple(self.shape[axis] for axis in axes),
       strides=tuple(self.strides[axis] for axis in axes),
@@ -152,7 +156,9 @@ class LayoutSpec:
         out_strides.append(0)
       else:
         raise ValueError(f"cannot broadcast dimension {src_dim!r} to {dst_dim!r}")
-    return LayoutSpec(tuple(shape), tuple(out_strides), offset_elems=self.offset_elems, contiguity=Contiguity.BROADCAST)
+    return LayoutSpec(
+      tuple(shape), tuple(out_strides), offset_elems=self.offset_elems, contiguity=Contiguity.BROADCAST
+    )
 
   def permutation_from(self, source: LayoutSpec) -> tuple[int, ...] | None:
     if len(self.shape) != len(source.shape):

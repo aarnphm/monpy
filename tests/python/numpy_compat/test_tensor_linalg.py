@@ -3,9 +3,7 @@ from __future__ import annotations
 import monpy as mp
 import numpy
 import pytest
-
 from _helpers import assert_same_result_kind
-
 
 # ---------------------------------------------------------------------------
 # dot / vdot / inner / outer
@@ -175,6 +173,7 @@ def test_matrix_norm_fro_matches_numpy() -> None:
 
 def test_norm_l1_and_inf() -> None:
   import math
+
   a = mp.asarray([1.0, -2.0, 3.0], dtype=mp.float64)
   assert float(mp.linalg.norm(a, ord=1)) == 6.0
   assert float(mp.linalg.norm(a, ord=math.inf)) == 3.0
@@ -331,9 +330,7 @@ def test_qr_r_only() -> None:
 def test_eigh_symmetric_2x2() -> None:
   a = mp.asarray([[2.0, 1.0], [1.0, 3.0]], dtype=mp.float64)
   w, v = mp.linalg.eigh(a)
-  numpy.testing.assert_allclose(
-    numpy.sort(numpy.asarray(w)), numpy.linalg.eigvalsh(numpy.asarray(a)), rtol=1e-12
-  )
+  numpy.testing.assert_allclose(numpy.sort(numpy.asarray(w)), numpy.linalg.eigvalsh(numpy.asarray(a)), rtol=1e-12)
   # A v_i = lambda_i v_i (within sign).
   va = numpy.asarray(v)
   for i in range(2):
@@ -391,9 +388,7 @@ def test_svdvals_only_singular_values() -> None:
 def test_lstsq_overdetermined_matches_numpy() -> None:
   A = numpy.asarray([[1.0, 1.0], [1.0, 2.0], [1.0, 3.0], [1.0, 4.0]])
   B = numpy.asarray([6.0, 5.0, 7.0, 10.0])
-  x_mp, res_mp, rank_mp, _ = mp.linalg.lstsq(
-    mp.asarray(A, dtype=mp.float64), mp.asarray(B, dtype=mp.float64)
-  )
+  x_mp, res_mp, rank_mp, _ = mp.linalg.lstsq(mp.asarray(A, dtype=mp.float64), mp.asarray(B, dtype=mp.float64))
   x_np, res_np, rank_np, _ = numpy.linalg.lstsq(A, B, rcond=None)
   numpy.testing.assert_allclose(numpy.asarray(x_mp), x_np, rtol=1e-12)
   assert_same_result_kind(rank_mp, rank_np)

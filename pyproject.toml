@@ -30,7 +30,7 @@ module-name = "monpy._native"
 
 [tool.ruff.lint]
 ignore = ["E111", "E114"]
-select = ["E", "I", "UP", "B", "ANN"]
+select = ["E", "F", "I", "UP", "B", "ANN"]
 
 [tool.ty.src]
 exclude = ["tests/**"]

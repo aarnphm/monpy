@@ -61,7 +61,9 @@ def test_asarray_buffer_dtype_mismatch_copy_policy() -> None:
     ("d", mp.float64, [1.5, 2.5]),
   ],
 )
-def test_pep3118_array_typecodes_resolve_to_core_dtypes(typecode: str, dtype: mp.DType, values: list[int] | list[float]) -> None:
+def test_pep3118_array_typecodes_resolve_to_core_dtypes(
+  typecode: str, dtype: mp.DType, values: list[int] | list[float]
+) -> None:
   arr = mp.asarray(array.array(typecode, values))
 
   assert arr.dtype == dtype

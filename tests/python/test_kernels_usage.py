@@ -4,20 +4,19 @@ from collections.abc import Callable
 from typing import cast
 
 import pytest
-
-from monpy.kernels.api import JittedFunction
-from monpy.kernels.ir import Op, TensorSpec as KernelTensorSpec
-from monpy.kernels.tensor import Tensor
+from monpy.lax import JittedFunction, Tensor
+from monpy.lax import TensorSpec as KernelTensorSpec
 
 KernelDecorator = Callable[[Callable[..., object]], JittedFunction]
 KernelJitFactory = Callable[..., KernelDecorator]
 
 
-def test_top_level_jit_compile_usage_traces_graph_model_fragment() -> None:
+def test_lax_jit_compile_usage_traces_graph_model_fragment() -> None:
   import monpy as mp
+  import monpy.lax as lax
 
-  jit = cast(KernelJitFactory, mp.jit)
-  tensor_spec = cast(type[KernelTensorSpec], mp.TensorSpec)
+  jit = cast(KernelJitFactory, lax.jit)
+  tensor_spec = cast(type[KernelTensorSpec], lax.TensorSpec)
 
   def block(x: Tensor, w: Tensor, bias: Tensor) -> Tensor:
     y = (x @ w) + bias
@@ -33,15 +32,7 @@ def test_top_level_jit_compile_usage_traces_graph_model_fragment() -> None:
   assert compiled.backend == "graph"
   assert graph.inputs == (0, 1, 2)
   assert graph.outputs == (6,)
-  assert [node.op for node in graph.nodes] == [
-    Op.INPUT,
-    Op.INPUT,
-    Op.INPUT,
-    Op.MATMUL,
-    Op.ADD,
-    Op.CAST,
-    Op.RESHAPE,
-  ]
+  assert [node.op for node in graph.nodes] == ["input", "input", "input", "matmul", "add", "cast", "reshape"]
   assert graph.nodes[0].spec.device.kind == "gpu"
   assert graph.nodes[0].spec.device.index == 0
   assert graph.nodes[0].spec.dtype.name == "bfloat16"
@@ -53,17 +44,17 @@ def test_top_level_jit_compile_usage_traces_graph_model_fragment() -> None:
   assert graph.structural_key
 
 
-def test_monpy_kernels_namespace_usage_for_specs_layouts_and_dtypes() -> None:
+def test_lax_namespace_usage_for_specs_layouts_and_dtypes() -> None:
   import monpy as mp
-  import monpy.kernels as mk
+  import monpy.lax as lax
 
-  tiled = mk.LayoutSpec.row_major((8, 16), alignment_bytes=16).with_tile(
-    mk.TileSpec((1, 16), logical_order=(0, 1), vector_width=8, warp_shape=(1, 32), swizzle="xor")
+  tiled = lax.LayoutSpec.row_major((8, 16), alignment_bytes=16).with_tile(
+    lax.TileSpec((1, 16), logical_order=(0, 1), vector_width=8, warp_shape=(1, 32), swizzle="xor")
   )
-  spec = mk.TensorSpec((8, 16), mp.float8_e4m3fn, "gpu:1", tiled)
-  packed = mk.TensorSpec((17,), mp.float4_e2m1fn, "gpu:1")
+  spec = lax.TensorSpec((8, 16), mp.float8_e4m3fn, "gpu:1", tiled)
+  packed = lax.TensorSpec((17,), mp.float4_e2m1fn, "gpu:1")
 
-  assert spec.device == mk.DeviceSpec("gpu", 1)
+  assert spec.device == lax.DeviceSpec("gpu", 1)
   assert spec.dtype.name == "float8_e4m3fn"
   assert spec.dtype.storage_bits == 8
   assert spec.dtype.byte_width == 1
@@ -86,7 +77,7 @@ def test_monpy_kernels_namespace_usage_for_specs_layouts_and_dtypes() -> None:
   def passthrough_fn(x: Tensor) -> Tensor:
     return x
 
-  passthrough = cast(KernelJitFactory, mk.jit)(backend="graph")(passthrough_fn)
+  passthrough = cast(KernelJitFactory, lax.jit)(backend="graph")(passthrough_fn)
   compiled = passthrough.compile(spec)
   assert compiled.graph.inputs == (0,)
   assert compiled.graph.outputs == (0,)
@@ -95,24 +86,25 @@ def test_monpy_kernels_namespace_usage_for_specs_layouts_and_dtypes() -> None:
 
 def test_custom_call_usage_carries_layout_attrs_for_extension_kernels() -> None:
   import monpy as mp
-  import monpy.kernels as mk
-  from monpy.kernels.graph import GraphLowerer, LayoutAction
+  import monpy.lax as lax
+  from monpy.extend.mlir_or_max import GraphLowerer, LayoutAction
 
   def rms_norm_fn(x: Tensor, weight: Tensor) -> Tensor:
-    tile = mk.TileSpec((1, 128), vector_width=8)
-    out = mk.TensorSpec(x.spec.shape, x.spec.dtype, x.spec.device, x.spec.layout.with_tile(tile))
+    tile = lax.TileSpec((1, 128), vector_width=8)
+    out = lax.TensorSpec(x.spec.shape, x.spec.dtype, x.spec.device, x.spec.layout.with_tile(tile))
     return x._trace.custom_call("monpy.rms_norm", (x, weight), out)
 
-  rms_norm = cast(KernelJitFactory, mk.jit)(backend="graph")(rms_norm_fn)
+  rms_norm = cast(KernelJitFactory, lax.jit)(backend="graph")(rms_norm_fn)
   compiled = rms_norm.compile(
-    mk.TensorSpec((4, 128), mp.float32, "gpu:0"),
-    mk.TensorSpec((128,), mp.float32, "gpu:0"),
+    lax.TensorSpec((4, 128), mp.float32, "gpu:0"),
+    lax.TensorSpec((128,), mp.float32, "gpu:0"),
   )
 
   graph = compiled.graph
   assert graph.outputs == (2,)
+  assert graph.nodes[2].op == "custom_call"
   assert graph.nodes[2].attrs == {"name": "monpy.rms_norm"}
-  assert graph.nodes[2].spec.layout.tile == mk.TileSpec((1, 128), vector_width=8)
+  assert graph.nodes[2].spec.layout.tile == lax.TileSpec((1, 128), vector_width=8)
 
   lowered = GraphLowerer().lower(graph)
   assert len(lowered.layout_decisions) == 1
@@ -126,24 +118,26 @@ def test_custom_call_usage_carries_layout_attrs_for_extension_kernels() -> None:
 
 def test_jitted_function_call_requires_explicit_compile_boundary() -> None:
   import monpy as mp
+  import monpy.lax as lax
 
   def identity_fn(x: Tensor) -> Tensor:
     return x
 
-  identity = cast(KernelDecorator, mp.jit)(identity_fn)
+  identity = cast(KernelDecorator, lax.jit)(identity_fn)
   with pytest.raises(TypeError, match=r"call \.compile\(\.\.\.\) with TensorSpec inputs"):
     identity(mp.zeros((2,), dtype=mp.float32))
 
 
 def test_external_weight_binding_is_not_a_numpy_fallback() -> None:
   import monpy as mp
+  import monpy.lax as lax
 
-  tensor_spec = cast(type[KernelTensorSpec], mp.TensorSpec)
+  tensor_spec = cast(type[KernelTensorSpec], lax.TensorSpec)
 
   def identity_fn(x: Tensor) -> Tensor:
     return x
 
-  identity = cast(KernelDecorator, mp.jit)(identity_fn)
+  identity = cast(KernelDecorator, lax.jit)(identity_fn)
   spec = tensor_spec((2,), mp.float32, "cpu")
   with pytest.raises(NotImplementedError, match="external weight binding"):
     identity.compile(spec, weights={"weight": "model.safetensors"})

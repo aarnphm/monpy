@@ -1,13 +1,8 @@
 """Linalg PythonObject bridge ops.
 
-Hosts matmul + solve/inv/det (LU-backed) + LAPACK-backed
-qr/cholesky/eigh/eig/svd/lstsq + pinv (lstsq-driven). All twelve `_ops`
-functions allocate result arrays and forward to typed kernels in
-`elementwise/`. The two-letter LAPACK precision split (`*_f32_into` /
-`*_f64_into`) is dispatched here based on `result_dtype_for_linalg`.
-
-Why grouped: every op shares the same shape — unbox arrays, allocate
-result(s), call into elementwise, return a Python list-or-Array.
+Hosts matmul + solve/inv/det (LU-backed) + LAPACK-backed qr/cholesky/eigh/eig/svd/lstsq + pinv (lstsq-driven).
+All twelve `_ops` functions allocate result arrays and forward to typed kernels in `elementwise/`.
+The two-letter LAPACK precision split (`*_f32_into` / `*_f64_into`) is dispatched here based on `result_dtype_for_linalg`.
 """
 
 from std.math import log as _log, sqrt as _sqrt

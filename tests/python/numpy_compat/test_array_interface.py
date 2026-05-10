@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import gc
 
-from monpy import _dlpack
 import monumpy as np
 import numpy
 import pytest
 from _helpers import SUPPORTED_DTYPE_PAIRS, assert_same_shape_dtype, assert_same_values
-from monpy.runtime import ops_numpy
+from monpy import _dlpack
+from monpy.numpy import ops as ops_numpy
 
 
 @pytest.mark.parametrize("monpy_dtype, numpy_dtype", SUPPORTED_DTYPE_PAIRS)

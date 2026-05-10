@@ -3,8 +3,6 @@ on top of existing primitives, so the tests just check parity with numpy."""
 
 from __future__ import annotations
 
-import math
-
 import monumpy as np
 import numpy
 import pytest

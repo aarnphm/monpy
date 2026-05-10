@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import builtins
 
-from monpy import _native, asarray, ascontiguousarray, bool as bool_dtype, ndarray
+from monpy import _native, asarray, ascontiguousarray, ndarray
+from monpy import bool as bool_dtype
 
 
 def layer_norm(x: object, gain: object, bias: object, eps: float = 1e-5) -> ndarray:

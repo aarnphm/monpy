@@ -289,7 +289,7 @@ benchmark harness overhead; data movement is already tiny.
 The NumPy-input rows were still entering through the generic
 `__array_interface__` parser even after the detector fast path. That generic
 path is required for non-NumPy producers, but real NumPy arrays already expose
-the same fields directly as attributes. `runtime.ops_numpy._from_numpy_unchecked`
+the same fields directly as attributes. `monpy.numpy.ops._from_numpy_unchecked`
 now reads `dtype.str`, `shape`, `strides`, `ctypes.data`, and `flags.writeable`
 directly, then calls native `from_external` / `copy_from_external` with the same
 copy and readonly policy as before.
@@ -392,7 +392,7 @@ item size, shape, strides, readonly bit, and PEP-3118 format string. NumPy's
 own ndarray model is the same strided-memory contract, with `shape`, byte
 `strides`, `dtype`, and the data buffer as intrinsic array attributes.
 
-`runtime.ops_numpy._from_numpy_unchecked` now keeps only the NumPy-specific
+`monpy.numpy.ops._from_numpy_unchecked` now keeps only the NumPy-specific
 classification and dtype-request policy in Python, then delegates the actual
 borrow/copy/cast decision to the existing native `asarray_from_buffer` bridge.
 That removes the `ctypes.data` property and per-field Python tuple/int
@@ -1140,10 +1140,10 @@ so I cut that path before committing.
 
 The smaller, useful fix is simpler: when `monpy.asarray()` sees a NumPy ndarray,
 it now calls the existing native `asarray_from_buffer` bridge directly instead
-of routing through `runtime.ops_numpy.is_array_input()` and
-`runtime.ops_numpy._from_numpy_unchecked()`. That keeps dtype/copy semantics in
+of routing through `monpy.numpy.ops.is_array_input()` and
+`monpy.numpy.ops._from_numpy_unchecked()`. That keeps dtype/copy semantics in
 the same native buffer decoder, skips a Python module wrapper hop on the hot
-path, and still falls back to `runtime.ops_numpy` for any future exotic NumPy
+path, and still falls back to `monpy.numpy.ops` for any future exotic NumPy
 case the local probe misses.
 
 Verification:

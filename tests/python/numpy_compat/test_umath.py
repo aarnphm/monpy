@@ -63,6 +63,4 @@ def test_unary_math_is_a_full_numpy_ufunc() -> None:
 
   out_buf = np.empty_like(arr)
   np.sin(arr, out=out_buf)
-  numpy.testing.assert_allclose(
-    numpy.asarray(out_buf), numpy.sin(numpy.asarray([1.0, 2.0])), rtol=1e-12
-  )
+  numpy.testing.assert_allclose(numpy.asarray(out_buf), numpy.sin(numpy.asarray([1.0, 2.0])), rtol=1e-12)

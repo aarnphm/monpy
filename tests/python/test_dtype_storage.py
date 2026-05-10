@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import pytest
-
 import monpy as mp
-from monpy.kernels.dtypes import StorageKind, dtype_spec
-
+import pytest
+from monpy.extend import StorageKind, dtype_spec
 
 LOW_PRECISION_DTYPES = (
   mp.bfloat16,
@@ -53,7 +51,9 @@ def test_low_precision_dtype_metadata_is_storage_aware() -> None:
     (mp.float4_e2m1fn, [0.0, 1.0, -2.0, 6.0]),
   ),
 )
-def test_low_precision_scalar_storage_round_trips_exact_representable_values(dtype: mp.DType, values: list[float]) -> None:
+def test_low_precision_scalar_storage_round_trips_exact_representable_values(
+  dtype: mp.DType, values: list[float]
+) -> None:
   arr = mp.asarray(values, dtype=dtype)
   assert arr.dtype == dtype
   assert arr.tolist() == values
@@ -138,3 +138,31 @@ def test_kernel_dtype_specs_use_public_low_precision_storage() -> None:
   assert fp4.storage is StorageKind.PACKED_SUBBYTE
   assert fp4.bits == 4
   assert fp4.storage_bits == 4
+
+
+@pytest.mark.parametrize("dtype", mp._DT)
+def test_public_dtype_maps_to_one_compiler_dtype_spec(dtype: mp.DType) -> None:
+  spec = dtype_spec(dtype)
+
+  assert spec.name == dtype.name
+  assert spec.code == dtype.code
+  assert spec.bits == dtype.bits
+  assert spec.storage_bits == dtype.storage_bits
+  assert spec.is_packed == dtype.is_packed
+
+
+def test_compiler_dtype_specs_match_native_domain_codes() -> None:
+  native_codes = mp._native._domain_codes()["dtype"]
+
+  for dtype in mp._DT:
+    assert dtype_spec(dtype).code == native_codes[dtype.name.upper()]
+
+
+def test_float4_compiler_dtype_remains_packed_subbyte() -> None:
+  spec = dtype_spec(mp.float4_e2m1fn)
+
+  assert spec.storage is StorageKind.PACKED_SUBBYTE
+  assert spec.storage_bits == 4
+  assert spec.bits == 4
+  with pytest.raises(ValueError, match="integer byte width"):
+    _ = spec.byte_width

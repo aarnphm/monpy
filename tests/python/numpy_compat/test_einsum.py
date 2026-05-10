@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import monpy as mp
 import numpy
-import pytest
-
 from _helpers import assert_same_result_kind
-
 
 # ---------------------------------------------------------------------------
 # einsum: parsing + correctness on common patterns.
@@ -92,9 +89,7 @@ def test_tensorsolve_basic() -> None:
   rng = numpy.random.default_rng(1)
   a = rng.standard_normal((2, 3, 2, 3))
   b = rng.standard_normal((2, 3))
-  x_mp = mp.linalg.tensorsolve(
-    mp.asarray(a.tolist(), dtype=mp.float64), mp.asarray(b.tolist(), dtype=mp.float64)
-  )
+  x_mp = mp.linalg.tensorsolve(mp.asarray(a.tolist(), dtype=mp.float64), mp.asarray(b.tolist(), dtype=mp.float64))
   x_np = numpy.linalg.tensorsolve(a, b)
   numpy.testing.assert_allclose(numpy.asarray(x_mp), x_np, rtol=1e-8)
 
@@ -133,39 +128,27 @@ def test_complex_dot_product() -> None:
 
 def test_complex_exp_matches_numpy() -> None:
   a = mp.asarray([1 + 2j, 0 + 1j, 3 + 0j], dtype=mp.complex128)
-  numpy.testing.assert_allclose(
-    numpy.asarray(mp.exp(a)), numpy.exp(numpy.asarray(a)), rtol=1e-10
-  )
+  numpy.testing.assert_allclose(numpy.asarray(mp.exp(a)), numpy.exp(numpy.asarray(a)), rtol=1e-10)
 
 
 def test_complex_log_matches_numpy() -> None:
   a = mp.asarray([1 + 2j, 0 + 1j, 3 + 0j], dtype=mp.complex128)
   # Log uses sqrt(re²+im²) which is slightly less accurate than numpy's
   # specialized clog implementation — relax to 1e-10.
-  numpy.testing.assert_allclose(
-    numpy.asarray(mp.log(a)), numpy.log(numpy.asarray(a)), rtol=1e-10
-  )
+  numpy.testing.assert_allclose(numpy.asarray(mp.log(a)), numpy.log(numpy.asarray(a)), rtol=1e-10)
 
 
 def test_complex_sin_cos_matches_numpy() -> None:
   a = mp.asarray([1 + 2j, 0.5 + 1j], dtype=mp.complex128)
-  numpy.testing.assert_allclose(
-    numpy.asarray(mp.sin(a)), numpy.sin(numpy.asarray(a)), rtol=1e-10
-  )
-  numpy.testing.assert_allclose(
-    numpy.asarray(mp.cos(a)), numpy.cos(numpy.asarray(a)), rtol=1e-10
-  )
+  numpy.testing.assert_allclose(numpy.asarray(mp.sin(a)), numpy.sin(numpy.asarray(a)), rtol=1e-10)
+  numpy.testing.assert_allclose(numpy.asarray(mp.cos(a)), numpy.cos(numpy.asarray(a)), rtol=1e-10)
 
 
 def test_complex_sqrt_principal_branch() -> None:
   a = mp.asarray([1 + 2j, 0 + 1j, 4 + 0j], dtype=mp.complex128)
-  numpy.testing.assert_allclose(
-    numpy.asarray(mp.sqrt(a)), numpy.sqrt(numpy.asarray(a)), rtol=1e-10
-  )
+  numpy.testing.assert_allclose(numpy.asarray(mp.sqrt(a)), numpy.sqrt(numpy.asarray(a)), rtol=1e-10)
 
 
 def test_complex_reciprocal() -> None:
   a = mp.asarray([1 + 2j, 3 + 4j], dtype=mp.complex128)
-  numpy.testing.assert_allclose(
-    numpy.asarray(mp.reciprocal(a)), 1 / numpy.asarray(a), rtol=1e-12
-  )
+  numpy.testing.assert_allclose(numpy.asarray(mp.reciprocal(a)), 1 / numpy.asarray(a), rtol=1e-12)

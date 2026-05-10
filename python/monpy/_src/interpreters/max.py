@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, cast
 
-from .ir import GraphIR, TensorSpec
-from .layout import LayoutSpec
+from ..core import GraphIR, TensorSpec
+from ..layout import LayoutSpec
 
 
 class LayoutAction(str, Enum):
@@ -64,7 +64,11 @@ class GraphLowerer:
         parameters=target.as_parameters("layout"),
         reason="layout must be passed as custom-op attributes or materialized by caller",
       )
-    if source.is_row_major_compact() and target.is_row_major_compact() and source.element_count() == target.element_count():
+    if (
+      source.is_row_major_compact()
+      and target.is_row_major_compact()
+      and source.element_count() == target.element_count()
+    ):
       return LayoutLoweringDecision(LayoutAction.NATIVE_RESHAPE, op="reshape", parameters=_shape_params(target))
     perm = target.permutation_from(source)
     if perm is not None:
@@ -90,7 +94,7 @@ class GraphLowerer:
     from max.graph import DeviceRef as _DeviceRef
     from max.graph import TensorType as _TensorType
 
-    from .dtypes import to_max_dtype
+    from ..dtypes import to_max_dtype
 
     TensorType = cast(Any, _TensorType)
     DeviceRef = cast(Any, _DeviceRef)

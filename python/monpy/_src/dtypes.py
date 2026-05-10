@@ -80,7 +80,12 @@ def from_monpy_dtype(dtype: object) -> DTypeSpec:
   bits = getattr(dtype, "bits", None)
   storage_bits = getattr(dtype, "storage_bits", None)
   storage = getattr(dtype, "storage", None)
-  if not isinstance(name, str) or not isinstance(code, int) or not isinstance(kind, str) or not isinstance(itemsize, int):
+  if (
+    not isinstance(name, str)
+    or not isinstance(code, int)
+    or not isinstance(kind, str)
+    or not isinstance(itemsize, int)
+  ):
     raise TypeError(f"expected monpy dtype or DTypeSpec, got {type(dtype).__name__}")
   if name in EXTRA_DTYPES and EXTRA_DTYPES[name].code == code:
     return replace(EXTRA_DTYPES[name], eager_storage_supported=True)
@@ -110,7 +115,9 @@ _EXTRA_DTYPES: tuple[DTypeSpec, ...] = (
   DTypeSpec("float8_e5m2", 17, DTypeKind.QUANT_FLOAT, StorageKind.VALUE, 8, 8, "float8_e5m2", (), "uint8"),
   DTypeSpec("float8_e5m2fnuz", 18, DTypeKind.QUANT_FLOAT, StorageKind.VALUE, 8, 8, "float8_e5m2fnuz", (), "uint8"),
   DTypeSpec("float8_e8m0fnu", 19, DTypeKind.QUANT_FLOAT, StorageKind.VALUE, 8, 8, "float8_e8m0fnu", (), "uint8"),
-  DTypeSpec("float4_e2m1fn", 20, DTypeKind.QUANT_FLOAT, StorageKind.PACKED_SUBBYTE, 4, 4, "float4_e2m1fn", (), "uint8"),
+  DTypeSpec(
+    "float4_e2m1fn", 20, DTypeKind.QUANT_FLOAT, StorageKind.PACKED_SUBBYTE, 4, 4, "float4_e2m1fn", (), "uint8"
+  ),
 )
 
 EXTRA_DTYPES: dict[str, DTypeSpec] = {spec.name: spec for spec in _EXTRA_DTYPES}

@@ -1,5 +1,3 @@
-# fmt: off
-# ruff: noqa
 from __future__ import annotations
 
 import math
@@ -35,7 +33,8 @@ class MonpyArray(Protocol):
   def __rmatmul__(self, other: object) -> MonpyArray: ...
 
 
-def _m(x: object) -> MonpyArray: return cast(MonpyArray, x)
+def _m(x: object) -> MonpyArray:
+  return cast(MonpyArray, x)
 
 
 @dataclass(frozen=True, slots=True)

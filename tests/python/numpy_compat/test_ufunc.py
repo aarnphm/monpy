@@ -6,7 +6,6 @@ import monpy as mp
 import numpy
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # unary transcendental ufuncs
 # ---------------------------------------------------------------------------
@@ -58,9 +57,7 @@ def test_deg2rad_and_rad2deg_round_trip() -> None:
 
 def test_reciprocal_matches_numpy() -> None:
   arr = mp.asarray([1.0, 2.0, 4.0], dtype=mp.float64)
-  numpy.testing.assert_allclose(
-    numpy.asarray(mp.reciprocal(arr)), [1.0, 0.5, 0.25], rtol=1e-12
-  )
+  numpy.testing.assert_allclose(numpy.asarray(mp.reciprocal(arr)), [1.0, 0.5, 0.25], rtol=1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -126,20 +123,14 @@ def test_floor_divide_and_remainder_match_numpy() -> None:
   b = mp.asarray([2.0, 2.0, -2.0], dtype=mp.float64)
   oracle_a = numpy.asarray([7.0, -7.0, 6.0])
   oracle_b = numpy.asarray([2.0, 2.0, -2.0])
-  numpy.testing.assert_array_equal(
-    numpy.asarray(mp.floor_divide(a, b)), numpy.floor_divide(oracle_a, oracle_b)
-  )
-  numpy.testing.assert_array_equal(
-    numpy.asarray(mp.remainder(a, b)), numpy.remainder(oracle_a, oracle_b)
-  )
+  numpy.testing.assert_array_equal(numpy.asarray(mp.floor_divide(a, b)), numpy.floor_divide(oracle_a, oracle_b))
+  numpy.testing.assert_array_equal(numpy.asarray(mp.remainder(a, b)), numpy.remainder(oracle_a, oracle_b))
 
 
 def test_power_matches_numpy() -> None:
   a = mp.asarray([2.0, 3.0, 4.0], dtype=mp.float64)
   b = mp.asarray([3.0, 2.0, 0.5], dtype=mp.float64)
-  numpy.testing.assert_allclose(
-    numpy.asarray(mp.power(a, b)), [8.0, 9.0, 2.0], rtol=1e-12
-  )
+  numpy.testing.assert_allclose(numpy.asarray(mp.power(a, b)), [8.0, 9.0, 2.0], rtol=1e-12)
 
 
 def test_power_scalar_square_and_cube_match_numpy() -> None:
@@ -250,18 +241,10 @@ def test_logical_on_numeric_arrays_uses_truthiness() -> None:
 
 def test_isnan_isinf_isfinite_signbit() -> None:
   arr = mp.asarray([1.0, math.nan, math.inf, -math.inf, -1.0, 0.0], dtype=mp.float64)
-  numpy.testing.assert_array_equal(
-    numpy.asarray(mp.isnan(arr)), [False, True, False, False, False, False]
-  )
-  numpy.testing.assert_array_equal(
-    numpy.asarray(mp.isinf(arr)), [False, False, True, True, False, False]
-  )
-  numpy.testing.assert_array_equal(
-    numpy.asarray(mp.isfinite(arr)), [True, False, False, False, True, True]
-  )
-  numpy.testing.assert_array_equal(
-    numpy.asarray(mp.signbit(arr)), [False, False, False, True, True, False]
-  )
+  numpy.testing.assert_array_equal(numpy.asarray(mp.isnan(arr)), [False, True, False, False, False, False])
+  numpy.testing.assert_array_equal(numpy.asarray(mp.isinf(arr)), [False, False, True, True, False, False])
+  numpy.testing.assert_array_equal(numpy.asarray(mp.isfinite(arr)), [True, False, False, False, True, True])
+  numpy.testing.assert_array_equal(numpy.asarray(mp.signbit(arr)), [False, False, False, True, True, False])
 
 
 # ---------------------------------------------------------------------------
@@ -332,21 +315,15 @@ def test_maximum_minimum_reduce() -> None:
 
 def test_logical_and_or_reduce() -> None:
   a = mp.asarray([[True, True], [True, False]], dtype=mp.bool)
-  numpy.testing.assert_array_equal(
-    numpy.asarray(mp.logical_and.reduce(a, axis=0)), [True, False]
-  )
-  numpy.testing.assert_array_equal(
-    numpy.asarray(mp.logical_or.reduce(a, axis=1)), [True, True]
-  )
+  numpy.testing.assert_array_equal(numpy.asarray(mp.logical_and.reduce(a, axis=0)), [True, False])
+  numpy.testing.assert_array_equal(numpy.asarray(mp.logical_or.reduce(a, axis=1)), [True, True])
 
 
 def test_add_outer() -> None:
   a = mp.asarray([1.0, 2.0, 3.0], dtype=mp.float64)
   b = mp.asarray([10.0, 20.0], dtype=mp.float64)
   out = mp.add.outer(a, b)
-  numpy.testing.assert_array_equal(
-    numpy.asarray(out), [[11.0, 21.0], [12.0, 22.0], [13.0, 23.0]]
-  )
+  numpy.testing.assert_array_equal(numpy.asarray(out), [[11.0, 21.0], [12.0, 22.0], [13.0, 23.0]])
 
 
 # ---------------------------------------------------------------------------
@@ -357,27 +334,17 @@ def test_add_outer() -> None:
 def test_std_var_with_ddof() -> None:
   arr = mp.asarray([1.0, 2.0, 3.0, 4.0, 5.0], dtype=mp.float64)
   oracle = numpy.asarray([1.0, 2.0, 3.0, 4.0, 5.0])
-  numpy.testing.assert_allclose(
-    float(mp.std(arr, ddof=0)), float(numpy.std(oracle, ddof=0)), rtol=1e-12
-  )
-  numpy.testing.assert_allclose(
-    float(mp.std(arr, ddof=1)), float(numpy.std(oracle, ddof=1)), rtol=1e-12
-  )
-  numpy.testing.assert_allclose(
-    float(mp.var(arr, ddof=0)), float(numpy.var(oracle, ddof=0)), rtol=1e-12
-  )
+  numpy.testing.assert_allclose(float(mp.std(arr, ddof=0)), float(numpy.std(oracle, ddof=0)), rtol=1e-12)
+  numpy.testing.assert_allclose(float(mp.std(arr, ddof=1)), float(numpy.std(oracle, ddof=1)), rtol=1e-12)
+  numpy.testing.assert_allclose(float(mp.var(arr, ddof=0)), float(numpy.var(oracle, ddof=0)), rtol=1e-12)
 
 
 def test_median_and_quantile() -> None:
   arr = mp.asarray([3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0], dtype=mp.float64)
   oracle = numpy.asarray([3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0])
   numpy.testing.assert_allclose(float(mp.median(arr)), float(numpy.median(oracle)), rtol=1e-12)
-  numpy.testing.assert_allclose(
-    float(mp.quantile(arr, 0.25)), float(numpy.quantile(oracle, 0.25)), rtol=1e-12
-  )
-  numpy.testing.assert_allclose(
-    float(mp.percentile(arr, 75)), float(numpy.percentile(oracle, 75)), rtol=1e-12
-  )
+  numpy.testing.assert_allclose(float(mp.quantile(arr, 0.25)), float(numpy.quantile(oracle, 0.25)), rtol=1e-12)
+  numpy.testing.assert_allclose(float(mp.percentile(arr, 75)), float(numpy.percentile(oracle, 75)), rtol=1e-12)
 
 
 def test_count_nonzero() -> None:

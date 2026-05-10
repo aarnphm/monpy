@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import monpy as mp
 import numpy
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # sort / argsort / partition / argpartition
@@ -12,9 +10,7 @@ import pytest
 
 def test_sort_1d_matches_numpy() -> None:
   arr = mp.asarray([3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0], dtype=mp.float64)
-  numpy.testing.assert_array_equal(
-    numpy.asarray(mp.sort(arr)), numpy.array([1.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 9.0])
-  )
+  numpy.testing.assert_array_equal(numpy.asarray(mp.sort(arr)), numpy.array([1.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 9.0]))
 
 
 def test_sort_2d_axis_zero_and_one() -> None:
@@ -34,9 +30,7 @@ def test_partition_at_least_keeps_kth_in_place() -> None:
   arr = mp.asarray([3, 1, 4, 1, 5, 9, 2, 6], dtype=mp.int64)
   out = mp.partition(arr, 3)
   # v1 implements via full sort which is a superset of partition.
-  numpy.testing.assert_array_equal(
-    numpy.asarray(out), numpy.array([1, 1, 2, 3, 4, 5, 6, 9])
-  )
+  numpy.testing.assert_array_equal(numpy.asarray(out), numpy.array([1, 1, 2, 3, 4, 5, 6, 9]))
 
 
 # ---------------------------------------------------------------------------
@@ -77,18 +71,14 @@ def test_unique_with_indices_inverse_counts() -> None:
   numpy.testing.assert_array_equal(numpy.asarray(vals), [1, 2, 3, 4])
   numpy.testing.assert_array_equal(numpy.asarray(cnt), [2, 1, 2, 1])
   # inverse should reconstruct original order.
-  numpy.testing.assert_array_equal(
-    numpy.asarray(vals)[numpy.asarray(inv)], [3, 1, 2, 3, 1, 4]
-  )
+  numpy.testing.assert_array_equal(numpy.asarray(vals)[numpy.asarray(inv)], [3, 1, 2, 3, 1, 4])
 
 
 def test_bincount_unweighted_and_weighted() -> None:
   arr = mp.asarray([0, 1, 1, 2, 3, 1], dtype=mp.int64)
   numpy.testing.assert_array_equal(numpy.asarray(mp.bincount(arr)), [1, 3, 1, 1])
   w = mp.asarray([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], dtype=mp.float64)
-  numpy.testing.assert_allclose(
-    numpy.asarray(mp.bincount(arr, weights=w)), [1.0, 11.0, 4.0, 5.0], rtol=1e-12
-  )
+  numpy.testing.assert_allclose(numpy.asarray(mp.bincount(arr, weights=w)), [1.0, 11.0, 4.0, 5.0], rtol=1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -99,9 +89,7 @@ def test_bincount_unweighted_and_weighted() -> None:
 def test_isin_basic() -> None:
   a = mp.asarray([0, 1, 2, 3, 4], dtype=mp.int64)
   b = mp.asarray([1, 3], dtype=mp.int64)
-  numpy.testing.assert_array_equal(
-    numpy.asarray(mp.isin(a, b)), [False, True, False, True, False]
-  )
+  numpy.testing.assert_array_equal(numpy.asarray(mp.isin(a, b)), [False, True, False, True, False])
 
 
 def test_set_ops() -> None:
@@ -145,9 +133,7 @@ def test_flatnonzero() -> None:
 
 def test_take_axis_none_and_axis_int() -> None:
   arr = mp.asarray([[1, 2, 3], [4, 5, 6]], dtype=mp.int64)
-  numpy.testing.assert_array_equal(
-    numpy.asarray(mp.take(arr, mp.asarray([0, 2, 4], dtype=mp.int64))), [1, 3, 5]
-  )
+  numpy.testing.assert_array_equal(numpy.asarray(mp.take(arr, mp.asarray([0, 2, 4], dtype=mp.int64))), [1, 3, 5])
   numpy.testing.assert_array_equal(
     numpy.asarray(mp.take(arr, mp.asarray([0, 2], dtype=mp.int64), axis=1)),
     [[1, 3], [4, 6]],
@@ -208,12 +194,8 @@ def test_append_and_delete() -> None:
 
 def test_tril_triu_2d() -> None:
   arr = mp.asarray([[1, 2, 3], [4, 5, 6], [7, 8, 9]], dtype=mp.int64)
-  numpy.testing.assert_array_equal(
-    numpy.asarray(mp.tril(arr)), [[1, 0, 0], [4, 5, 0], [7, 8, 9]]
-  )
-  numpy.testing.assert_array_equal(
-    numpy.asarray(mp.triu(arr)), [[1, 2, 3], [0, 5, 6], [0, 0, 9]]
-  )
+  numpy.testing.assert_array_equal(numpy.asarray(mp.tril(arr)), [[1, 0, 0], [4, 5, 0], [7, 8, 9]])
+  numpy.testing.assert_array_equal(numpy.asarray(mp.triu(arr)), [[1, 2, 3], [0, 5, 6], [0, 0, 9]])
 
 
 def test_tril_triu_indices_match_numpy() -> None:

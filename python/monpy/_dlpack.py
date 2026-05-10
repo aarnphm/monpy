@@ -1,5 +1,3 @@
-# fmt: off
-# ruff: noqa
 from __future__ import annotations
 
 import ctypes
@@ -108,6 +106,7 @@ def _c_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
 
 def _dtype_to_dlpack(dtype: object) -> tuple[int, int]:
   import monpy as mp
+
   table: dict[mp.DType, tuple[int, int]] = {mp.bool: (_DLC_BOOL, 8)}
   for code, dtypes in (
     (_DLC_INT, (mp.int8, mp.int16, mp.int32, mp.int64)),
@@ -116,28 +115,44 @@ def _dtype_to_dlpack(dtype: object) -> tuple[int, int]:
     (_DLC_COMPLEX, (mp.complex64, mp.complex128)),
   ):
     table.update((d, (code, d.itemsize * 8)) for d in dtypes)
-  try:return table[typing.cast(mp.DType, dtype)]
-  except KeyError as exc:raise BufferError(f"unsupported dtype for DLPack export: {dtype!r}") from exc
+  try:
+    return table[typing.cast(mp.DType, dtype)]
+  except KeyError as exc:
+    raise BufferError(f"unsupported dtype for DLPack export: {dtype!r}") from exc
 
 
 def _dtype_from_dlpack(dl_dtype: _DLDataType) -> object:
   import monpy as mp
+
   code, bits, lanes = int(dl_dtype.code), int(dl_dtype.bits), int(dl_dtype.lanes)
-  if lanes != 1:raise BufferError("monpy DLPack import only supports lanes=1")
+  if lanes != 1:
+    raise BufferError("monpy DLPack import only supports lanes=1")
   table = {
     (_DLC_BOOL, 8): mp.bool,
-    (_DLC_INT, 8): mp.int8, (_DLC_INT, 16): mp.int16, (_DLC_INT, 32): mp.int32, (_DLC_INT, 64): mp.int64,
-    (_DLC_UINT, 8): mp.uint8, (_DLC_UINT, 16): mp.uint16, (_DLC_UINT, 32): mp.uint32, (_DLC_UINT, 64): mp.uint64,
-    (_DLC_FLOAT, 16): mp.float16, (_DLC_FLOAT, 32): mp.float32, (_DLC_FLOAT, 64): mp.float64,
-    (_DLC_COMPLEX, 64): mp.complex64, (_DLC_COMPLEX, 128): mp.complex128,
+    (_DLC_INT, 8): mp.int8,
+    (_DLC_INT, 16): mp.int16,
+    (_DLC_INT, 32): mp.int32,
+    (_DLC_INT, 64): mp.int64,
+    (_DLC_UINT, 8): mp.uint8,
+    (_DLC_UINT, 16): mp.uint16,
+    (_DLC_UINT, 32): mp.uint32,
+    (_DLC_UINT, 64): mp.uint64,
+    (_DLC_FLOAT, 16): mp.float16,
+    (_DLC_FLOAT, 32): mp.float32,
+    (_DLC_FLOAT, 64): mp.float64,
+    (_DLC_COMPLEX, 64): mp.complex64,
+    (_DLC_COMPLEX, 128): mp.complex128,
   }
-  try:return table[(code, bits)]
-  except KeyError as exc:raise BufferError(f"unsupported DLPack dtype: code={code}, bits={bits}, lanes={lanes}") from exc
+  try:
+    return table[(code, bits)]
+  except KeyError as exc:
+    raise BufferError(f"unsupported DLPack dtype: code={code}, bits={bits}, lanes={lanes}") from exc
 
 
 class _ExportState:
   def __init__(self, arr: object, *, versioned: bool, copied: bool) -> None:
     import monpy as mp
+
     self.arr = typing.cast(mp.ndarray, arr)
     self.versioned = versioned
     self.copied = copied
@@ -183,13 +198,15 @@ def _pop_export_state(address: int) -> None:
 
 @_LegacyDeleter
 def _legacy_deleter(ptr: typing.Any) -> None:
-  if not ptr:return
+  if not ptr:
+    return
   _pop_export_state(ctypes.addressof(ptr.contents))
 
 
 @_VersionedDeleter
 def _versioned_deleter(ptr: typing.Any) -> None:
-  if not ptr:return
+  if not ptr:
+    return
   _pop_export_state(ctypes.addressof(ptr.contents))
 
 
@@ -200,13 +217,15 @@ _VERSIONED_DELETER_CB = _versioned_deleter
 def _call_legacy_deleter(address: int) -> None:
   ptr = ctypes.cast(address, ctypes.POINTER(_DLManagedTensor))
   deleter = ptr.contents.deleter
-  if deleter:_LegacyDeleter(deleter)(ptr)
+  if deleter:
+    _LegacyDeleter(deleter)(ptr)
 
 
 def _call_versioned_deleter(address: int) -> None:
   ptr = ctypes.cast(address, ctypes.POINTER(_DLManagedTensorVersioned))
   deleter = ptr.contents.deleter
-  if deleter:_VersionedDeleter(deleter)(ptr)
+  if deleter:
+    _VersionedDeleter(deleter)(ptr)
 
 
 @_CapsuleDestructor
@@ -216,11 +235,13 @@ def _capsule_destructor(capsule: int) -> None:
       return
     if _PyCapsule_IsValidPtr(capsule, _NAME_VERSIONED):
       address = int(_PyCapsule_GetPointerPtr(capsule, _NAME_VERSIONED))
-      if address:_call_versioned_deleter(address)
+      if address:
+        _call_versioned_deleter(address)
       return
     if _PyCapsule_IsValidPtr(capsule, _NAME_LEGACY):
       address = int(_PyCapsule_GetPointerPtr(capsule, _NAME_LEGACY))
-      if address:_call_legacy_deleter(address)
+      if address:
+        _call_legacy_deleter(address)
   except Exception:
     return
 
@@ -245,10 +266,16 @@ def _request_capsule(obj: object, copy: bool | None) -> object:
   device_fn = getattr(obj, "__dlpack_device__", None)
   if callable(device_fn):
     device = device_fn()
-    if device != (_DLPACK_CPU, 0):raise BufferError(f"monpy only imports CPU DLPack tensors, got {device!r}")
-  dlpack = typing.cast(typing.Callable[..., object], getattr(obj, "__dlpack__"))
-  kwargs: dict[str, object] = {"stream": None, "max_version": (_DLPACK_MAJOR, _DLPACK_MINOR), "dl_device": (_DLPACK_CPU, 0)}
-  if copy is not None:kwargs["copy"] = copy
+    if device != (_DLPACK_CPU, 0):
+      raise BufferError(f"monpy only imports CPU DLPack tensors, got {device!r}")
+  dlpack = typing.cast(typing.Callable[..., object], obj.__dlpack__)
+  kwargs: dict[str, object] = {
+    "stream": None,
+    "max_version": (_DLPACK_MAJOR, _DLPACK_MINOR),
+    "dl_device": (_DLPACK_CPU, 0),
+  }
+  if copy is not None:
+    kwargs["copy"] = copy
   try:
     return dlpack(**kwargs)
   except TypeError:
@@ -282,11 +309,15 @@ def _managed_tensor(address: int, versioned: bool) -> tuple[_DLTensor, int]:
 
 def _shape_and_strides(tensor: _DLTensor) -> tuple[tuple[int, ...], tuple[int, ...]]:
   ndim = int(tensor.ndim)
-  if ndim < 0:raise BufferError("DLPack tensor rank must be non-negative")
-  if ndim == 0:return (), ()
-  if not tensor.shape:raise BufferError("DLPack tensor is missing shape")
+  if ndim < 0:
+    raise BufferError("DLPack tensor rank must be non-negative")
+  if ndim == 0:
+    return (), ()
+  if not tensor.shape:
+    raise BufferError("DLPack tensor is missing shape")
   shape = tuple(int(tensor.shape[i]) for i in range(ndim))
-  if any(d < 0 for d in shape):raise BufferError("DLPack tensor shape contains a negative dimension")
+  if any(d < 0 for d in shape):
+    raise BufferError("DLPack tensor shape contains a negative dimension")
   strides = tuple(int(tensor.strides[i]) for i in range(ndim)) if tensor.strides else _c_strides(shape)
   return shape, strides
 
@@ -297,8 +328,10 @@ def _consume_capsule(capsule: object, used_name: bytes) -> None:
 
 
 def _release(address: int, versioned: bool) -> None:
-  if versioned:_call_versioned_deleter(address)
-  else:_call_legacy_deleter(address)
+  if versioned:
+    _call_versioned_deleter(address)
+  else:
+    _call_legacy_deleter(address)
 
 
 class _DLPackOwner:
@@ -309,23 +342,29 @@ class _DLPackOwner:
     self.released = False
 
   def release(self) -> None:
-    if self.released:return
+    if self.released:
+      return
     self.released = True
     _release(self.address, self.versioned)
 
   def __del__(self) -> None:
-    try:self.release()
-    except Exception:return
+    try:
+      self.release()
+    except Exception:
+      return
 
 
-def from_dlpack(obj:object, copy:bool|None)->mp.ndarray:return from_dlpack_capsule(_request_capsule(obj, copy), copy)
+def from_dlpack(obj: object, copy: bool | None) -> mp.ndarray:
+  return from_dlpack_capsule(_request_capsule(obj, copy), copy)
 
 
-def from_dlpack_capsule(capsule:object, copy:bool|None)->mp.ndarray:
+def from_dlpack_capsule(capsule: object, copy: bool | None) -> mp.ndarray:
   import monpy as mp
+
   address, versioned, _name, used_name = _capsule_pointer(capsule)
   tensor, flags = _managed_tensor(address, versioned)
-  if int(tensor.device.device_type) != _DLPACK_CPU:raise BufferError("monpy only imports CPU DLPack tensors")
+  if int(tensor.device.device_type) != _DLPACK_CPU:
+    raise BufferError("monpy only imports CPU DLPack tensors")
   dtype = typing.cast(mp.DType, _dtype_from_dlpack(tensor.dtype))
   shape, strides = _shape_and_strides(tensor)
   size = math.prod(shape) if shape else 1
@@ -336,8 +375,10 @@ def from_dlpack_capsule(capsule:object, copy:bool|None)->mp.ndarray:
     _consume_capsule(capsule, used_name)
     _release(address, versioned)
     return mp.ndarray(mp._native.empty(shape, dtype.code))
-  if data == 0:raise BufferError("non-empty DLPack tensor has null data pointer")
-  if readonly and copy is False:raise BufferError("readonly DLPack tensor requires copy=True")
+  if data == 0:
+    raise BufferError("non-empty DLPack tensor has null data pointer")
+  if readonly and copy is False:
+    raise BufferError("readonly DLPack tensor requires copy=True")
   if copy is True or readonly:
     native = mp._native.copy_from_external(data, shape, strides, dtype.code, byte_len)
     _consume_capsule(capsule, used_name)

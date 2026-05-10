@@ -1,5 +1,3 @@
-# fmt: off
-# ruff: noqa
 from __future__ import annotations
 
 import argparse
@@ -96,9 +94,7 @@ def find_mojo(explicit: Path | None = None) -> Path:
   if which:
     return Path(which)
 
-  raise FileNotFoundError(
-    "could not find mojo; pass --mojo, set MOHAUS_MOJO, or set MODULAR_DERIVED_PATH"
-  )
+  raise FileNotFoundError("could not find mojo; pass --mojo, set MOHAUS_MOJO, or set MODULAR_DERIVED_PATH")
 
 
 def standard_command(*, mojo: Path, repo_root: Path) -> list[str]:
@@ -107,7 +103,13 @@ def standard_command(*, mojo: Path, repo_root: Path) -> list[str]:
 
 def numojo_command(*, mojo: Path, repo_root: Path, numojo_path: Path) -> list[str]:
   return [
-    str(mojo), "run", "--ignore-incompatible-package-errors", "-I", str(repo_root / "src"), "-I", str(numojo_path),
+    str(mojo),
+    "run",
+    "--ignore-incompatible-package-errors",
+    "-I",
+    str(repo_root / "src"),
+    "-I",
+    str(numojo_path),
     str(repo_root / "benches" / "bench_numojo_sweep.mojo"),
   ]
 
@@ -127,13 +129,9 @@ def parse_thread_caps(value: str) -> tuple[str, ...]:
       try:
         parsed = int(cap)
       except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-          f"thread cap {raw!r} must be 'auto' or a positive integer"
-        ) from exc
+        raise argparse.ArgumentTypeError(f"thread cap {raw!r} must be 'auto' or a positive integer") from exc
       if parsed <= 0:
-        raise argparse.ArgumentTypeError(
-          f"thread cap {raw!r} must be 'auto' or a positive integer"
-        )
+        raise argparse.ArgumentTypeError(f"thread cap {raw!r} must be 'auto' or a positive integer")
       normalized = str(parsed)
     else:
       normalized = "auto"
@@ -160,7 +158,19 @@ def parse_mojo_tsv(output: str) -> list[MojoBenchRow]:
       continue
     if len(fields) != len(TSV_HEADER):
       raise ValueError(f"malformed Mojo benchmark row: {line!r}")
-    rows.append(MojoBenchRow(fields[0], fields[1], fields[2], fields[3], float(fields[4]), float(fields[5]), float(fields[6]), int(fields[7]), int(fields[8])))
+    rows.append(
+      MojoBenchRow(
+        fields[0],
+        fields[1],
+        fields[2],
+        fields[3],
+        float(fields[4]),
+        float(fields[5]),
+        float(fields[6]),
+        int(fields[7]),
+        int(fields[8]),
+      )
+    )
   if not seen_header:
     raise ValueError("Mojo benchmark output did not include the TSV header")
   return rows
@@ -309,7 +319,10 @@ def render_table(rows: Sequence[MojoBenchRow]) -> str:
   numeric_columns = {4, 5, 6, 7, 8}
 
   def render_row(row: Sequence[str]) -> str:
-    cells = [cell.rjust(widths[index]) if index in numeric_columns else cell.ljust(widths[index]) for index, cell in enumerate(row)]
+    cells = [
+      cell.rjust(widths[index]) if index in numeric_columns else cell.ljust(widths[index])
+      for index, cell in enumerate(row)
+    ]
     return " | ".join(cells)
 
   separator = "-+-".join("-" * width for width in widths)
@@ -532,17 +545,11 @@ def collect_rows(
     for cap in thread_caps:
       if cap == "auto":
         commands.append(["env", "-u", "MONPY_THREADS", *th_command])
-        rows.extend(
-          parse_mojo_tsv(
-            run_mojo_command(th_command, timeout=timeout, unset_env=("MONPY_THREADS",))
-          )
-        )
+        rows.extend(parse_mojo_tsv(run_mojo_command(th_command, timeout=timeout, unset_env=("MONPY_THREADS",))))
       else:
         commands.append(["env", f"MONPY_THREADS={cap}", *th_command])
         rows.extend(
-          parse_mojo_tsv(
-            run_mojo_command(th_command, timeout=timeout, env_overrides={"MONPY_THREADS": cap})
-          )
+          parse_mojo_tsv(run_mojo_command(th_command, timeout=timeout, env_overrides={"MONPY_THREADS": cap}))
         )
 
   return MojoBenchCollection(rows=rows, commands=commands, warnings=warnings)
@@ -593,10 +600,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     "--thread-caps",
     type=parse_thread_caps,
     default=("auto", "1"),
-    help=(
-      "comma-separated MONPY_THREADS caps for --include-threading "
-      "(default: auto,1; use e.g. auto,1,2,4,8)"
-    ),
+    help=("comma-separated MONPY_THREADS caps for --include-threading (default: auto,1; use e.g. auto,1,2,4,8)"),
   )
   parser.add_argument("--timeout", type=positive_int, default=300, help="seconds per Mojo command")
   parser.add_argument("--format", choices=("table", "csv", "json", "markdown"), default="table")

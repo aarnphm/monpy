@@ -72,9 +72,7 @@ def test_platform_comment_marker_and_title_are_rendered() -> None:
     title="monpy benchmark sweep (Ubuntu)",
   )
 
-  assert body.startswith(
-    "<!-- monpy-bench:ubuntu -->\n\n### monpy benchmark sweep (Ubuntu)"
-  )
+  assert body.startswith("<!-- monpy-bench:ubuntu -->\n\n### monpy benchmark sweep (Ubuntu)")
   assert "<!-- monpy-bench -->" not in body
 
 
@@ -143,10 +141,7 @@ def test_comment_highlights_overall_result_and_winning_timings() -> None:
 
   body = posts.render_comment(payload)
 
-  assert (
-    "overall result: **monpy** (case outcomes: **monpy=2**, numpy=1, tie=1)"
-    in body
-  )
+  assert "overall result: **monpy** (case outcomes: **monpy=2**, numpy=1, tie=1)" in body
   assert "| elementwise | binary_add_f32 | **2.000** | 4.000 | 0.500x | monpy |" in body
   assert "| elementwise | array_copy_f32 | 5.000 | **2.500** | 2.000x | numpy |" in body
   assert "| elementwise | astype_f32 | 1.000 | 1.000 | 1.000x | tie |" in body
@@ -172,7 +167,4 @@ def test_overall_draw_highlights_both_tied_counts() -> None:
 
   body = posts.render_comment(payload)
 
-  assert (
-    "overall result: **tie** (case outcomes: **monpy=1**, **numpy=1**, tie=0)"
-    in body
-  )
+  assert "overall result: **tie** (case outcomes: **monpy=1**, **numpy=1**, tie=0)" in body

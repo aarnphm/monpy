@@ -6,23 +6,67 @@ import sys
 import textwrap
 
 
-def test_monpy_import_keeps_kernel_backends_lazy() -> None:
+def test_monpy_lax_and_extend_imports_are_lazy_and_old_kernels_breaks() -> None:
   code = textwrap.dedent(
     """
+    import importlib
     import sys
 
     import monpy
 
     assert "max" not in sys.modules
     assert "safetensors" not in sys.modules
-    assert "xgrammar" not in sys.modules
+    assert "numpy" not in sys.modules
+    assert "monpy.lax" not in sys.modules
+    assert "monpy.extend" not in sys.modules
     assert "monpy.kernels" not in sys.modules
 
-    assert monpy.jit is not None
-    assert "monpy.kernels" in sys.modules
+    for name in ("jit", "vmap", "Tensor", "TensorSpec", "LayoutSpec", "TileSpec", "DTypeSpec", "DeviceSpec", "SymbolicDim"):
+      assert not hasattr(monpy, name), name
+
+    try:
+      importlib.import_module("monpy.kernels")
+    except ModuleNotFoundError:
+      pass
+    else:
+      raise AssertionError("monpy.kernels must not be import-compatible")
+
+    import monpy.lax as lax
+    assert callable(lax.jit)
+    assert callable(lax.vmap)
     assert "max" not in sys.modules
     assert "safetensors" not in sys.modules
-    assert "xgrammar" not in sys.modules
+    assert "numpy" not in sys.modules
+
+    import monpy.extend as extend
+    assert extend.MAX_TARGET == "max"
+    assert extend.MOJO_TARGET == "mojo"
+    assert "max" not in sys.modules
+    assert "safetensors" not in sys.modules
+    assert "numpy" not in sys.modules
+    """
+  )
+  env = dict(os.environ)
+  if "MOHAUS_MOJO" not in env and "MODULAR_DERIVED_PATH" in env:
+    env["MOHAUS_MOJO"] = os.path.join(env["MODULAR_DERIVED_PATH"], "build", "bin", "mojo")
+  subprocess.run([sys.executable, "-I", "-c", code], check=True, env=env)
+
+
+def test_numpy_inputs_enter_through_numpy_ops_boundary() -> None:
+  code = textwrap.dedent(
+    """
+    import sys
+    import numpy
+    import monpy
+
+    assert "monpy.numpy.ops" not in sys.modules
+    arr = monpy.asarray(numpy.asarray([1, 2, 3], dtype=numpy.int64))
+    assert arr.tolist() == [1, 2, 3]
+    assert "monpy.numpy.ops" in sys.modules
+    assert "max" not in sys.modules
+    assert "safetensors" not in sys.modules
+
+    assert monpy.dtype(numpy.float32) is monpy.float32
     """
   )
   env = dict(os.environ)
@@ -32,8 +76,8 @@ def test_monpy_import_keeps_kernel_backends_lazy() -> None:
 
 
 def test_layout_spec_native_lowering_decisions() -> None:
-  from monpy.kernels.graph import GraphLowerer, LayoutAction
-  from monpy.kernels.layout import LayoutSpec, TileSpec
+  from monpy.extend.mlir_or_max import GraphLowerer, LayoutAction
+  from monpy.lax import LayoutSpec, TileSpec
 
   lowerer = GraphLowerer()
   base = LayoutSpec.row_major((2, 3))
@@ -59,46 +103,46 @@ def test_layout_spec_native_lowering_decisions() -> None:
 
 def test_jit_traces_graph_ir_with_layout_metadata() -> None:
   import monpy as mp
-  from monpy.kernels.ir import Op
+  import monpy.lax as lax
 
-  @mp.jit
-  def f(x: mp.Tensor, w: mp.Tensor) -> mp.Tensor:
+  @lax.jit
+  def f(x: lax.Tensor, w: lax.Tensor) -> lax.Tensor:
     y = mp.matmul(x, w)
     return mp.transpose(mp.reshape(y, (4, 2)), (1, 0))
 
   compiled = f.compile(
-    mp.TensorSpec((2, 3), mp.float32, "cpu"),
-    mp.TensorSpec((3, 4), mp.float32, "cpu"),
+    lax.TensorSpec((2, 3), mp.float32, "cpu"),
+    lax.TensorSpec((3, 4), mp.float32, "cpu"),
   )
 
   graph = compiled.graph
-  assert [node.op for node in graph.nodes] == [
-    Op.INPUT,
-    Op.INPUT,
-    Op.MATMUL,
-    Op.RESHAPE,
-    Op.TRANSPOSE,
-  ]
+  assert [node.op for node in graph.nodes] == ["input", "input", "matmul", "reshape", "transpose"]
+  assert [node.primitive.name for node in graph.nodes] == ["input", "input", "matmul", "reshape", "transpose"]
   assert graph.outputs == (4,)
   assert graph.nodes[4].spec.shape == (2, 4)
   assert graph.nodes[4].spec.layout.shape == (2, 4)
   assert graph.structural_key
 
 
-def test_graph_ir_key_changes_when_layout_changes() -> None:
+def test_graph_ir_key_changes_when_shape_dtype_params_or_layout_change() -> None:
   import monpy as mp
+  import monpy.lax as lax
 
-  @mp.jit
-  def plain(x: mp.Tensor) -> mp.Tensor:
+  @lax.jit
+  def plain(x: lax.Tensor) -> lax.Tensor:
     return mp.reshape(x, (3, 2))
 
-  @mp.jit
-  def transposed(x: mp.Tensor) -> mp.Tensor:
+  @lax.jit
+  def transposed(x: lax.Tensor) -> lax.Tensor:
     return mp.transpose(x, (1, 0))
 
-  spec = mp.TensorSpec((2, 3), mp.float32, "cpu")
+  spec = lax.TensorSpec((2, 3), mp.float32, "cpu")
 
   plain_graph = plain.compile(spec).graph
   transposed_graph = transposed.compile(spec).graph
+  dtype_graph = plain.compile(lax.TensorSpec((2, 3), mp.float64, "cpu")).graph
+  shape_graph = plain.compile(lax.TensorSpec((3, 2), mp.float32, "cpu")).graph
 
   assert plain_graph.structural_key != transposed_graph.structural_key
+  assert plain_graph.structural_key != dtype_graph.structural_key
+  assert plain_graph.structural_key != shape_graph.structural_key

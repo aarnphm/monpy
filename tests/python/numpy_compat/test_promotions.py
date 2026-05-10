@@ -8,7 +8,7 @@ import monumpy as np
 import numpy
 import pytest
 from _helpers import MONPY_TO_NUMPY_DTYPE, SUPPORTED_DTYPE_PAIRS, assert_same_values
-from monpy.runtime import ops_numpy
+from monpy.numpy import ops as ops_numpy
 
 PROMOTION_MATCH_CASES = [
   (lhs_dtype, lhs_numpy_dtype, rhs_dtype, rhs_numpy_dtype)
@@ -158,9 +158,13 @@ def test_promote_types_and_result_type_match_numpy(
 ) -> None:
   expected = numpy.promote_types(lhs_numpy_dtype, rhs_numpy_dtype)
 
-  assert np.promote_types(lhs_dtype, rhs_dtype) == monpy._DTC[monpy._native._promote_types(lhs_dtype.code, rhs_dtype.code)]
+  assert (
+    np.promote_types(lhs_dtype, rhs_dtype) == monpy._DTC[monpy._native._promote_types(lhs_dtype.code, rhs_dtype.code)]
+  )
   assert MONPY_TO_NUMPY_DTYPE[np.promote_types(lhs_dtype, rhs_dtype)] == expected
-  assert MONPY_TO_NUMPY_DTYPE[np.result_type(lhs_dtype, rhs_dtype)] == numpy.result_type(lhs_numpy_dtype, rhs_numpy_dtype)
+  assert MONPY_TO_NUMPY_DTYPE[np.result_type(lhs_dtype, rhs_dtype)] == numpy.result_type(
+    lhs_numpy_dtype, rhs_numpy_dtype
+  )
 
 
 @pytest.mark.parametrize("scalar", [True, 1, 1.5])
@@ -203,7 +207,15 @@ def test_dtype_kind_queries_match_numpy(
   numpy_dtype: type[numpy.generic],
 ) -> None:
   oracle = numpy.dtype(numpy_dtype)
-  for kind in ["bool", "signed integer", "unsigned integer", "integral", "real floating", "complex floating", "numeric"]:
+  for kind in [
+    "bool",
+    "signed integer",
+    "unsigned integer",
+    "integral",
+    "real floating",
+    "complex floating",
+    "numeric",
+  ]:
     assert np.isdtype(monpy_dtype, kind) is bool(numpy.isdtype(oracle, kind))
   assert np.issubdtype(monpy_dtype, monpy_dtype)
   assert np.issubdtype(monpy_dtype, numpy.integer) is bool(numpy.issubdtype(oracle, numpy.integer))

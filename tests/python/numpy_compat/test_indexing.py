@@ -149,9 +149,7 @@ def test_expand_dims_matches_numpy_for_supported_axes() -> None:
     ([0, 2], [1, 3]),
   ],
 )
-def test_boolean_and_integer_array_indexing_returns_gathered_values(
-  index: object, expected: list[int]
-) -> None:
+def test_boolean_and_integer_array_indexing_returns_gathered_values(index: object, expected: list[int]) -> None:
   arr = np.asarray([1, 2, 3])
   out = arr[index]
   assert out.tolist() == expected

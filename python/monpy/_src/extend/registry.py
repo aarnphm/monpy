@@ -5,10 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
+from ..core import Node
 from ..dtypes import DTypeSpec
-from ..ir import Node
 
 LayoutPredicate = Callable[[object], bool]
 LoweringHook = Callable[[object, Node], object]

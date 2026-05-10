@@ -376,11 +376,7 @@ def test_matmul_matrix_layout_sweep_matches_numpy(
   if layout == "lhs_f":
     lhs_oracle = numpy.asfortranarray(lhs_oracle)
   elif layout == "rhs_transposed":
-    rhs_oracle = (
-      (numpy.arange(n * k, dtype=numpy_dtype).reshape(n, k) - 2)
-      .astype(numpy_dtype, copy=False)
-      .T
-    )
+    rhs_oracle = (numpy.arange(n * k, dtype=numpy_dtype).reshape(n, k) - 2).astype(numpy_dtype, copy=False).T
   elif layout == "offset":
     lhs_source = (numpy.arange((m + 1) * k, dtype=numpy_dtype).reshape(m + 1, k) + 1).astype(
       numpy_dtype,

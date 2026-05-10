@@ -1,14 +1,14 @@
-"""Symbolic tensor handle used inside `@monpy.jit`."""
+"""Symbolic tensor handle used inside `@monpy.lax.jit`."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Sequence
+from typing import TYPE_CHECKING, ClassVar
 
-from .ir import TensorSpec, ValueRef
+from ..core import TensorSpec, ValueRef
 
 if TYPE_CHECKING:
-  from .trace import TraceContext
+  from ..interpreters.tracing import TraceContext
 
 
 @dataclass(frozen=True, slots=True)

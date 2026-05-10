@@ -6,9 +6,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-from pytest import MonkeyPatch
-
 from monpy._bench import mojo_sweep
+from pytest import MonkeyPatch
 
 
 def test_parse_mojo_tsv_ignores_preheader_noise() -> None:

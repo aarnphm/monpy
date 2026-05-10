@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
+from ..core import TensorSpec
 from .tensor import Tensor
 
 
@@ -40,6 +41,16 @@ def broadcast_to(x: object, shape: int | Sequence[int]) -> Tensor:
   tensor = _expect_tensor(x)
   target = (shape,) if isinstance(shape, int) else tuple(int(dim) for dim in shape)
   return tensor._trace.broadcast_to(tensor, target)
+
+
+def cast(x: object, dtype: object) -> Tensor:
+  tensor = _expect_tensor(x)
+  return tensor._trace.cast(tensor, dtype)
+
+
+def custom_call(name: str, args: Sequence[object], out: TensorSpec | None = None) -> Tensor:
+  tensor = _one_tensor(tuple(args))
+  return tensor._trace.custom_call(name, args, tensor.spec if out is None else out)
 
 
 def _expect_tensor(value: object) -> Tensor:

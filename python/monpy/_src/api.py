@@ -1,21 +1,64 @@
-# fmt: off
-# ruff: noqa
-"""Small JAX-shaped eager transforms for monpy."""
+"""Staging and eager transform entry points for `monpy.lax`."""
 
 from __future__ import annotations
 
 import builtins
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
-from . import asarray, moveaxis, ndarray, stack
+from .. import asarray, moveaxis, ndarray, stack
+from .core import GraphIR, TensorSpec
+from .interpreters.tracing import TraceContext
 
 Axis = int | None
 
 
 class _Indexable(Protocol):
   def __getitem__(self, index: int) -> object: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledFunction:
+  fn: Callable[..., object]
+  graph: GraphIR
+  backend: str
+
+
+@dataclass(frozen=True, slots=True)
+class JittedFunction:
+  fn: Callable[..., object]
+  backend: Literal["auto", "graph", "native"] = "auto"
+  dynamic_dims: Mapping[str, int | str] | None = None
+  cache_size: int = 64
+
+  def compile(self, *specs: TensorSpec, weights: object | None = None) -> CompiledFunction:
+    if weights is not None:
+      raise NotImplementedError("external weight binding belongs to the next monpy.lax slice")
+    trace = TraceContext()
+    inputs = tuple(trace.input(spec) for spec in specs)
+    outputs = self.fn(*inputs)
+    return CompiledFunction(self.fn, trace.graph(outputs), self.backend)
+
+  def __call__(self, *args: object, **kwargs: object) -> object:
+    if any(getattr(arg, "__monpy_kernel_tensor__", False) for arg in args):
+      return self.fn(*args, **kwargs)
+    raise TypeError("jitted monpy functions are compile boundaries; call .compile(...) with TensorSpec inputs")
+
+
+def jit(
+  fn: Callable[..., object] | None = None,
+  *,
+  backend: Literal["auto", "graph", "native"] = "auto",
+  dynamic_dims: Mapping[str, int | str] | None = None,
+  cache_size: int = 64,
+) -> JittedFunction | Callable[[Callable[..., object]], JittedFunction]:
+  def wrap(inner: Callable[..., object]) -> JittedFunction:
+    return JittedFunction(inner, backend=backend, dynamic_dims=dynamic_dims, cache_size=cache_size)
+
+  if fn is None:
+    return wrap
+  return wrap(fn)
 
 
 def _is_axis(value: object) -> bool:
@@ -43,11 +86,11 @@ def _positional_axes(in_axes: object, nargs: int) -> tuple[Axis, ...]:
 
 def _mapped_size(value: object, axis: int, context: str) -> tuple[int, int]:
   if getattr(value, "__monpy_random_key_batch__", False):
-    ndim = cast(int, getattr(value, "ndim"))
+    ndim = cast(int, value.ndim)
     if ndim == 0:
       raise ValueError(f"{context}: cannot map over a rank-0 value")
     normalized = _normalize_axis(axis, ndim, context)
-    shape = cast(tuple[int, ...], getattr(value, "shape"))
+    shape = cast(tuple[int, ...], value.shape)
     return shape[normalized], normalized
   arr = asarray(value)
   if arr.ndim == 0:
@@ -111,7 +154,12 @@ def _output_axes(out_axes: object, arity: int, context: str) -> tuple[object, ..
 
 def _same_value(left: object, right: object) -> bool:
   if isinstance(left, ndarray):
-    return isinstance(right, ndarray) and left.dtype == right.dtype and left.shape == right.shape and left.tolist() == right.tolist()
+    return (
+      isinstance(right, ndarray)
+      and left.dtype == right.dtype
+      and left.shape == right.shape
+      and left.tolist() == right.tolist()
+    )
   return left == right
 
 
@@ -145,7 +193,9 @@ def _stack_outputs(outputs: Sequence[object], out_axes: object) -> object:
     if any(len(output) != len(first) for output in tuple_outputs[1:]):
       raise ValueError("vmap tuple output arity changed across mapped calls")
     axes = _output_axes(out_axes, len(first), "vmap tuple output")
-    return tuple(_stack_outputs([output[index] for output in tuple_outputs], axes[index]) for index in range(len(first)))
+    return tuple(
+      _stack_outputs([output[index] for output in tuple_outputs], axes[index]) for index in range(len(first))
+    )
   if isinstance(first, list):
     list_outputs = [cast(list[object], output) for output in outputs]
     if any(len(output) != len(first) for output in list_outputs[1:]):
@@ -165,7 +215,7 @@ def _stack_outputs(outputs: Sequence[object], out_axes: object) -> object:
 
 
 @dataclass(frozen=True, slots=True)
-class _VmapFunction:
+class VmapFunction:
   fn: Callable[..., object]
   in_axes: object = 0
   out_axes: object = 0
@@ -180,8 +230,7 @@ class _VmapFunction:
     outputs: list[object] = []
     for index in range(size):
       mapped_args = tuple(
-        arg if axis is None else _slice_axis(arg, axis, index)
-        for arg, axis in zip(args, normalized_axes, strict=True)
+        arg if axis is None else _slice_axis(arg, axis, index) for arg, axis in zip(args, normalized_axes, strict=True)
       )
       mapped_kwargs = {name: _slice_axis(value, kw_axes[name], index) for name, value in kwargs.items()}
       outputs.append(self.fn(*mapped_args, **mapped_kwargs))
@@ -196,16 +245,12 @@ def vmap(
   axis_size: int | None = None,
   spmd_axis_name: object | None = None,
   sum_match: bool = False,
-) -> _VmapFunction:
-  """Map ``fun`` over array axes using monpy's eager ndarray surface.
-
-  This mirrors the JAX call shape for eager correctness tests. The fast path is
-  still graph-level batching over monpy kernel primitives.
-  """
+) -> VmapFunction:
+  """Map ``fun`` over array axes using monpy's eager ndarray surface."""
 
   if not callable(fun):
     raise TypeError("vmap expects a callable")
-  return _VmapFunction(
+  return VmapFunction(
     fun,
     in_axes=in_axes,
     out_axes=out_axes,
@@ -214,6 +259,3 @@ def vmap(
     spmd_axis_name=spmd_axis_name,
     sum_match=sum_match,
   )
-
-
-__all__ = ["vmap"]

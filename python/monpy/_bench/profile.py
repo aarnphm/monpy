@@ -1,5 +1,3 @@
-# fmt: off
-# ruff: noqa
 from __future__ import annotations
 
 import argparse
@@ -38,7 +36,8 @@ DEFAULT_PERF_EVENTS = "cycles,instructions,cache-references,cache-misses,branche
 
 def positive_float(value: str) -> float:
   parsed = float(value)
-  if parsed <= 0.0: raise argparse.ArgumentTypeError("must be > 0")
+  if parsed <= 0.0:
+    raise argparse.ArgumentTypeError("must be > 0")
   return parsed
 
 
@@ -245,7 +244,8 @@ def run_perf_stat(args: argparse.Namespace, output_dir: Path) -> dict[str, objec
 
 
 def parse_xctrace_templates(value: str) -> tuple[str, ...]:
-  if not value: return ()
+  if not value:
+    return ()
   aliases = {
     "time": "Time Profiler",
     "counters": "CPU Counters",

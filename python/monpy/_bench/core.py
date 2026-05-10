@@ -1,5 +1,3 @@
-# fmt: off
-# ruff: noqa
 from __future__ import annotations
 
 import argparse
@@ -11,18 +9,17 @@ import statistics
 import sys
 import time
 import warnings
-
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-import monpy as _monpy
 import monumpy as mnp
 import numpy as np
 import numpy.testing as npt
-
 from tqdm import tqdm as _tqdm
+
+import monpy as _monpy
 
 BenchFn = Callable[[], Any]
 
@@ -65,36 +62,45 @@ class BenchResult:
 
 
 class _NoProgress:
-  def __enter__(self) -> _NoProgress: return self
+  def __enter__(self) -> _NoProgress:
+    return self
 
-  def __exit__(self, exc_type: object, exc: object, tb: object) -> None: return None
+  def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+    return None
 
-  def update(self, n: int = 1) -> None: return None
+  def update(self, n: int = 1) -> None:
+    return None
 
-  def set_postfix_str(self, s: str, refresh: bool = True) -> None: return None
+  def set_postfix_str(self, s: str, refresh: bool = True) -> None:
+    return None
 
 
 def progress_bar(*, total: int, enabled: bool) -> Any:
-  if not enabled: return _NoProgress()
+  if not enabled:
+    return _NoProgress()
   return _tqdm(total=total, desc="bench", dynamic_ncols=True, unit="case", leave=False, file=sys.stderr)
 
 
 def positive_int(value: str) -> int:
   parsed = int(value)
-  if parsed < 1: raise argparse.ArgumentTypeError("must be >= 1")
+  if parsed < 1:
+    raise argparse.ArgumentTypeError("must be >= 1")
   return parsed
 
 
 def parse_sizes(value: str) -> tuple[int, ...]:
   sizes = tuple(positive_int(part.strip()) for part in value.split(",") if part.strip())
-  if not sizes: raise argparse.ArgumentTypeError("must include at least one size")
+  if not sizes:
+    raise argparse.ArgumentTypeError("must include at least one size")
   return sizes
 
 
 def force_monpy(value: Any) -> Any:
   if not isinstance(value, mnp.ndarray):
-    try: _ = getattr(value, "_native")
-    except AttributeError: pass
+    try:
+      _ = value._native
+    except AttributeError:
+      pass
   return value
 
 
@@ -111,7 +117,8 @@ def suppress_known_numpy_linalg_warnings() -> Iterator[None]:
 
 
 def call_bench_fn(fn: BenchFn) -> object:
-  with suppress_known_numpy_linalg_warnings(): return fn()
+  with suppress_known_numpy_linalg_warnings():
+    return fn()
 
 
 def time_call(fn: BenchFn, *, loops: int, repeats: int, force: Callable[[object], object] | None = None) -> float:
@@ -452,22 +459,59 @@ def build_cases(
   vec_b_np = np.arange(8, 16, dtype=np.float32)
   vec_b_mp = mnp.asarray(vec_b_np)
   cases.extend([
-    BenchCase("views", "squeeze_axis0_f32", lambda: mnp.squeeze(squeeze_mp, axis=0), lambda: np.squeeze(squeeze_np, axis=0)),
-    BenchCase("interop", "asarray_squeeze_axis0_f32", lambda: mnp.squeeze(mnp.asarray(squeeze_np), axis=0), lambda: np.squeeze(np.asarray(squeeze_np), axis=0)),
+    BenchCase(
+      "views", "squeeze_axis0_f32", lambda: mnp.squeeze(squeeze_mp, axis=0), lambda: np.squeeze(squeeze_np, axis=0)
+    ),
+    BenchCase(
+      "interop",
+      "asarray_squeeze_axis0_f32",
+      lambda: mnp.squeeze(mnp.asarray(squeeze_np), axis=0),
+      lambda: np.squeeze(np.asarray(squeeze_np), axis=0),
+    ),
     BenchCase("views", "moveaxis_f32", lambda: mnp.moveaxis(s_mp, 0, -1), lambda: np.moveaxis(s_np, 0, -1)),
     BenchCase("views", "swapaxes_f32", lambda: mnp.swapaxes(s_mp, 0, 2), lambda: np.swapaxes(s_np, 0, 2)),
     BenchCase("views", "ravel_f32", lambda: mnp.ravel(s_mp), lambda: np.ravel(s_np)),
-    BenchCase("views", "flatten_f32", lambda: mnp.flatten(s_mp) if hasattr(mnp, "flatten") else mnp.ravel(s_mp), lambda: s_np.flatten()),
-    BenchCase("views", "concatenate_axis0_f32", lambda: mnp.concatenate([vec_a_mp, vec_b_mp]), lambda: np.concatenate([vec_a_np, vec_b_np])),
-    BenchCase("views", "stack_axis0_f32", lambda: mnp.stack([vec_a_mp, vec_b_mp]), lambda: np.stack([vec_a_np, vec_b_np])),
-    BenchCase("views", "hstack_f32", lambda: mnp.hstack([vec_a_mp, vec_b_mp]), lambda: np.hstack([vec_a_np, vec_b_np])),
-    BenchCase("views", "vstack_f32", lambda: mnp.vstack([vec_a_mp, vec_b_mp]), lambda: np.vstack([vec_a_np, vec_b_np])),
+    BenchCase(
+      "views",
+      "flatten_f32",
+      lambda: mnp.flatten(s_mp) if hasattr(mnp, "flatten") else mnp.ravel(s_mp),
+      lambda: s_np.flatten(),
+    ),
+    BenchCase(
+      "views",
+      "concatenate_axis0_f32",
+      lambda: mnp.concatenate([vec_a_mp, vec_b_mp]),
+      lambda: np.concatenate([vec_a_np, vec_b_np]),
+    ),
+    BenchCase(
+      "views", "stack_axis0_f32", lambda: mnp.stack([vec_a_mp, vec_b_mp]), lambda: np.stack([vec_a_np, vec_b_np])
+    ),
+    BenchCase(
+      "views", "hstack_f32", lambda: mnp.hstack([vec_a_mp, vec_b_mp]), lambda: np.hstack([vec_a_np, vec_b_np])
+    ),
+    BenchCase(
+      "views", "vstack_f32", lambda: mnp.vstack([vec_a_mp, vec_b_mp]), lambda: np.vstack([vec_a_np, vec_b_np])
+    ),
     BenchCase("creation", "eye_64_f32", lambda: mnp.eye(64, dtype=mnp.float32), lambda: np.eye(64, dtype=np.float32)),
-    BenchCase("creation", "identity_64_f32", lambda: mnp.identity(64, dtype=mnp.float32), lambda: np.identity(64, dtype=np.float32)),
+    BenchCase(
+      "creation",
+      "identity_64_f32",
+      lambda: mnp.identity(64, dtype=mnp.float32),
+      lambda: np.identity(64, dtype=np.float32),
+    ),
     BenchCase("creation", "tri_64_f32", lambda: mnp.tri(64, dtype=mnp.float32), lambda: np.tri(64, dtype=np.float32)),
-    BenchCase("creation", "logspace_50", lambda: mnp.logspace(0.0, 1.0, num=50), lambda: np.logspace(0.0, 1.0, num=50)),
-    BenchCase("creation", "geomspace_50", lambda: mnp.geomspace(1.0, 1000.0, num=50), lambda: np.geomspace(1.0, 1000.0, num=50)),
-    BenchCase("creation", "meshgrid_xy_f32", lambda: mnp.meshgrid(vec_a_mp, vec_b_mp, indexing="xy"), lambda: np.meshgrid(vec_a_np, vec_b_np, indexing="xy")),
+    BenchCase(
+      "creation", "logspace_50", lambda: mnp.logspace(0.0, 1.0, num=50), lambda: np.logspace(0.0, 1.0, num=50)
+    ),
+    BenchCase(
+      "creation", "geomspace_50", lambda: mnp.geomspace(1.0, 1000.0, num=50), lambda: np.geomspace(1.0, 1000.0, num=50)
+    ),
+    BenchCase(
+      "creation",
+      "meshgrid_xy_f32",
+      lambda: mnp.meshgrid(vec_a_mp, vec_b_mp, indexing="xy"),
+      lambda: np.meshgrid(vec_a_np, vec_b_np, indexing="xy"),
+    ),
     BenchCase("creation", "atleast_2d_f32", lambda: mnp.atleast_2d(vec_a_mp), lambda: np.atleast_2d(vec_a_np)),
     BenchCase("creation", "indices_4x4", lambda: mnp.indices((4, 4)), lambda: np.indices((4, 4))),
   ])
@@ -729,38 +773,258 @@ def build_cases(
   la_cross_b_mp = mnp.asarray(la_cross_b_np, dtype=mnp.float64, copy=True)
   np_linalg_vecdot: Any = np.linalg.vecdot
   cases.extend([
-    BenchCase("linalg_api", "dot_1d_32_f64", lambda: mnp.linalg.dot(la_vec_mp, la_vec_b_mp), lambda: np.dot(la_vec_np, la_vec_b_np), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "vdot_32_f64", lambda: mnp.linalg.vdot(la_vec_mp, la_vec_b_mp), lambda: np.vdot(la_vec_np, la_vec_b_np), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "inner_32_f64", lambda: mnp.linalg.inner(la_vec_mp, la_vec_b_mp), lambda: np.inner(la_vec_np, la_vec_b_np), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "outer_32_f64", lambda: mnp.linalg.outer(la_vec_mp, la_vec_b_mp), lambda: np.linalg.outer(la_vec_np, la_vec_b_np), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "matmul_16_f64", lambda: mnp.linalg.matmul(la_mat16_mp, la_mat16_mp), lambda: np.linalg.matmul(la_mat16_np, la_mat16_np), rtol=1e-9, atol=1e-9),
-    BenchCase("linalg_api", "matvec_16_f64", lambda: mnp.linalg.matvec(la_mat16_mp, la_rhs16_mp), lambda: np.matvec(la_mat16_np, la_rhs16_np), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "vecmat_16_f64", lambda: mnp.linalg.vecmat(la_rhs16_mp, la_mat16_mp), lambda: np.vecmat(la_rhs16_np, la_mat16_np), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "vecdot_axis1_8x4_f64", lambda: mnp.linalg.vecdot(la_vec_2d_mp, la_vec_b_2d_mp, axis=1), lambda: np_linalg_vecdot(la_vec_2d_np, la_vec_b_2d_np, axis=1), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "tensordot_axes1_4x5_5x3_f64", lambda: mnp.linalg.tensordot(la_a_mp, la_b_mp, axes=1), lambda: np.linalg.tensordot(la_a_np, la_b_np, axes=1), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "kron_2x2_f64", lambda: mnp.linalg.kron(la_small_mp, la_small_mp), lambda: np.kron(la_small_np, la_small_np), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "cross_3_f64", lambda: mnp.linalg.cross(la_cross_a_mp, la_cross_b_mp), lambda: np.linalg.cross(la_cross_a_np, la_cross_b_np), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "trace_16_f64", lambda: mnp.linalg.trace(la_mat16_mp), lambda: np.linalg.trace(la_mat16_np), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "matrix_transpose_16_f64", lambda: mnp.linalg.matrix_transpose(la_mat16_mp), lambda: np.linalg.matrix_transpose(la_mat16_np), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "norm_vec2_32_f64", lambda: mnp.linalg.norm(la_vec_mp), lambda: np.linalg.norm(la_vec_np), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "norm_vec1_32_f64", lambda: mnp.linalg.norm(la_vec_mp, ord=1), lambda: np.linalg.norm(la_vec_np, ord=1), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "vector_norm_axis1_8x4_f64", lambda: mnp.linalg.vector_norm(la_vec_2d_mp, axis=1), lambda: np.linalg.vector_norm(la_vec_2d_np, axis=1), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "matrix_norm_fro_16_f64", lambda: mnp.linalg.matrix_norm(la_mat16_mp), lambda: np.linalg.matrix_norm(la_mat16_np), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "matrix_rank_3_f64", lambda: mnp.linalg.matrix_rank(la_rank_mp), lambda: np.linalg.matrix_rank(la_rank_np), check_dtype=False),
-    BenchCase("linalg_api", "matrix_power_2_n3_f64", lambda: mnp.linalg.matrix_power(la_small_mp, 3), lambda: np.linalg.matrix_power(la_small_np, 3), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "slogdet_16_f64", lambda: mnp.linalg.slogdet(la_mat16_mp)[1], lambda: np.linalg.slogdet(la_mat16_np)[1], rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "multi_dot_2x2_f64", lambda: mnp.linalg.multi_dot([la_multi_a_mp, la_multi_b_mp, la_multi_c_mp]), lambda: np.linalg.multi_dot([la_multi_a_np, la_multi_b_np, la_multi_c_np]), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "tensorinv_2x2x2x2_f64", lambda: mnp.linalg.tensorinv(la_tensor_inv_mp), lambda: np.linalg.tensorinv(la_tensor_inv_np), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "tensorsolve_2x3x2x3_f64", lambda: mnp.linalg.tensorsolve(la_tensor_solve_mp, la_tensor_rhs_mp), lambda: np.linalg.tensorsolve(la_tensor_solve_np, la_tensor_rhs_np), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "solve_matrix_rhs_16_f64", lambda: mnp.linalg.solve(la_mat16_mp, la_rhs16_2_mp), lambda: np.linalg.solve(la_mat16_np, la_rhs16_2_np), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "qr_r_8x4_f64", lambda: mnp.linalg.qr(la_rect_mp, mode="r"), lambda: np.linalg.qr(la_rect_np, mode="r"), check_values=False),
-    BenchCase("linalg_api", "eigh_full_2_f64", lambda: mnp.linalg.eigh(la_small_mp)[0], lambda: np.linalg.eigh(la_small_np)[0], rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "eigvals_4_f64", lambda: mnp.linalg.eigvals(la_tri_mp), lambda: np.linalg.eigvals(la_tri_np), rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "eig_full_4_f64", lambda: mnp.linalg.eig(la_tri_mp)[0], lambda: np.linalg.eig(la_tri_np)[0], rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "svd_full_8x4_f64", lambda: mnp.linalg.svd(la_rect_mp, full_matrices=False)[1], lambda: np.linalg.svd(la_rect_np, full_matrices=False)[1], check_values=False),
-    BenchCase("linalg_api", "svdvals_8x4_f64", lambda: mnp.linalg.svdvals(la_rect_mp), lambda: np.linalg.svdvals(la_rect_np), check_values=False),
-    BenchCase("linalg_api", "lstsq_8x4_f64", lambda: mnp.linalg.lstsq(la_rect_mp, la_rect_rhs_mp)[0], lambda: np.linalg.lstsq(la_rect_np, la_rect_rhs_np, rcond=None)[0], rtol=1e-10, atol=1e-10),
-    BenchCase("linalg_api", "pinv_rect_8x4_f64", lambda: mnp.linalg.pinv(la_rect_mp, rcond=la_rect_rcond), lambda: np.linalg.pinv(la_rect_np, rcond=la_rect_rcond), rtol=1e-10, atol=1e-10),
+    BenchCase(
+      "linalg_api",
+      "dot_1d_32_f64",
+      lambda: mnp.linalg.dot(la_vec_mp, la_vec_b_mp),
+      lambda: np.dot(la_vec_np, la_vec_b_np),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "vdot_32_f64",
+      lambda: mnp.linalg.vdot(la_vec_mp, la_vec_b_mp),
+      lambda: np.vdot(la_vec_np, la_vec_b_np),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "inner_32_f64",
+      lambda: mnp.linalg.inner(la_vec_mp, la_vec_b_mp),
+      lambda: np.inner(la_vec_np, la_vec_b_np),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "outer_32_f64",
+      lambda: mnp.linalg.outer(la_vec_mp, la_vec_b_mp),
+      lambda: np.linalg.outer(la_vec_np, la_vec_b_np),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "matmul_16_f64",
+      lambda: mnp.linalg.matmul(la_mat16_mp, la_mat16_mp),
+      lambda: np.linalg.matmul(la_mat16_np, la_mat16_np),
+      rtol=1e-9,
+      atol=1e-9,
+    ),
+    BenchCase(
+      "linalg_api",
+      "matvec_16_f64",
+      lambda: mnp.linalg.matvec(la_mat16_mp, la_rhs16_mp),
+      lambda: np.matvec(la_mat16_np, la_rhs16_np),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "vecmat_16_f64",
+      lambda: mnp.linalg.vecmat(la_rhs16_mp, la_mat16_mp),
+      lambda: np.vecmat(la_rhs16_np, la_mat16_np),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "vecdot_axis1_8x4_f64",
+      lambda: mnp.linalg.vecdot(la_vec_2d_mp, la_vec_b_2d_mp, axis=1),
+      lambda: np_linalg_vecdot(la_vec_2d_np, la_vec_b_2d_np, axis=1),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "tensordot_axes1_4x5_5x3_f64",
+      lambda: mnp.linalg.tensordot(la_a_mp, la_b_mp, axes=1),
+      lambda: np.linalg.tensordot(la_a_np, la_b_np, axes=1),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "kron_2x2_f64",
+      lambda: mnp.linalg.kron(la_small_mp, la_small_mp),
+      lambda: np.kron(la_small_np, la_small_np),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "cross_3_f64",
+      lambda: mnp.linalg.cross(la_cross_a_mp, la_cross_b_mp),
+      lambda: np.linalg.cross(la_cross_a_np, la_cross_b_np),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "trace_16_f64",
+      lambda: mnp.linalg.trace(la_mat16_mp),
+      lambda: np.linalg.trace(la_mat16_np),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "matrix_transpose_16_f64",
+      lambda: mnp.linalg.matrix_transpose(la_mat16_mp),
+      lambda: np.linalg.matrix_transpose(la_mat16_np),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "norm_vec2_32_f64",
+      lambda: mnp.linalg.norm(la_vec_mp),
+      lambda: np.linalg.norm(la_vec_np),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "norm_vec1_32_f64",
+      lambda: mnp.linalg.norm(la_vec_mp, ord=1),
+      lambda: np.linalg.norm(la_vec_np, ord=1),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "vector_norm_axis1_8x4_f64",
+      lambda: mnp.linalg.vector_norm(la_vec_2d_mp, axis=1),
+      lambda: np.linalg.vector_norm(la_vec_2d_np, axis=1),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "matrix_norm_fro_16_f64",
+      lambda: mnp.linalg.matrix_norm(la_mat16_mp),
+      lambda: np.linalg.matrix_norm(la_mat16_np),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "matrix_rank_3_f64",
+      lambda: mnp.linalg.matrix_rank(la_rank_mp),
+      lambda: np.linalg.matrix_rank(la_rank_np),
+      check_dtype=False,
+    ),
+    BenchCase(
+      "linalg_api",
+      "matrix_power_2_n3_f64",
+      lambda: mnp.linalg.matrix_power(la_small_mp, 3),
+      lambda: np.linalg.matrix_power(la_small_np, 3),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "slogdet_16_f64",
+      lambda: mnp.linalg.slogdet(la_mat16_mp)[1],
+      lambda: np.linalg.slogdet(la_mat16_np)[1],
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "multi_dot_2x2_f64",
+      lambda: mnp.linalg.multi_dot([la_multi_a_mp, la_multi_b_mp, la_multi_c_mp]),
+      lambda: np.linalg.multi_dot([la_multi_a_np, la_multi_b_np, la_multi_c_np]),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "tensorinv_2x2x2x2_f64",
+      lambda: mnp.linalg.tensorinv(la_tensor_inv_mp),
+      lambda: np.linalg.tensorinv(la_tensor_inv_np),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "tensorsolve_2x3x2x3_f64",
+      lambda: mnp.linalg.tensorsolve(la_tensor_solve_mp, la_tensor_rhs_mp),
+      lambda: np.linalg.tensorsolve(la_tensor_solve_np, la_tensor_rhs_np),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "solve_matrix_rhs_16_f64",
+      lambda: mnp.linalg.solve(la_mat16_mp, la_rhs16_2_mp),
+      lambda: np.linalg.solve(la_mat16_np, la_rhs16_2_np),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "qr_r_8x4_f64",
+      lambda: mnp.linalg.qr(la_rect_mp, mode="r"),
+      lambda: np.linalg.qr(la_rect_np, mode="r"),
+      check_values=False,
+    ),
+    BenchCase(
+      "linalg_api",
+      "eigh_full_2_f64",
+      lambda: mnp.linalg.eigh(la_small_mp)[0],
+      lambda: np.linalg.eigh(la_small_np)[0],
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "eigvals_4_f64",
+      lambda: mnp.linalg.eigvals(la_tri_mp),
+      lambda: np.linalg.eigvals(la_tri_np),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "eig_full_4_f64",
+      lambda: mnp.linalg.eig(la_tri_mp)[0],
+      lambda: np.linalg.eig(la_tri_np)[0],
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "svd_full_8x4_f64",
+      lambda: mnp.linalg.svd(la_rect_mp, full_matrices=False)[1],
+      lambda: np.linalg.svd(la_rect_np, full_matrices=False)[1],
+      check_values=False,
+    ),
+    BenchCase(
+      "linalg_api",
+      "svdvals_8x4_f64",
+      lambda: mnp.linalg.svdvals(la_rect_mp),
+      lambda: np.linalg.svdvals(la_rect_np),
+      check_values=False,
+    ),
+    BenchCase(
+      "linalg_api",
+      "lstsq_8x4_f64",
+      lambda: mnp.linalg.lstsq(la_rect_mp, la_rect_rhs_mp)[0],
+      lambda: np.linalg.lstsq(la_rect_np, la_rect_rhs_np, rcond=None)[0],
+      rtol=1e-10,
+      atol=1e-10,
+    ),
+    BenchCase(
+      "linalg_api",
+      "pinv_rect_8x4_f64",
+      lambda: mnp.linalg.pinv(la_rect_mp, rcond=la_rect_rcond),
+      lambda: np.linalg.pinv(la_rect_np, rcond=la_rect_rcond),
+      rtol=1e-10,
+      atol=1e-10,
+    ),
   ])
 
   # Unsigned-int and float16 dtype family coverage.
@@ -946,7 +1210,10 @@ def render_table(results: Sequence[BenchResult], *, rounds: int, loops: int, rep
   numeric_columns = {2, 3, 4, 5, 6, 7, 8}
 
   def render_row(row: Sequence[str]) -> str:
-    cells = [cell.rjust(widths[index]) if index in numeric_columns else cell.ljust(widths[index]) for index, cell in enumerate(row)]
+    cells = [
+      cell.rjust(widths[index]) if index in numeric_columns else cell.ljust(widths[index])
+      for index, cell in enumerate(row)
+    ]
     return " | ".join(cells)
 
   separator = "-+-".join("-" * width for width in widths)

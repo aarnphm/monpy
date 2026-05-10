@@ -4,9 +4,7 @@ import math
 
 import monpy as mp
 import numpy
-import pytest
-from monpy.runtime import ops_numpy
-
+from monpy.numpy import ops as ops_numpy
 
 # ---------------------------------------------------------------------------
 # Complex dtype: registration, allocation, basic arithmetic.
@@ -98,13 +96,9 @@ def test_complex_division_uses_smith_for_stability() -> None:
 
 def test_conjugate_negates_imag_only() -> None:
   a = mp.asarray([1 + 2j, 3 + 4j, 5 + 6j], dtype=mp.complex128)
-  numpy.testing.assert_array_equal(
-    numpy.asarray(mp.conjugate(a)), [1 - 2j, 3 - 4j, 5 - 6j]
-  )
+  numpy.testing.assert_array_equal(numpy.asarray(mp.conjugate(a)), [1 - 2j, 3 - 4j, 5 - 6j])
   # `conj` is an alias.
-  numpy.testing.assert_array_equal(
-    numpy.asarray(mp.conj(a)), [1 - 2j, 3 - 4j, 5 - 6j]
-  )
+  numpy.testing.assert_array_equal(numpy.asarray(mp.conj(a)), [1 - 2j, 3 - 4j, 5 - 6j])
 
 
 def test_real_imag_split() -> None:

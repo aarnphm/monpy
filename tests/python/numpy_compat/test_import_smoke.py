@@ -10,8 +10,8 @@ def test_monpy_and_monumpy_import_smoke() -> None:
   assert monumpy.float32 is monpy.float32
   assert monumpy.random is monpy.random
   assert callable(monpy.random.default_rng)
-  assert callable(monpy.runtime.ops_numpy.to_numpy)
-  assert callable(monpy.runtime.ops_numpy.from_numpy)
+  assert callable(monpy.numpy.ops.to_numpy)
+  assert callable(monpy.numpy.ops.from_numpy)
 
 
 def test_array_api_import_smoke() -> None:

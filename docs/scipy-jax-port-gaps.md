@@ -248,8 +248,9 @@ monpy now has the eager call shape at top level:
 
 ```python
 import monpy as mp
+import monpy.lax as lax
 
-f = mp.vmap(lambda x, y: x + y, in_axes=(0, None), out_axes=0)
+f = lax.vmap(lambda x, y: x + y, in_axes=(0, None), out_axes=0)
 out = f(mp.asarray([1, 2, 3]), mp.asarray(10))
 ```
 

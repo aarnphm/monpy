@@ -27,7 +27,8 @@ class Array(Protocol):
   def __rmatmul__(self, other: object) -> Array: ...
 
 
-def _a(x: object) -> Array: return cast(Array, x)
+def _a(x: object) -> Array:
+  return cast(Array, x)
 
 
 @dataclass(frozen=True, slots=True)

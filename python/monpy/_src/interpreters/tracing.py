@@ -1,24 +1,42 @@
-"""Symbolic execution for `@monpy.jit`."""
+"""Symbolic execution for `monpy.lax.jit`."""
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable
 
-from .dtypes import from_monpy_dtype
-from .ir import GraphIR, Node, Op, SymbolicDim, TensorSpec, ValueRef
-from .layout import LayoutSpec
-from .tensor import Tensor
+from ..core import (
+  GraphIR,
+  Node,
+  Primitive,
+  SymbolicDim,
+  TensorSpec,
+  ValueRef,
+  add_p,
+  broadcast_to_p,
+  cast_p,
+  constant_p,
+  custom_call_p,
+  div_p,
+  input_p,
+  matmul_p,
+  mul_p,
+  reshape_p,
+  sub_p,
+  transpose_p,
+)
+from ..dtypes import from_monpy_dtype
+from ..lax.tensor import Tensor
+from ..layout import LayoutSpec
 
-
-_OP_BY_NAME: dict[str, Op] = {
-  "add": Op.ADD,
-  "sub": Op.SUB,
-  "subtract": Op.SUB,
-  "mul": Op.MUL,
-  "multiply": Op.MUL,
-  "div": Op.DIV,
-  "divide": Op.DIV,
+_PRIMITIVE_BY_NAME: dict[str, Primitive] = {
+  "add": add_p,
+  "sub": sub_p,
+  "subtract": sub_p,
+  "mul": mul_p,
+  "multiply": mul_p,
+  "div": div_p,
+  "divide": div_p,
 }
 
 
@@ -28,55 +46,55 @@ class TraceContext:
   inputs: list[ValueRef] = field(default_factory=list)
 
   def input(self, spec: TensorSpec) -> Tensor:
-    node_ref = self._append(Op.INPUT, (), {}, spec)
+    node_ref = self._append(input_p, (), {}, spec)
     self.inputs.append(node_ref)
     return Tensor(node_ref, spec, self)
 
   def constant(self, value: object, like: Tensor) -> Tensor:
     spec = TensorSpec((), like.spec.dtype, like.spec.device)
-    return Tensor(self._append(Op.CONSTANT, (), {"value": repr(value)}, spec), spec, self)
+    return Tensor(self._append(constant_p, (), {"value": repr(value)}, spec), spec, self)
 
   def binary(self, op_name: str, lhs: object, rhs: object) -> Tensor:
     lhs_t, rhs_t = self._ensure_pair(lhs, rhs)
-    op = _OP_BY_NAME[op_name]
+    primitive = _PRIMITIVE_BY_NAME[op_name]
     shape = _broadcast_shape(lhs_t.spec.shape, rhs_t.spec.shape)
     layout = LayoutSpec.row_major(tuple(_static_dim(dim) for dim in shape))
     spec = TensorSpec(shape, lhs_t.spec.dtype, lhs_t.spec.device, layout)
-    return Tensor(self._append(op, (lhs_t.node, rhs_t.node), {}, spec), spec, self)
+    return Tensor(self._append(primitive, (lhs_t.node, rhs_t.node), {}, spec), spec, self)
 
   def unary(self, op_name: str, x: object) -> Tensor:
     tensor = self.ensure_tensor(x)
     spec = TensorSpec(tensor.spec.shape, tensor.spec.dtype, tensor.spec.device, tensor.spec.layout)
-    return Tensor(self._append(Op.CUSTOM_CALL, (tensor.node,), {"name": f"monpy.{op_name}"}, spec), spec, self)
+    return Tensor(self._append(custom_call_p, (tensor.node,), {"name": f"monpy.{op_name}"}, spec), spec, self)
 
   def matmul(self, lhs: object, rhs: object) -> Tensor:
     lhs_t, rhs_t = self._ensure_pair(lhs, rhs)
     out_shape = _matmul_shape(lhs_t.spec.shape, rhs_t.spec.shape)
     spec = TensorSpec(out_shape, lhs_t.spec.dtype, lhs_t.spec.device)
-    return Tensor(self._append(Op.MATMUL, (lhs_t.node, rhs_t.node), {}, spec), spec, self)
+    return Tensor(self._append(matmul_p, (lhs_t.node, rhs_t.node), {}, spec), spec, self)
 
   def reshape(self, tensor: Tensor, shape: tuple[int, ...]) -> Tensor:
     layout = tensor.spec.layout.reshape(shape)
     spec = TensorSpec(tuple(shape), tensor.spec.dtype, tensor.spec.device, layout)
-    return Tensor(self._append(Op.RESHAPE, (tensor.node,), {"shape": shape}, spec), spec, self)
+    return Tensor(self._append(reshape_p, (tensor.node,), {"shape": shape}, spec), spec, self)
 
   def transpose(self, tensor: Tensor, axes: tuple[int, ...]) -> Tensor:
     layout = tensor.spec.layout.permute(axes)
     spec = TensorSpec(tuple(tensor.spec.shape[axis] for axis in axes), tensor.spec.dtype, tensor.spec.device, layout)
-    return Tensor(self._append(Op.TRANSPOSE, (tensor.node,), {"axes": axes}, spec), spec, self)
+    return Tensor(self._append(transpose_p, (tensor.node,), {"axes": axes}, spec), spec, self)
 
   def broadcast_to(self, tensor: Tensor, shape: tuple[int, ...]) -> Tensor:
     layout = tensor.spec.layout.broadcast_to(shape)
     spec = TensorSpec(tuple(shape), tensor.spec.dtype, tensor.spec.device, layout)
-    return Tensor(self._append(Op.BROADCAST_TO, (tensor.node,), {"shape": shape}, spec), spec, self)
+    return Tensor(self._append(broadcast_to_p, (tensor.node,), {"shape": shape}, spec), spec, self)
 
   def cast(self, tensor: Tensor, dtype: object) -> Tensor:
     spec = TensorSpec(tensor.spec.shape, from_monpy_dtype(dtype), tensor.spec.device, tensor.spec.layout)
-    return Tensor(self._append(Op.CAST, (tensor.node,), {"dtype": spec.dtype.name}, spec), spec, self)
+    return Tensor(self._append(cast_p, (tensor.node,), {"dtype": spec.dtype.name}, spec), spec, self)
 
   def custom_call(self, name: str, args: Iterable[object], out: TensorSpec) -> Tensor:
     tensors = tuple(self.ensure_tensor(arg) for arg in args)
-    return Tensor(self._append(Op.CUSTOM_CALL, tuple(t.node for t in tensors), {"name": name}, out), out, self)
+    return Tensor(self._append(custom_call_p, tuple(t.node for t in tensors), {"name": name}, out), out, self)
 
   def ensure_tensor(self, value: object) -> Tensor:
     if isinstance(value, Tensor):
@@ -102,9 +120,11 @@ class TraceContext:
       raise TypeError("at least one operand must be a traced monpy.Tensor")
     return lhs_t, rhs_t
 
-  def _append(self, op: Op, inputs: tuple[ValueRef, ...], attrs: dict[str, object], spec: TensorSpec) -> ValueRef:
+  def _append(
+    self, primitive: Primitive, inputs: tuple[ValueRef, ...], attrs: dict[str, object], spec: TensorSpec
+  ) -> ValueRef:
     ref = len(self.nodes)
-    self.nodes.append(Node(op=op, inputs=inputs, attrs=attrs, spec=spec))
+    self.nodes.append(Node(primitive=primitive, inputs=inputs, attrs=attrs, spec=spec))
     return ref
 
 

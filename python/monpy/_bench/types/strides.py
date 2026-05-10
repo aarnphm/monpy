@@ -36,9 +36,9 @@ def build_cases(
   y_mp: Any = mnp.asarray(y_np, dtype=mnp.float32, copy=False)
 
   cube_n = max(8, min(size // 4, 32))
-  cube_np = (
-    np.arange(cube_n * cube_n * cube_n, dtype=np.float32).reshape(cube_n, cube_n, cube_n) / 37.0
-  ).astype(np.float32, copy=False)
+  cube_np = (np.arange(cube_n * cube_n * cube_n, dtype=np.float32).reshape(cube_n, cube_n, cube_n) / 37.0).astype(
+    np.float32, copy=False
+  )
   cube_rhs_np = np.flip(cube_np, axis=2).copy()
   cube_mp: Any = mnp.asarray(cube_np, dtype=mnp.float32, copy=False)
   cube_rhs_mp: Any = mnp.asarray(cube_rhs_np, dtype=mnp.float32, copy=False)

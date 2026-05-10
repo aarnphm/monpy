@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import numpy
 import monumpy as np
-
+import numpy
 from _helpers import assert_same_result_kind, assert_same_shape_dtype, assert_same_values
 
 
@@ -75,7 +74,12 @@ SCALAR_ARRAY_CASES: tuple[ScalarCase, ...] = (
   ("vdot", lambda: np.vdot(_vec(), _vec2()), lambda: numpy.vdot(_np_vec(), _np_vec2()), True),
   ("inner", lambda: np.inner(_vec(), _vec2()), lambda: numpy.inner(_np_vec(), _np_vec2()), True),
   ("matmul_1d", lambda: np.matmul(_vec(), _vec2()), lambda: numpy.matmul(_np_vec(), _np_vec2()), True),
-  ("tensordot", lambda: np.tensordot(_mat(), _mat2(), axes=2), lambda: numpy.tensordot(_np_mat(), _np_mat2(), axes=2), True),
+  (
+    "tensordot",
+    lambda: np.tensordot(_mat(), _mat2(), axes=2),
+    lambda: numpy.tensordot(_np_mat(), _np_mat2(), axes=2),
+    True,
+  ),
   ("einsum_dot", lambda: np.einsum("i,i", _vec(), _vec2()), lambda: numpy.einsum("i,i", _np_vec(), _np_vec2()), True),
   ("einsum_trace", lambda: np.einsum("ii", _mat()), lambda: numpy.einsum("ii", _np_mat()), True),
   ("linalg_det", lambda: np.linalg.det(_mat()), lambda: numpy.linalg.det(_np_mat()), True),

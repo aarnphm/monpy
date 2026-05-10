@@ -37,15 +37,15 @@ monpy should be a mojo array library with numpy-shaped python APIs.
 | creation  | `empty` / `full` / `zeros` / `ones` / `arange` / `linspace` / `eye` / `tri` / `tril` / `triu` / `concatenate` / `pad` (constant mode) native                                    |
 | views     | slicing, reshape, transpose, broadcast, expand_dims, flip, diagonal — all stride-only, no copies                                                                                |
 | random    | explicit `key` / `split` / `fold_in`, `random` / `uniform` / `normal` / `randint`, numpy legacy helpers, and minimal `default_rng` wrapper over native mojo samplers            |
-| io        | `__array_interface__` export, dlpack round-trips, explicit `runtime.ops_numpy` conversion, and cpython buffer protocol fast paths via `buffer.mojo`                             |
+| io        | `__array_interface__` export, dlpack round-trips, explicit `monpy.numpy.ops` conversion, and cpython buffer protocol fast paths via `buffer.mojo`                             |
 
 v1 non-goals: full `numpy.random` bit-generator/distribution parity, `numpy.fft`, `numpy.ma`, `numpy.strings`, `numpy.io`. see [[numpy-port-gaps]].
 
 ## policy
 
 - implemented array operations must not call numpy internally.
-- numpy is allowed as a test oracle and inside the explicit `runtime.ops_numpy` cpu interchange boundary. core array import uses the cpython buffer protocol first, then direct array-interface parsing, and does not call numpy internally.
-- core dtype resolution may lazy-load `runtime.ops_numpy` when the caller passes
+- numpy is allowed as a test oracle and inside the explicit `monpy.numpy.ops` cpu interchange boundary. core array import uses the cpython buffer protocol first, then direct array-interface parsing, and does not call numpy internally.
+- core dtype resolution may lazy-load `monpy.numpy.ops` when the caller passes
   a concrete numpy dtype object or dtype class. that preserves existing
   frontend code like `asarray(x, dtype=np.float32)` while keeping plain
   `import monpy` and non-numpy code paths numpy-free.

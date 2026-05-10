@@ -1,5 +1,3 @@
-# fmt: off
-# ruff: noqa
 from __future__ import annotations
 
 import argparse
@@ -17,16 +15,18 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
-from monpy._bench.core import BenchCase, BenchResult
 from monpy._bench.core import (
+  BenchCase,
+  BenchResult,
   parse_sizes,
   positive_int,
   render_csv,
   render_json,
   render_markdown,
   render_table,
+  run_benchmarks,
+  sorted_results,
 )
-from monpy._bench.core import run_benchmarks, sorted_results
 
 SUITE_TYPES = ("array", "strides", "complex", "attention")
 
@@ -137,10 +137,7 @@ def render_sweep_json(results: Sequence[BenchResult], *, args: argparse.Namespac
 
 
 def render_sweep_markdown(results: Sequence[BenchResult], *, args: argparse.Namespace) -> str:
-  header = (
-    f"suite=sweep types={','.join(args.types)} candidate=monpy baseline=numpy "
-    "comparison=monpy_us/numpy_us"
-  )
+  header = f"suite=sweep types={','.join(args.types)} candidate=monpy baseline=numpy comparison=monpy_us/numpy_us"
   return "\n\n".join([
     header,
     render_markdown(results, rounds=args.rounds, loops=args.loops, repeats=args.repeats),
@@ -282,9 +279,7 @@ def write_run_outputs(
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-  parser = argparse.ArgumentParser(
-    description="benchmark monpy against numpy across typed benchmark suites"
-  )
+  parser = argparse.ArgumentParser(description="benchmark monpy against numpy across typed benchmark suites")
   parser.add_argument(
     "--loops",
     type=positive_int,
