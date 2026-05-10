@@ -424,12 +424,13 @@ class ndarray:
   # We will recompute properties via Mojo each call (~80 ns for dtype, ~150 ns for shape/strides at rank 2).
   # The hot binary-op paths don't read these properties at all (Mojo handles dtype promotion in `binary_dispatch_ops`)
   __array_priority__=1000
-  __slots__=("_base", "_native", "_owner", "_reverse_native")
+  __slots__=("_base", "_native", "_owner", "_reverse_native", "_transpose_native")
   def __init__(self, native:_NativeArray, base:ndarray|None=None, *, owner:object|None=None)->None:
     self._native=native
     self._base=base
     self._owner=owner
     self._reverse_native=None
+    self._transpose_native=None
   @staticmethod
   def _wrap(native:_NativeArray, base:ndarray|None=None)->ndarray: # Hot-path constructor: skip __init__'s arg parsing for fresh op results.
     r=ndarray.__new__(ndarray)
@@ -437,6 +438,7 @@ class ndarray:
     r._base=base
     r._owner=None
     r._reverse_native=None
+    r._transpose_native=None
     return r
   @property
   def dtype(self)->DType:return _DTC[builtins.int(self._native.dtype_code())]
@@ -462,7 +464,12 @@ class ndarray:
   @property
   def T(self)->ndarray:
     n=builtins.int(self._native.ndim())
-    return self if n<2 else ndarray._wrap(self._native.transpose_full_reverse_method(), base=self)
+    if n<2:return self
+    native=self._transpose_native
+    if native is None:
+      native=self._native.transpose_full_reverse_method()
+      self._transpose_native=native
+    return ndarray._wrap(native, base=self)
   @property
   def mT(self)->ndarray:
     if self.ndim<2:raise ValueError("matrix transpose requires at least two dimensions")
@@ -515,6 +522,7 @@ class ndarray:
           r._base=self
           r._owner=None
           r._reverse_native=None
+          r._transpose_native=None
           return r
         except Exception as exc:
           if "requires a rank-1 array" not in str(exc):raise
@@ -1109,7 +1117,7 @@ def reshape(x:object, shape:int|Sequence[int])->ndarray:
   return asarray(x).reshape(shape)
 
 def squeeze(x:object, axis:int|Sequence[int]|None=None)->ndarray:
-  arr=asarray(x)
+  arr=typing.cast(ndarray, x) if type(x) is ndarray else asarray(x)
   try:
     if axis is None:native=_native.squeeze_all(arr._native)
     elif isinstance(axis, builtins.int):native=_native.squeeze_axis(arr._native, axis)

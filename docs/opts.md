@@ -4356,3 +4356,71 @@ Verification:
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_creation_helpers.py::test_join_helpers_match_numpy_for_axis0_fast_paths tests/python/numpy_compat/test_creation_helpers.py::test_concatenate_falls_back_for_promotion tests/python/numpy_compat/test_creation_helpers.py::test_concatenate_falls_back_for_non_contiguous_inputs tests/python/test_dtype_storage.py::test_fp4_concatenate_repacks_instead_of_byte_memcpy -q
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/native_kernels/concatenate_axis0_8x128_f64 --types array,attention --candidate monpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260509-concat8x128-speculative --sample --no-perf-stat
 ```
+
+### 2026-05-10 exact view fast paths
+
+Fresh frontier:
+
+| row                                       | monpy us | numpy us | ratio  |
+| ----------------------------------------- | -------: | -------: | -----: |
+| `array/interop/asarray_squeeze_axis0_f32` |    4.093 |    2.386 | 1.800x |
+| `array/views/transpose_add_f32`           |    4.608 |    2.509 | 1.790x |
+| `array/views/squeeze_axis0_f32`           |    3.221 |    2.199 | 1.465x |
+
+Patch:
+
+- `squeeze` now skips `asarray` when the input is already an exact monpy
+  `ndarray`.
+- `.T` now caches the native reverse-transpose view on the source array, same
+  shape as the existing `[::-1]` cache.
+- The wrapper returned by `.T` is still fresh, with `base=self`, so user-facing
+  view ownership stays boring.
+
+Profile read:
+
+| row / artifact                                      | before us | after us | speedup |
+| --------------------------------------------------- | --------: | -------: | ------: |
+| `asarray_squeeze_axis0_f32` long-loop profile       |     4.607 |    4.477 |  1.03:1 |
+| `transpose_add_f32` long-loop profile               |     4.639 |    3.880 |  1.20:1 |
+
+The cProfile split was clearer than the aggregate loop:
+
+- `asarray+squeeze`: `50k` calls went `0.240s -> 0.177s`; the second `asarray`
+  call disappeared, but the remaining NumPy buffer bridge still dominates the
+  benchmark row.
+- `x.T + x.T`: `50k` calls went `0.191s -> 0.149s`; native
+  `transpose_full_reverse_method` calls went `100k -> 1`.
+
+Post-patch array rerun:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-array-20260510-view-cache --no-progress --no-stdout
+```
+
+| row                                       | before us | after us | before ratio | after ratio | speedup |
+| ----------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/views/transpose_add_f32`           |     4.608 |    3.829 |       1.790x |      1.511x |  1.20:1 |
+| `array/views/squeeze_axis0_f32`           |     3.221 |    2.995 |       1.465x |      1.370x |  1.08:1 |
+| `array/interop/asarray_squeeze_axis0_f32` |     4.093 |    4.377 |       1.800x |      1.951x |  0.94:1 |
+
+Read:
+
+- The transpose row is the real win. It now sits with the mid-tier metadata
+  rows instead of fighting for rank 1.
+- The pure squeeze view row moved, but the combined NumPy-input row did not.
+  That row is now a buffer-bridge problem, not a squeeze problem.
+- The fresh Mojo sweep did not reproduce the stale `add_par_f32_16m` cliff.
+  Current native misses are static f32 add vs stdlib SIMD (`1.25x`) and
+  production binary threading policy: ADD exits through serial static before
+  the parallel gate.
+- Next native target: promote the benchmark-only `parallel_static_add` policy
+  into production for fresh outputs first, then decide the `out=` overlap
+  contract before exposing it everywhere.
+
+Verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_creation_helpers.py::test_squeeze_matches_numpy tests/python/numpy_compat/test_creation_helpers.py::test_squeeze_rejects_non_singleton_axis tests/python/numpy_compat/test_numeric.py::test_transposed_binary_result_order_matches_numpy tests/python/numpy_compat/test_numeric.py::test_ravel_and_flatten_copy_semantics_match_numpy tests/python/numpy_compat/test_numeric.py::test_rank3_transposed_binary_result_order_matches_numpy -q
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_numeric.py::test_matmul_dense_transpose_rhs_matches_numpy_and_uses_fast_path_on_macos tests/python/numpy_compat/test_linalg.py::test_linalg_matrix_transpose_matches_numpy tests/python/numpy_compat/test_tensor_linalg.py::test_qr_reduced_orthogonal_q tests/python/numpy_compat/test_tensor_linalg.py::test_eigh_symmetric_2x2 -q
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/views/transpose_add_f32 --types array,attention --candidate monpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260510-transpose-add-cache --sample --no-perf-stat
+```
