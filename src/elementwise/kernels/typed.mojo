@@ -229,6 +229,37 @@ def binary_same_shape_contig_typed_static[
         i += 1
 
 
+def binary_same_shape_contig_typed_static_parallel[
+    dtype: DType, op: Int, grain: Int
+](
+    lhs_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    rhs_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    out_ptr: UnsafePointer[Scalar[dtype], MutExternalOrigin],
+    size: Int,
+) raises:
+    var byte_count = size * size_of[Scalar[dtype]]()
+    var nworkers = worker_count_for_bytes(size, byte_count, grain)
+    if nworkers <= 1 or size < nworkers:
+        binary_same_shape_contig_typed_static[dtype, op](lhs_ptr, rhs_ptr, out_ptr, size)
+        return
+
+    var chunk = ceildiv(size, nworkers)
+
+    @parameter
+    def chunk_worker(i: Int) raises:
+        var start = i * chunk
+        var end = start + chunk
+        if end > size:
+            end = size
+        if start >= size:
+            return
+        binary_same_shape_contig_typed_static[dtype, op](
+            lhs_ptr + start, rhs_ptr + start, out_ptr + start, end - start
+        )
+
+    sync_parallelize[chunk_worker](nworkers)
+
+
 def try_binary_same_shape_contig_typed_static[
     dtype: DType
 ](
@@ -239,7 +270,9 @@ def try_binary_same_shape_contig_typed_static[
     op: Int,
 ) raises -> Bool:
     if op == BinaryOp.ADD.value:
-        binary_same_shape_contig_typed_static[dtype, BinaryOp.ADD.value](lhs_ptr, rhs_ptr, out_ptr, size)
+        binary_same_shape_contig_typed_static_parallel[dtype, BinaryOp.ADD.value, ELEMENTWISE_LIGHT_GRAIN](
+            lhs_ptr, rhs_ptr, out_ptr, size
+        )
         return True
     if op == BinaryOp.SUB.value:
         binary_same_shape_contig_typed_static[dtype, BinaryOp.SUB.value](lhs_ptr, rhs_ptr, out_ptr, size)

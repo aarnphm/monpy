@@ -191,13 +191,16 @@ def size_name[n: Int]() -> String:
             comptime if n == 1048576:
                 return "1m"
             else:
-                comptime if n == 16777216:
-                    return "16m"
+                comptime if n == 4194304:
+                    return "4m"
                 else:
-                    comptime if n == 134217728:
-                        return "128m"
+                    comptime if n == 16777216:
+                        return "16m"
                     else:
-                        return String(n)
+                        comptime if n == 134217728:
+                            return "128m"
+                        else:
+                            return String(n)
 
 
 def emit_binary_add[dtype: DType, n: Int]() raises:
@@ -463,10 +466,10 @@ def emit_prod[dtype: DType, n: Int]() raises where dtype.is_floating_point():
 
 
 def emit_binary_add_par[dtype: DType, n: Int]() raises:
-    # Same-shape binary `add` through the parallel-aware entry point.
-    # At n*size_of[dtype]() >= ELEMENTWISE_LIGHT_GRAIN (2MB) the kernel
-    # fans out via sync_parallelize; below it stays serial. Baseline is
-    # the static-op kernel (no parallel gate) so we can read the spawn cost.
+    # Same-shape binary `add` through the public production entry point.
+    # The ADD fast path now keeps the static-op inner loop and only fans out
+    # when the light-op byte budget says each worker gets enough contiguous work.
+    # Baseline is the serial static-op kernel so this row isolates thread policy.
     var lhs = alloc[Scalar[dtype]](n)
     var rhs = alloc[Scalar[dtype]](n)
     var out = alloc[Scalar[dtype]](n)
@@ -556,6 +559,8 @@ def emit_family[dtype: DType]() raises where dtype.is_floating_point():
     # These are the rows that surface multi-thread regressions.
     emit_unary_exp_par[dtype, 262144]()
     emit_unary_exp_par[dtype, 1048576]()
+    emit_binary_add_par[dtype, 1048576]()
+    emit_binary_add_par[dtype, 4194304]()
     emit_binary_add_par[dtype, 16777216]()
     emit_matmul_small[dtype, 8]()
     emit_matmul_small[dtype, 16]()

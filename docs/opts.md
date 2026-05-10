@@ -4424,3 +4424,72 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_numeric.py::test_matmul_dense_transpose_rhs_matches_numpy_and_uses_fast_path_on_macos tests/python/numpy_compat/test_linalg.py::test_linalg_matrix_transpose_matches_numpy tests/python/numpy_compat/test_tensor_linalg.py::test_qr_reduced_orthogonal_q tests/python/numpy_compat/test_tensor_linalg.py::test_eigh_symmetric_2x2 -q
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/views/transpose_add_f32 --types array,attention --candidate monpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260510-transpose-add-cache --sample --no-perf-stat
 ```
+
+### 2026-05-10 static ADD threading policy
+
+Refresh before patch:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array,attention --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-20260510-0035-python-frontier --no-progress --no-stdout
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo --include-numojo --include-threading --thread-caps auto,1,2,4,8 --format json --sort slowest --output-dir results/local-20260510-0035-mojo-frontier --no-stdout --timeout 240
+```
+
+Read:
+
+- Attention is not the current regression. The refreshed rows stayed under
+  NumPy: softmax `0.667x`, causal attention `0.941x`, GPT logits `0.636x`.
+- NuMojo is not ahead in this harness. All eight NuMojo rows still have
+  `monpy / numojo < 1.0x`; the closest miss is `sin_f32_65536` at `0.753x`.
+- The production ADD path was the real native mismatch. The benchmark-only
+  `parallel_static_add` won on 1M/16M cells, but `binary_same_shape_contig_typed`
+  exited through serial static ADD before reaching the parallel gate.
+
+Patch:
+
+- Added `binary_same_shape_contig_typed_static_parallel[dtype, op, grain]`.
+- Routed same-shape static ADD through the light elementwise byte policy:
+  `worker_count_for_bytes(size, size * sizeof(dtype), ELEMENTWISE_LIGHT_GRAIN)`.
+- Kept SUB/MUL/DIV on serial static kernels until their break-even is measured.
+- Split the Mojo ADD policy rows into `1m`, `4m`, and `16m`, so future sweeps
+  show the ramp instead of one giant tensor datapoint.
+
+Native result:
+
+| row                | threaded ns | serial static ns | ratio  |
+| ------------------ | ----------: | ---------------: | -----: |
+| `add_par_f64_1m`   |     106,415 |          417,800 | 0.255x |
+| `add_par_f32_1m`   |      78,333 |          127,857 | 0.613x |
+| `add_par_f32_4m`   |     622,333 |          732,462 | 0.850x |
+| `add_par_f64_4m`   |   1,241,091 |        1,718,000 | 0.722x |
+| `add_par_f32_16m`  |   1,448,778 |        2,918,167 | 0.496x |
+| `add_par_f64_16m`  |   3,239,167 |        5,591,000 | 0.579x |
+
+macOS Python result:
+
+- Public f32/f64 same-contiguous adds still route through Accelerate/vDSP before
+  typed kernels. The profile confirms it: `binary_add_1048576_f32` used
+  `BackendKind.ACCELERATE`; `/usr/bin/sample` put `1518 / 1605` samples inside
+  `libvDSP.dylib`.
+- So the patch is mostly a Linux/native Mojo win today. On this Mac, the public
+  Python row stayed flat: `binary_add_1048576_f32` moved `159.796 us -> 158.395
+  us`, only `1.01:1`.
+- The 262K public rows moved a little (`binary_add_262144_f32` `18.330 us ->
+  17.658 us`, `1.04:1`), but that is below the threshold where I would claim a
+  user-visible win.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/elementwise/kernels/typed.mojo benches/bench_mojo_sweep.mojo
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo run -I src benches/bench_mojo_sweep.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_numeric.py::test_binary_out_writes_existing_destination tests/python/numpy_compat/test_numeric.py::test_broadcasted_binary_ops_match_numpy tests/python/numpy_compat/test_numeric.py::test_scalar_binary_ops_match_numpy tests/python/test_mojo_bench_sweep.py -q
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo --include-numojo --include-threading --thread-caps auto,1,2,4,8 --format json --sort slowest --output-dir results/local-20260510-0035-mojo-add-static-thread --no-stdout --timeout 240
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array,attention --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-20260510-0035-python-add-static-thread --no-progress --no-stdout
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-profile --case array/bandwidth/binary_add_1048576_f32 --types array,attention --candidate monpy --duration 2 --memory-duration 1 --warmup 20 --output-dir results/local-profile-20260510-binary-add-macos-accelerate --sample --no-perf-stat
+```
+
+Next target: scalar multiply static split is now the clean native miss
+(`scalar_mul_f64_64k` around `1.14x` in the saved sweep). For Python/NumPy,
+the frontier is separate: buffer ingress and tiny view/list facades, not the
+ADD kernel on macOS.
