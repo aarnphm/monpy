@@ -132,7 +132,7 @@ not a promise to clone all of JAX.
 | `lax` primitives                       | small primitive registry exists                                        | complete primitive rule table                                                |
 | `jax.numpy` equivalent                 | represented by public `monpy` API                                      | every static-shape function is traceable or loudly eager-only                |
 | `random`                               | explicit-key slice exists                                              | key/distribution primitives and batching rules                               |
-| pytrees                                | not required for ndarray core                                          | small tree flatten utility for transform args/results, custom registry later |
+| pytrees                                | private `_src.tree_util` exists for transform result structure          | use it for transform args/results; custom registry later                     |
 | autodiff (`grad`, `jvp`, `vjp`)        | deferred                                                               | add after primitive abstract eval, batching, and lowering stabilize          |
 | control flow (`cond`, `while`, `scan`) | deferred                                                               | higher-order primitives with subgraphs                                       |
 | sharding/pjit/pmap                     | out of v1                                                              | device mesh after CPU primitive spine is stable                              |
@@ -150,7 +150,7 @@ full JAX package. Treat it as five layers:
 | array facade               | `jax.numpy`                                                           | top-level `monpy` plus `monumpy` alias                                           | NumPy-compatible eager API where every static-shape function is primitive-backed or composite-staged |
 | primitive namespace        | `jax.lax`                                                             | `monpy.lax`                                                                      | stable primitive handles, abstract specs, GraphIR, and low-level transform entry points              |
 | random                     | `jax.random.key`, `split`, distributions                              | `monpy.random`                                                                   | explicit keys, no hidden global RNG in staged code                                                   |
-| pytrees                    | `jax.tree`, `jax.tree_util`                                           | future `monpy.tree` or private `_src.tree_util` first                            | flatten/unflatten/map for transform args/results; custom registry after the spine is stable          |
+| pytrees                    | `jax.tree`, `jax.tree_util`                                           | private `monpy._src.tree_util` first                                            | flatten/unflatten/map for transform args/results; custom registry after the spine is stable          |
 | autodiff                   | `grad`, `value_and_grad`, `jvp`, `vjp`, `jacfwd`, `jacrev`, `hessian` | deferred                                                                         | only after primitives have abstract eval, batching, and lowering rules                               |
 | custom rules               | `custom_jvp`, `custom_vjp`, `jax.extend`                              | future `monpy.extend`                                                            | extension hooks around primitive registration and lowering, not internal object exposure             |
 | control flow               | `lax.cond`, `lax.while_loop`, `lax.scan`                              | deferred `monpy.lax` higher-order primitives                                     | subgraph-carrying primitives with static shape checks                                                |
@@ -158,11 +158,11 @@ full JAX package. Treat it as five layers:
 | debugging/callbacks/export | `debug`, callbacks, export/stages                                     | out of v1                                                                        | later, once GraphIR lowering and cache identity are real                                             |
 
 So, yes, monpy needs pytrees. It does not need JAX's entire pytree surface
-early. The needed piece is structural: transforms must preserve Python
+early. The private `_src.tree_util` module now covers the structural core:
+transforms can preserve Python
 argument and return structure while `GraphIR` only sees tensor leaves,
-constants, and static attrs. Without a small pytree module, `jit`, `vmap`, and
-future autodiff each grow their own tuple/list/dict handling, which is exactly
-how the special-case sludge returns.
+constants, and static attrs. The public `monpy.tree` question can wait until
+custom pytree nodes and transform cache keys need a supported API.
 
 ## operation record template
 

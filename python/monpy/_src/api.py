@@ -10,6 +10,7 @@ from typing import Literal, Protocol, cast
 from .. import asarray, moveaxis, ndarray, stack
 from .core import GraphIR, TensorSpec
 from .interpreters.tracing import TraceContext
+from .tree_util import PyTreeDef, assert_same_structure, tree_flatten, tree_unflatten
 
 Axis = int | None
 
@@ -142,14 +143,16 @@ def _slice_axis(value: object, axis: int, index: int) -> object:
   return arr[tuple(key)]
 
 
-def _output_axes(out_axes: object, arity: int, context: str) -> tuple[object, ...]:
+def _out_axes_leaves(out_axes: object, output_def: PyTreeDef) -> tuple[Axis, ...]:
+  if output_def.num_leaves == 0:
+    return ()
   if _is_axis(out_axes):
-    return (out_axes,) * arity
-  if isinstance(out_axes, Sequence) and not isinstance(out_axes, (str, bytes)):
-    if len(out_axes) != arity:
-      raise ValueError(f"{context}: out_axes has {len(out_axes)} entries for {arity} outputs")
-    return tuple(out_axes)
-  raise TypeError(f"{context}: out_axes must be an int, None, or a flat sequence")
+    return (cast(Axis, out_axes),) * output_def.num_leaves
+  leaves, axes_def = tree_flatten(out_axes)
+  assert_same_structure(output_def, axes_def, "vmap out_axes")
+  if any(not _is_axis(axis) for axis in leaves):
+    raise TypeError("vmap out_axes leaves must be int or None")
+  return tuple(cast(Axis, axis) for axis in leaves)
 
 
 def _same_value(left: object, right: object) -> bool:
@@ -182,36 +185,19 @@ def _stack_leaf(outputs: Sequence[object], out_axis: object) -> object:
 def _stack_outputs(outputs: Sequence[object], out_axes: object) -> object:
   if not outputs:
     raise NotImplementedError("vmap over an axis of size 0 is not implemented")
-  first = outputs[0]
-  if first is None:
-    for output in outputs[1:]:
-      if output is not None:
-        raise ValueError("vmap output structure changed across mapped calls")
-    return None
-  if isinstance(first, tuple):
-    tuple_outputs = [cast(tuple[object, ...], output) for output in outputs]
-    if any(len(output) != len(first) for output in tuple_outputs[1:]):
-      raise ValueError("vmap tuple output arity changed across mapped calls")
-    axes = _output_axes(out_axes, len(first), "vmap tuple output")
-    return tuple(
-      _stack_outputs([output[index] for output in tuple_outputs], axes[index]) for index in range(len(first))
-    )
-  if isinstance(first, list):
-    list_outputs = [cast(list[object], output) for output in outputs]
-    if any(len(output) != len(first) for output in list_outputs[1:]):
-      raise ValueError("vmap list output arity changed across mapped calls")
-    axes = _output_axes(out_axes, len(first), "vmap list output")
-    return [_stack_outputs([output[index] for output in list_outputs], axes[index]) for index in range(len(first))]
-  if isinstance(first, Mapping):
-    keys = tuple(first.keys())
-    mapping_outputs = [cast(Mapping[object, object], output) for output in outputs]
-    if any(tuple(output.keys()) != keys for output in mapping_outputs[1:]):
-      raise ValueError("vmap output mapping keys changed across mapped calls")
-    if isinstance(out_axes, Mapping):
-      out_axis_mapping = cast(Mapping[object, object], out_axes)
-      return {key: _stack_outputs([output[key] for output in mapping_outputs], out_axis_mapping[key]) for key in keys}
-    return {key: _stack_outputs([output[key] for output in mapping_outputs], out_axes) for key in keys}
-  return _stack_leaf(outputs, out_axes)
+  first_leaves, output_def = tree_flatten(outputs[0])
+  output_leaves = [first_leaves]
+  for output in outputs[1:]:
+    leaves, treedef = tree_flatten(output)
+    assert_same_structure(output_def, treedef, "vmap output")
+    output_leaves.append(leaves)
+  axes = _out_axes_leaves(out_axes, output_def)
+  if not axes:
+    return tree_unflatten(output_def, ())
+  stacked = tuple(
+    _stack_leaf([leaves[index] for leaves in output_leaves], axes[index]) for index in range(len(first_leaves))
+  )
+  return tree_unflatten(output_def, stacked)
 
 
 @dataclass(frozen=True, slots=True)

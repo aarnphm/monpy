@@ -2,6 +2,16 @@ from __future__ import annotations
 
 import pytest
 
+from monpy._src.tree_util import tree_flatten, tree_map, tree_unflatten
+
+
+def test_private_pytree_flattens_dicts_in_stable_key_order() -> None:
+  leaves, treedef = tree_flatten({"z": [1, None], "a": (2, 3)})
+
+  assert leaves == (2, 3, 1)
+  assert tree_unflatten(treedef, leaves) == {"a": (2, 3), "z": [1, None]}
+  assert tree_map(lambda value: value + 10, {"z": [1], "a": (2,)}) == {"a": (12,), "z": [11]}
+
 
 def test_vmap_maps_the_leading_axis() -> None:
   import monpy as mp
@@ -43,6 +53,21 @@ def test_vmap_stacks_tuple_outputs() -> None:
   assert mapped[1].tolist() == [3, 7]
 
 
+def test_vmap_stacks_nested_pytree_outputs() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  mapped = lax.vmap(
+    lambda x: {"z": [x + 1, None], "a": (mp.sum(x), x)},
+    out_axes={"a": (0, 0), "z": [0, None]},
+  )(mp.asarray([[1, 2], [3, 4]]))
+
+  assert mapped["a"][0].tolist() == [3, 7]
+  assert mapped["a"][1].tolist() == [[1, 2], [3, 4]]
+  assert mapped["z"][0].tolist() == [[2, 3], [4, 5]]
+  assert mapped["z"][1] is None
+
+
 def test_vmap_out_axes_none_requires_unmapped_output() -> None:
   import monpy as mp
   import monpy.lax as lax
@@ -50,6 +75,14 @@ def test_vmap_out_axes_none_requires_unmapped_output() -> None:
   assert lax.vmap(lambda x: 7, out_axes=None)(mp.asarray([1, 2, 3])) == 7
   with pytest.raises(ValueError, match="out_axes=None"):
     lax.vmap(lambda x: x, out_axes=None)(mp.asarray([1, 2, 3]))
+
+
+def test_vmap_rejects_changed_pytree_output_structure() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  with pytest.raises(ValueError, match="pytree structure mismatch"):
+    lax.vmap(lambda x: (x if int(x) == 1 else [x]))(mp.asarray([1, 2]))
 
 
 def test_vmap_rejects_mismatched_axis_sizes() -> None:
