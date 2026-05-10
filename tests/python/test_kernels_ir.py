@@ -231,6 +231,38 @@ def test_jit_traces_where_comparison_docs_example() -> None:
   assert graph.nodes[8].spec.shape == (2, 4)
 
 
+def test_jit_preserves_structured_output_tree() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+  from monpy._src.tree_util import tree_unflatten
+
+  @mp.jit
+  def f(x: lax.Tensor, y: lax.Tensor) -> dict[str, object]:
+    return {"z": [x + y, None], "a": (mp.sum(x), y)}
+
+  compiled = f.compile(
+    lax.TensorSpec((2, 3), mp.float32, "cpu"),
+    lax.TensorSpec((2, 3), mp.float32, "cpu"),
+  )
+
+  graph = compiled.graph
+  assert [node.op for node in graph.nodes] == ["input", "input", "add", "reduce"]
+  assert graph.outputs == (3, 1, 2)
+  assert tree_unflatten(compiled.output_tree, graph.outputs) == {"a": (3, 1), "z": [2, None]}
+
+
+def test_jit_rejects_static_output_leaves() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  @mp.jit
+  def f(x: lax.Tensor) -> dict[str, object]:
+    return {"x": x, "static": 1}
+
+  with pytest.raises(TypeError, match="pytree of monpy.Tensor"):
+    f.compile(lax.TensorSpec((2, 3), mp.float32, "cpu"))
+
+
 def test_traced_tensor_truthiness_is_rejected() -> None:
   import monpy as mp
   import monpy.lax as lax

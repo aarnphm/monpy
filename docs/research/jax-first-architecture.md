@@ -298,14 +298,13 @@ is stable.
 The useful v1 contract is:
 
 - `tree_flatten(x) -> (leaves, treedef)` for tuples, lists, dicts with stable key
-  order, dataclasses, and namedtuples.
+  order, and `None` as a no-leaf node.
 - `tree_unflatten(treedef, leaves)` to rebuild public return structure.
 - `tree_map(fn, x)` for transform plumbing and tests.
-- `jit.compile(...)` and graph output handling flatten argument and output
-  structures at the Python boundary, while `GraphIR` still sees only tensor
-  leaves and explicit constants.
+- `jit.compile(...)` stores the output `PyTreeDef` on `CompiledFunction` while
+  `GraphIR.outputs` still sees only tensor leaves.
 - `vmap` uses the same treedef for `in_axes` / `out_axes` prefix validation
-  instead of its current hand-rolled tuple/list/mapping logic.
+  instead of hand-rolled tuple/list/mapping logic.
 
 That gives the important JAX property: user-facing Python structure is separate
 from tensor leaves. It also keeps Mojo out of the business of Python containers.
@@ -315,15 +314,15 @@ not pytrees.
 Defer:
 
 - user-registered custom pytree nodes;
-- implicit object traversal beyond dataclasses/namedtuples;
+- dataclasses, namedtuples, and implicit object traversal;
 - pytree-aware autodiff rules;
 - full JAX error compatibility.
 
-The practical reason to add this early is robustness. The current eager `vmap`
-already manually supports tuple/list/mapping outputs, and `jit.compile` still
-mostly assumes flat positional `TensorSpec` inputs and Tensor/tuple outputs.
-Centralizing this as a tiny pytree module removes duplicated structure logic
-before batching and linalg gufuncs make the duplication harder to unwind.
+The practical reason to add this early is robustness. Eager `vmap` and
+`jit.compile` both need to preserve user-facing Python structure while lowering
+only tensor leaves. Centralizing this as a tiny pytree module removes duplicated
+structure logic before batching and linalg gufuncs make the duplication harder
+to unwind.
 
 ## Proposed Mojo layout
 

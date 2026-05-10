@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import builtins
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Protocol, cast
 
 from .. import asarray, moveaxis, ndarray, stack
@@ -24,6 +24,7 @@ class CompiledFunction:
   fn: Callable[..., object]
   graph: GraphIR
   backend: str
+  output_tree: PyTreeDef = field(default_factory=lambda: PyTreeDef("leaf"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +40,8 @@ class JittedFunction:
     trace = TraceContext()
     inputs = tuple(trace.input(spec) for spec in specs)
     outputs = self.fn(*inputs)
-    return CompiledFunction(self.fn, trace.graph(outputs), self.backend)
+    graph, output_tree = trace.graph_and_output_tree(outputs)
+    return CompiledFunction(self.fn, graph, self.backend, output_tree)
 
   def __call__(self, *args: object, **kwargs: object) -> object:
     if any(getattr(arg, "__monpy_kernel_tensor__", False) for arg in args):

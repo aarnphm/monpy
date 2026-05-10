@@ -28,6 +28,8 @@ from ..core import (
 from ..dtypes import BOOL_DTYPE, from_monpy_dtype
 from ..lax.tensor import Tensor
 from ..layout import LayoutSpec
+from ..tree_util import PyTreeDef, tree_flatten
+
 
 @dataclass(slots=True)
 class TraceContext:
@@ -127,8 +129,13 @@ class TraceContext:
     raise TypeError("scalar constants require at least one tensor input to infer dtype/device")
 
   def graph(self, outputs: object) -> GraphIR:
-    output_refs = tuple(t.node for t in _flatten_outputs(outputs))
-    return GraphIR(inputs=tuple(self.inputs), outputs=output_refs, nodes=tuple(self.nodes))
+    graph, _ = self.graph_and_output_tree(outputs)
+    return graph
+
+  def graph_and_output_tree(self, outputs: object) -> tuple[GraphIR, PyTreeDef]:
+    output_tensors, output_tree = _flatten_output_tensors(outputs)
+    output_refs = tuple(t.node for t in output_tensors)
+    return GraphIR(inputs=tuple(self.inputs), outputs=output_refs, nodes=tuple(self.nodes)), output_tree
 
   def _ensure_pair(self, lhs: object, rhs: object) -> tuple[Tensor, Tensor]:
     if isinstance(lhs, Tensor):
@@ -149,15 +156,14 @@ class TraceContext:
     return ref
 
 
-def _flatten_outputs(outputs: object) -> tuple[Tensor, ...]:
-  if isinstance(outputs, Tensor):
-    return (outputs,)
-  if isinstance(outputs, tuple):
-    out: list[Tensor] = []
-    for item in outputs:
-      out.extend(_flatten_outputs(item))
-    return tuple(out)
-  raise TypeError("jitted functions must return a Tensor or tuple of Tensors")
+def _flatten_output_tensors(outputs: object) -> tuple[tuple[Tensor, ...], PyTreeDef]:
+  leaves, treedef = tree_flatten(outputs)
+  tensors: list[Tensor] = []
+  for leaf in leaves:
+    if not isinstance(leaf, Tensor):
+      raise TypeError("jitted functions must return a pytree of monpy.Tensor leaves")
+    tensors.append(leaf)
+  return tuple(tensors), treedef
 
 
 def _is_scalar_constant(value: object) -> bool:
