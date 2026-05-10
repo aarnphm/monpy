@@ -275,6 +275,37 @@ def test_jit_preserves_structured_input_tree() -> None:
   assert tree_unflatten(compiled.input_trees[0], graph.inputs) == {"x": 0, "y": 1}
 
 
+def test_compiled_structural_key_includes_input_and_output_trees() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  spec = lax.TensorSpec((2, 3), mp.float32, "cpu")
+
+  @mp.jit
+  def tuple_input(pair: tuple[lax.Tensor, lax.Tensor]) -> tuple[lax.Tensor, lax.Tensor]:
+    total = pair[0] + pair[1]
+    return (total, pair[0])
+
+  @mp.jit
+  def dict_input(pair: dict[str, lax.Tensor]) -> tuple[lax.Tensor, lax.Tensor]:
+    total = pair["x"] + pair["y"]
+    return (total, pair["x"])
+
+  @mp.jit
+  def dict_output(pair: tuple[lax.Tensor, lax.Tensor]) -> dict[str, lax.Tensor]:
+    total = pair[0] + pair[1]
+    return {"sum": total, "x": pair[0]}
+
+  tuple_compiled = tuple_input.compile((spec, spec))
+  dict_input_compiled = dict_input.compile({"x": spec, "y": spec})
+  dict_output_compiled = dict_output.compile((spec, spec))
+
+  assert tuple_compiled.graph.structural_key == dict_input_compiled.graph.structural_key
+  assert tuple_compiled.graph.structural_key == dict_output_compiled.graph.structural_key
+  assert tuple_compiled.structural_key != dict_input_compiled.structural_key
+  assert tuple_compiled.structural_key != dict_output_compiled.structural_key
+
+
 def test_jit_rejects_static_input_spec_leaves() -> None:
   import monpy as mp
   import monpy.lax as lax

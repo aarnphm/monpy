@@ -304,6 +304,9 @@ The useful v1 contract is:
 - `jit.compile(...)` stores input and output `PyTreeDef`s on
   `CompiledFunction` while `GraphIR.inputs` and `GraphIR.outputs` still see
   only tensor leaves.
+- `CompiledFunction.structural_key` includes the backend, flat `GraphIR` key,
+  and both input/output treedef payloads, because cache identity must not erase
+  user-facing Python structure.
 - `vmap` uses the same treedef for `in_axes` / `out_axes` prefix validation
   instead of hand-rolled tuple/list/mapping logic.
 

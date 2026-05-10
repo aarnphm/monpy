@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import builtins
+import hashlib
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol, cast
@@ -26,6 +28,11 @@ class CompiledFunction:
   backend: str
   input_trees: tuple[PyTreeDef, ...] = ()
   output_tree: PyTreeDef = field(default_factory=lambda: PyTreeDef("leaf"))
+  structural_key: bytes = b""
+
+  def __post_init__(self) -> None:
+    if not self.structural_key:
+      object.__setattr__(self, "structural_key", _compiled_structural_key(self))
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +85,17 @@ def _trace_spec_args(trace: TraceContext, specs: tuple[object, ...]) -> tuple[tu
     args.append(tree_unflatten(treedef, tensors))
     treedefs.append(treedef)
   return tuple(args), tuple(treedefs)
+
+
+def _compiled_structural_key(compiled: CompiledFunction) -> bytes:
+  payload = {
+    "backend": compiled.backend,
+    "graph": compiled.graph.structural_key.hex(),
+    "input_trees": tuple(treedef.payload() for treedef in compiled.input_trees),
+    "output_tree": compiled.output_tree.payload(),
+  }
+  encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+  return hashlib.sha256(encoded).digest()
 
 
 def _is_axis(value: object) -> bool:

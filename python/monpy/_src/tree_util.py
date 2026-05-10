@@ -21,9 +21,22 @@ class PyTreeDef:
       return 1
     return sum(child.num_leaves for child in self.children)
 
+  def payload(self) -> tuple[object, ...]:
+    return (
+      self.kind,
+      tuple(_metadata_payload(item) for item in self.metadata),
+      tuple(child.payload() for child in self.children),
+    )
+
 
 def _dict_keys(tree: Mapping[object, object]) -> tuple[object, ...]:
   return tuple(sorted(tree.keys(), key=lambda key: (type(key).__module__, type(key).__qualname__, repr(key))))
+
+
+def _metadata_payload(value: object) -> object:
+  if isinstance(value, (bool, int, float, str)) or value is None:
+    return value
+  return (type(value).__module__, type(value).__qualname__, repr(value))
 
 
 def tree_flatten(tree: object) -> tuple[tuple[object, ...], PyTreeDef]:
