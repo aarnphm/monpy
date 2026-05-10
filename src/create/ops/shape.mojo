@@ -591,6 +591,44 @@ def slice_1d_ops(
     return PythonObject(alloc=result^)
 
 
+def slice_1d_full_step_ops(
+    array_obj: PythonObject,
+    step_obj: PythonObject,
+) raises -> PythonObject:
+    var src = array_obj.downcast_value_ptr[Array]()
+    if len(src[].shape) != 1:
+        raise Error("slice_1d_full_step() requires a rank-1 array")
+    var step = Int(py=step_obj)
+    if step == 0:
+        raise Error("slice step cannot be zero")
+    var length = src[].shape[0]
+    if length == 0:
+        var empty_shape = List[Int]()
+        empty_shape.append(0)
+        var empty_strides = List[Int]()
+        empty_strides.append(src[].strides[0] * step)
+        var empty_result = make_view_array_unchecked(src[], empty_shape^, empty_strides^, 0, src[].offset_elems)
+        return PythonObject(alloc=empty_result^)
+    var start = 0
+    var stop = length
+    if step < 0:
+        start = length - 1
+        stop = -1
+    var out_len = slice_length(length, start, stop, step)
+    var shape = List[Int]()
+    shape.append(out_len)
+    var strides = List[Int]()
+    strides.append(src[].strides[0] * step)
+    var result = make_view_array_unchecked(
+        src[],
+        shape^,
+        strides^,
+        out_len,
+        src[].offset_elems + start * src[].strides[0],
+    )
+    return PythonObject(alloc=result^)
+
+
 def reverse_1d_ops(array_obj: PythonObject) raises -> PythonObject:
     var src = array_obj.downcast_value_ptr[Array]()
     if len(src[].shape) != 1:

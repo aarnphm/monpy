@@ -1177,6 +1177,15 @@ class ndarray:
         except Exception as exc:
           if "requires a rank-1 array" not in str(exc):
             raise
+      if k.start is None and k.stop is None and k.step is not None:
+        step = builtins.int(k.step)
+        if step == 0:
+          raise ValueError("slice step cannot be zero")
+        try:
+          return ndarray._wrap(self._native.slice_1d_full_step_method(step), base=self)
+        except Exception as exc:
+          if "requires a rank-1 array" not in str(exc):
+            raise
       ndim = builtins.int(self._native.ndim())
       if ndim == 1:
         d = builtins.int(self._native.shape_at(0))

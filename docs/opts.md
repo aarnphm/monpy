@@ -4574,3 +4574,86 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 Next target: `asarray_squeeze_axis0_f32` is still the top normal-bench row.
 The buffer crossing improved; the remaining toll is the wrapper/view chain after
 ingress.
+
+### 2026-05-10 full-step 1D slice fast path
+
+Frontier refresh:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types all --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-20260510-0135-normal --no-progress --no-stdout
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo --include-numojo --include-threading --thread-caps auto,1,2,4,8 --format json --sort slowest --output-dir results/local-20260510-0135-mojo --no-stdout --timeout 240
+```
+
+Read:
+
+- Normal bench still has a Python/view frontier: `asarray_squeeze_axis0_f32`
+  `1.864x`, `strided_view_f32` `1.721x`, `rank3_transpose_add_f32` `1.679x`.
+- `asarray_squeeze_axis0_f32` is still two public operations. I tested a fused
+  native buffer+squeeze path, but it did not improve that row because the
+  benchmark spells `squeeze(asarray(np), axis=0)`. I did not keep the fused
+  entrypoint.
+- `strided_view_f32` is the clean small-view miss: `x[::-2]` paid Python to
+  fetch rank/shape and normalize defaults, then crossed native for the actual
+  1D slice.
+- NuMojo is not the current problem in this slice. Final Mojo rerun has closest
+  NuMojo row at `numojo.elementwise/sin_f32_65536`, `0.904x`; monpy remains
+  faster on every included NuMojo row.
+
+Patch:
+
+- Add `slice_1d_full_step_ops` for full-axis rank-1 slices with explicit step.
+- Route `ndarray.__getitem__` `x[::step]` through it when start/stop are both
+  defaulted. `[::-1]` keeps the existing cached reverse path.
+- Guard empty negative-step slices inside native code, so the empty view does not
+  point before the source buffer.
+
+Micro split:
+
+| probe             | old us | new us | speedup |
+| ----------------- | -----: | -----: | ------: |
+| `x[::-2]` wrapper |  0.885 |  0.742 |  1.19:1 |
+
+Final normal rerun:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types all --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-20260510-0135-full-step-slice-final --no-progress --no-stdout
+```
+
+| row                                      | before us | after us | before ratio | after ratio | speedup |
+| ---------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/views/strided_view_f32`           |     3.518 |    3.281 |       1.721x |      1.355x |  1.07:1 |
+| `array/interop/asarray_zero_copy_f32`    |     3.191 |    3.154 |       1.628x |      1.601x |  1.01:1 |
+| `array/interop/asarray_squeeze_axis0_f32` |    4.228 |    4.897 |       1.864x |      1.941x |  0.86:1 |
+
+Profile:
+
+- `results/local-profile-20260510-0135-full-step-slice-strided-view`:
+  `3.346 us/call`, native backend.
+- The full sweep is noisy around unrelated rows; the micro split is the cleaner
+  evidence for the slice wrapper itself. `asarray_squeeze_axis0_f32` remains the
+  top normal-bench miss and should be handled as a two-op composition problem,
+  not by pretending one late squeeze wrapper can erase the earlier ingress call.
+
+Final Mojo check:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo --include-numojo --include-threading --thread-caps auto,1,2,4,8 --format json --sort slowest --output-dir results/local-20260510-0135-full-step-slice-final-mojo --no-stdout --timeout 240
+```
+
+- Worst std/thread row: `threading.threads1/add_f32_16m`, `1.791x`.
+- Worst plain elementwise row: `elementwise/add_f64_64k`, `1.276x`.
+- Closest NuMojo row: `numojo.elementwise/sin_f32_65536`, `0.904x`.
+
+Verification:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo format --line-length 119 src/buffer.mojo src/lib.mojo src/create/ops/shape.mojo src/create/ops/__init__.mojo src/create/__init__.mojo
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/mohaus develop --no-build-isolation
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_array_interface.py tests/python/test_no_numpy_core.py tests/python/test_buffer_core.py tests/python/numpy_compat/test_numeric.py::test_transposed_binary_result_order_matches_numpy -q
+```
+
+Next target: `asarray_squeeze_axis0_f32`. The useful direction is an earlier
+composition boundary, not a post-hoc squeeze fast path: either a lazy ingress
+view that can absorb the next metadata op, or a benchmark/API row that measures
+the direct `squeeze(np_array, axis=0)` spelling separately while keeping the
+current two-op row honest.

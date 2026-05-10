@@ -83,6 +83,7 @@ from create import (
     result_dtype_for_unary_py_ops,
     scaled_masked_softmax_last_axis_ops,
     sin_add_mul_ops,
+    slice_1d_full_step_ops,
     slice_1d_ops,
     slice_ops,
     slogdet_ops,
@@ -152,6 +153,7 @@ def PyInit__native() -> PythonObject:
             .def_method[array_div_method_ops]("div")
             .def_method[array_matmul_method_ops]("matmul")
             .def_method[Array.reverse_1d_py]("reverse_1d_method")
+            .def_method[slice_1d_full_step_ops]("slice_1d_full_step_method")
             .def_method[slice_1d_ops]("slice_1d_method")
             .def_method[transpose_full_reverse_ops]("transpose_full_reverse_method")
         )

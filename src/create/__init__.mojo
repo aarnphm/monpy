@@ -158,6 +158,7 @@ from .ops.shape import (
     ravel_ops,
     reverse_1d_ops,
     reshape_ops,
+    slice_1d_full_step_ops,
     slice_1d_ops,
     slice_ops,
     squeeze_all_ops,
