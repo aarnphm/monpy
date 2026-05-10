@@ -1,11 +1,12 @@
 # monpy architecture notes
 
-monpy should be a mojo array library with numpy-shaped python APIs.
+monpy should be a mojo array library with numpy-shaped python APIs and
+JAX-shaped function transforms.
 
 ## layers
 
 - `src/lib.mojo` is only the cpython extension boundary. it owns `PyInit__native`, builds `PythonModuleBuilder("_native")`, registers `Array`, and binds python-facing function names into `monpy._native`.
-- `src/domain.mojo` owns compact dtype, op, reduction, unary-op, casting, and backend codes, plus the 14-dtype registry, the NxN promotion table, and the can_cast rules.
+- `src/domain.mojo` owns compact dtype, op, reduction, unary-op, casting, and backend codes, plus the 21-dtype registry, the NxN promotion table, and the can_cast rules.
 - `src/storage.mojo` owns the storage record, refcounting, managed allocation, and external non-owning allocation records.
 - `src/buffer.mojo` is the single-FFI cpython buffer-protocol bridge (`asarray_from_buffer_ops`). one `PyObject_GetBuffer` call replaces the older eight-step `__array_interface__` walk, and the CPython buffer function pointers are cached in `MONPY_BUFFER_FUNCTIONS` so hot imports do not call dyld symbol lookup per array crossing.
 - `src/cute/` is the vendorred CuTe-style layout algebra package (cpu-only subset of NVIDIA CUTLASS's `cute/`). split into:
@@ -19,7 +20,8 @@ monpy should be a mojo array library with numpy-shaped python APIs.
 - `src/elementwise/` owns numeric loops, contiguous fast paths via the typed-vec dispatcher (`apply_binary_typed_vec[dtype, width]`, `apply_unary_preserve_typed_vec[dtype, width]`) covering f16 / f32 / f64 and the eight integer dtypes, strided fallbacks, fused elementwise kernels (`sin_add_mul`), neural-network row kernels (`kernels/nn.mojo`), the complex kernels (schoolbook FMA multiply, Smith-algorithm divide, conjugate / negate / square preserve, plus `apply_unary_complex_f64` for transcendentals via Euler identities), reductions, matmul dispatch helpers (`kernels/matmul.mojo`), and the LAPACK call sites (`lapack_qr_reduced_*_into`, `lapack_cholesky_*_into`, `lapack_eigh_*_into`, `lapack_eig_*_real_into`, `lapack_svd_*_into`, `lapack_lstsq_*_into`).
 - `src/accelerate.mojo` owns Apple Accelerate ffi shims only. BLAS: `cblas_sgemm` / `dgemm` / `cgemm` / `zgemm`. LAPACK: `getrf` / `gesv` / `geqrf` + `orgqr` / `potrf` / `syev` / `geev` / `gesdd` / `gelsd` for f32 and f64. each wrapper follows the F77 calling convention — pointers everywhere, character flags as `Int8` byte pointers, workspace queries via `LWORK = -1`.
 - `python/monpy` is the python API facade. it parses python objects, cpython buffers, array-interface exporters, dlpack cpu producers, keyword arguments, and numpy-shaped ergonomics, then delegates implemented work into mojo. NEP 50 weak-scalar dispatch lives here; the registry mirrors numpy's dtype metadata (`kind`, `itemsize`, `alignment`, `byteorder`, `format`, `scalar_type`).
-- `python/monpy/runtime/ops_numpy.py` is the explicit numpy interop boundary. core `monpy` does not import numpy; numpy dtype aliases, `to_numpy(...)`, and numpy-aware `asarray(...)` live in this module.
+- `python/monpy` also exposes `jit` and `vmap` as top-level transform entry points. `monpy.lax` remains the primitive/spec namespace for `TensorSpec`, `GraphIR`, and primitive handles.
+- `python/monpy/numpy/ops.py` is the explicit numpy interop boundary. core `monpy` does not import numpy; numpy dtype aliases, `to_numpy(...)`, and numpy-aware `asarray(...)` live in this module.
 - `python/monpy/linalg.py` is the numpy-shaped linear algebra namespace. wraps the LAPACK dispatchers and adds python-level `pinv` / `matrix_rank` / `einsum` / `tensorinv` / `tensorsolve`. `einsum` parses the subscript string, folds pairwise contractions through `tensordot` (transpose + reshape + matmul), and unpacks LAPACK's compressed conjugate-pair `WR` / `WI` representation when `eig` returns a complex spectrum.
 - `python/monpy/random.py` is the random namespace. it owns immutable explicit keys, numpy-shaped module helpers, and the thin `Generator` wrapper; element generation loops live in mojo.
 - `python/monpy/array_api.py` is the standards-shaped namespace and re-exports the same `linalg` module for the currently supported surface.
@@ -29,7 +31,7 @@ monpy should be a mojo array library with numpy-shaped python APIs.
 
 | surface   | coverage                                                                                                                                                                        |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| dtypes    | `bool`, `int{8,16,32,64}`, `uint{8,16,32,64}`, `float{16,32,64}`, `complex{64,128}` (14 total)                                                                                  |
+| dtypes    | `bool`, `int{8,16,32,64}`, `uint{8,16,32,64}`, `float{16,32,64}`, `complex{64,128}`, `bfloat16`, five fp8 formats, and `float4_e2m1fn` (21 total)                               |
 | promotion | NEP 50 deterministic; weak-scalar dispatch in python; native NxN table with kind-decomposed structure                                                                           |
 | ufuncs    | full elementwise (real + complex), reductions, comparisons, predicates, `where`, fused `sin_add_mul`                                                                            |
 | matmul    | `sgemm` / `dgemm` Accelerate path for positive-stride dense f32/f64 rank-2 (c-contig + f-contig + transposed views); `cgemm` / `zgemm` for complex; scalar mojo fallback        |
@@ -37,9 +39,9 @@ monpy should be a mojo array library with numpy-shaped python APIs.
 | creation  | `empty` / `full` / `zeros` / `ones` / `arange` / `linspace` / `eye` / `tri` / `tril` / `triu` / `concatenate` / `pad` (constant mode) native                                    |
 | views     | slicing, reshape, transpose, broadcast, expand_dims, flip, diagonal — all stride-only, no copies                                                                                |
 | random    | explicit `key` / `split` / `fold_in`, `random` / `uniform` / `normal` / `randint`, numpy legacy helpers, and minimal `default_rng` wrapper over native mojo samplers            |
-| io        | `__array_interface__` export, dlpack round-trips, explicit `monpy.numpy.ops` conversion, and cpython buffer protocol fast paths via `buffer.mojo`                             |
+| io        | `__array_interface__` export, dlpack round-trips, explicit `monpy.numpy.ops` conversion, and cpython buffer protocol fast paths via `buffer.mojo`                               |
 
-v1 non-goals: full `numpy.random` bit-generator/distribution parity, `numpy.fft`, `numpy.ma`, `numpy.strings`, `numpy.io`. see [[numpy-port-gaps]].
+v1 non-goals: full `numpy.random` bit-generator/distribution parity, `numpy.fft`, `numpy.ma`, `numpy.strings`, `numpy.io`, graph-level `vmap`, autodiff, and sharding. see [[api-surface]], [[numpy-port-gaps]], and [[scipy-jax-port-gaps]].
 
 ## policy
 

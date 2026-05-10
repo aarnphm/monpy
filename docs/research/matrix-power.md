@@ -73,11 +73,11 @@ Sketch:
 
 Examples:
 
-| n  | linear multiplies | binary multiplies | linear/binary |
-| --:| ----------------: | ----------------: | ------------: |
-| 3  |                 2 |                 2 |        1.00:1 |
-| 8  |                 7 |                 3 |        2.33:1 |
-| 16 |                15 |                 4 |        3.75:1 |
+|   n | linear multiplies | binary multiplies | linear/binary |
+| --: | ----------------: | ----------------: | ------------: |
+|   3 |                 2 |                 2 |        1.00:1 |
+|   8 |                 7 |                 3 |        2.33:1 |
+|  16 |                15 |                 4 |        3.75:1 |
 
 For the benchmark row (`n == 3`), both algorithms do two multiplies. The
 measured win is boundary deletion: Python calls fell `840,004 -> 220,004`,

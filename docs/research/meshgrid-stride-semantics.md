@@ -35,17 +35,17 @@ rank-1 `y` have length `N`, element stride `sy`, and offset `oy`.
 
 For `indexing="xy"`, dense `meshgrid(x, y, copy=False)` should expose:
 
-| output | shape  | strides  | element map                         |
-| ------ | ------ | -------- | ----------------------------------- |
-| `X`    | `N, M` | `0, sx`  | `X[i, j] = storage_x[ox + j * sx]` |
-| `Y`    | `N, M` | `sy, 0`  | `Y[i, j] = storage_y[oy + i * sy]` |
+| output | shape  | strides | element map                        |
+| ------ | ------ | ------- | ---------------------------------- |
+| `X`    | `N, M` | `0, sx` | `X[i, j] = storage_x[ox + j * sx]` |
+| `Y`    | `N, M` | `sy, 0` | `Y[i, j] = storage_y[oy + i * sy]` |
 
 For `indexing="ij"`, the natural axes stay in order:
 
-| output | shape  | strides  | element map                         |
-| ------ | ------ | -------- | ----------------------------------- |
-| `X`    | `M, N` | `sx, 0`  | `X[i, j] = storage_x[ox + i * sx]` |
-| `Y`    | `M, N` | `0, sy`  | `Y[i, j] = storage_y[oy + j * sy]` |
+| output | shape  | strides | element map                        |
+| ------ | ------ | ------- | ---------------------------------- |
+| `X`    | `M, N` | `sx, 0` | `X[i, j] = storage_x[ox + i * sx]` |
+| `Y`    | `M, N` | `0, sy` | `Y[i, j] = storage_y[oy + j * sy]` |
 
 **Proposition.** These formulas produce the same shape, stride, and
 index-to-storage mapping as NumPy's open-grid reshape plus broadcast path for

@@ -3392,7 +3392,7 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 
 Top row:
 
-| row                             | monpy us | numpy us | ratio  |
+| row                             | monpy us | numpy us |  ratio |
 | ------------------------------- | -------: | -------: | -----: |
 | `array/linalg_api/outer_32_f64` |   12.304 |    4.099 | 3.100x |
 
@@ -3447,11 +3447,11 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 
 The frontier moved again:
 
-| row                                      | monpy us | numpy us | ratio  |
-| ---------------------------------------- | -------: | -------: | -----: |
-| `array/linalg_api/norm_vec2_32_f64`      |   11.440 |    2.809 | 3.987x |
+| row                                       | monpy us | numpy us |  ratio |
+| ----------------------------------------- | -------: | -------: | -----: |
+| `array/linalg_api/norm_vec2_32_f64`       |   11.440 |    2.809 | 3.987x |
 | `array/linalg_api/matrix_norm_fro_16_f64` |   14.047 |    3.968 | 3.529x |
-| `array/linalg_api/vecdot_axis1_8x4_f64`  |    7.385 |    3.009 | 2.454x |
+| `array/linalg_api/vecdot_axis1_8x4_f64`   |    7.385 |    3.009 | 2.454x |
 
 Patch:
 
@@ -3471,11 +3471,11 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 
 Key movement:
 
-| row                                      | before us | after us | before ratio | after ratio | speedup |
-| ---------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
-| `array/linalg_api/norm_vec2_32_f64`      |    11.440 |    3.188 |       3.987x |      1.165x |  3.59:1 |
-| `array/linalg_api/matrix_norm_fro_16_f64` |    14.047 |    4.679 |       3.529x |      1.172x |  3.00:1 |
-| `array/linalg_api/vector_norm_axis1_8x4_f64` | 7.715 |    3.913 |       1.867x |      0.960x |  1.97:1 |
+| row                                          | before us | after us | before ratio | after ratio | speedup |
+| -------------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/linalg_api/norm_vec2_32_f64`          |    11.440 |    3.188 |       3.987x |      1.165x |  3.59:1 |
+| `array/linalg_api/matrix_norm_fro_16_f64`    |    14.047 |    4.679 |       3.529x |      1.172x |  3.00:1 |
+| `array/linalg_api/vector_norm_axis1_8x4_f64` |     7.715 |    3.913 |       1.867x |      0.960x |  1.97:1 |
 
 Read:
 
@@ -3497,7 +3497,7 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 
 After the native L2 pass, the next loud row was `vecdot_axis1_8x4_f64`.
 
-| row                                     | monpy us | numpy us | ratio  |
+| row                                     | monpy us | numpy us |  ratio |
 | --------------------------------------- | -------: | -------: | -----: |
 | `array/linalg_api/vecdot_axis1_8x4_f64` |    7.973 |    2.819 | 2.828x |
 
@@ -3548,7 +3548,7 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 The row-wise vecdot patch left a scalar-dot cluster at the top of the array
 sweep. Baseline:
 
-| row                              | monpy us | numpy us | ratio  |
+| row                              | monpy us | numpy us |  ratio |
 | -------------------------------- | -------: | -------: | -----: |
 | `array/linalg_api/dot_1d_32_f64` |    5.921 |    2.454 | 2.418x |
 | `array/linalg_api/inner_32_f64`  |    5.747 |    2.516 | 2.319x |
@@ -3579,7 +3579,7 @@ Key movement:
 I also ran a focused 7-round check over the four dot rows with 1000 loops and
 7 repeats per round:
 
-| row                                     | monpy us | numpy us | ratio  |
+| row                                     | monpy us | numpy us |  ratio |
 | --------------------------------------- | -------: | -------: | -----: |
 | `array/linalg_api/dot_1d_32_f64`        |    5.590 |    2.531 | 2.207x |
 | `array/linalg_api/inner_32_f64`         |    5.567 |    2.627 | 2.119x |
@@ -3610,7 +3610,7 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 After the scalar-dot pass and the linalg alignment cleanup, the array sweep put
 `matrix_transpose_16_f64` back on top:
 
-| row                                        | monpy us | numpy us | ratio  |
+| row                                        | monpy us | numpy us |  ratio |
 | ------------------------------------------ | -------: | -------: | -----: |
 | `array/linalg_api/matrix_transpose_16_f64` |    5.746 |    2.444 | 2.337x |
 | `array/linalg_api/kron_2x2_f64`            |   22.602 |    9.966 | 2.268x |
@@ -3662,13 +3662,13 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 The next fresh array sweep made `kron_2x2_f64` the best target that was not
 already trapped behind scalar-return facade cost:
 
-| row                                         | monpy us | numpy us | ratio  |
-| ------------------------------------------- | -------: | -------: | -----: |
-| `array/linalg_api/inner_32_f64`             |    5.570 |    2.413 | 2.309x |
-| `array/linalg_api/kron_2x2_f64`             |   22.563 |    9.853 | 2.290x |
-| `array/linalg_api/tensorinv_2x2x2x2_f64`    |   12.997 |    5.580 | 2.288x |
-| `array/linalg_api/dot_1d_32_f64`            |    5.458 |    2.415 | 2.259x |
-| `array/linalg_api/tensorsolve_2x3x2x3_f64`  |   14.827 |    6.600 | 2.246x |
+| row                                        | monpy us | numpy us |  ratio |
+| ------------------------------------------ | -------: | -------: | -----: |
+| `array/linalg_api/inner_32_f64`            |    5.570 |    2.413 | 2.309x |
+| `array/linalg_api/kron_2x2_f64`            |   22.563 |    9.853 | 2.290x |
+| `array/linalg_api/tensorinv_2x2x2x2_f64`   |   12.997 |    5.580 | 2.288x |
+| `array/linalg_api/dot_1d_32_f64`           |    5.458 |    2.415 | 2.259x |
+| `array/linalg_api/tensorsolve_2x3x2x3_f64` |   14.827 |    6.600 | 2.246x |
 
 Patch:
 
@@ -3774,17 +3774,17 @@ MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/m
 
 Key movement:
 
-| row                                | before us | after us | before ratio | after ratio | speedup |
-| ---------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
-| `array/creation/meshgrid_xy_f32`   |    14.209 |    6.038 |       1.640x |      0.695x |  2.35:1 |
+| row                              | before us | after us | before ratio | after ratio | speedup |
+| -------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/creation/meshgrid_xy_f32` |    14.209 |    6.038 |       1.640x |      0.695x |  2.35:1 |
 
 Profile movement:
 
-| probe                                 | before | after | movement |
-| ------------------------------------- | -----: | ----: | -------: |
-| `monpy-profile` us/call               | 15.202 | 6.680 |  2.28:1 |
-| cProfile calls for 50k meshgrid calls |   3.5M |  1.0M |  3.50:1 |
-| cProfile wall for 50k calls           | 1.328s | 0.321s |  4.14:1 |
+| probe                                 | before |  after | movement |
+| ------------------------------------- | -----: | -----: | -------: |
+| `monpy-profile` us/call               | 15.202 |  6.680 |   2.28:1 |
+| cProfile calls for 50k meshgrid calls |   3.5M |   1.0M |   3.50:1 |
+| cProfile wall for 50k calls           | 1.328s | 0.321s |   4.14:1 |
 
 Read:
 
@@ -3806,12 +3806,12 @@ Read:
 
 Fresh frontier after the meshgrid patch:
 
-| row                                            | monpy us | numpy us | ratio  |
-| ---------------------------------------------- | -------: | -------: | -----: |
-| `array/interop/asarray_squeeze_axis0_f32`      |    4.408 |    2.351 | 1.922x |
-| `array/views/transpose_add_f32`                |    4.724 |    2.581 | 1.825x |
-| `array/linalg_api/trace_16_f64`                |    6.392 |    3.328 | 1.732x |
-| `array/copy/ascontiguousarray_transpose_f32`   |    4.033 |    2.436 | 1.697x |
+| row                                          | monpy us | numpy us |  ratio |
+| -------------------------------------------- | -------: | -------: | -----: |
+| `array/interop/asarray_squeeze_axis0_f32`    |    4.408 |    2.351 | 1.922x |
+| `array/views/transpose_add_f32`              |    4.724 |    2.581 | 1.825x |
+| `array/linalg_api/trace_16_f64`              |    6.392 |    3.328 | 1.732x |
+| `array/copy/ascontiguousarray_transpose_f32` |    4.033 |    2.436 | 1.697x |
 
 I did a read-only pass on `asarray_squeeze_axis0_f32` first. The row is real,
 but the honest fix is shared buffer-ingress metadata work, not a fused
@@ -3864,11 +3864,11 @@ Key movement:
 
 Profile movement:
 
-| probe                         | before | after | movement |
-| ----------------------------- | -----: | ----: | -------: |
-| `monpy-profile` us/call       |  5.713 | 3.786 |  1.51:1 |
-| cProfile calls for 50k calls  |  1.25M | 0.30M |  4.17:1 |
-| cProfile wall for 50k calls   | 0.370s | 0.089s |  4.16:1 |
+| probe                        | before |  after | movement |
+| ---------------------------- | -----: | -----: | -------: |
+| `monpy-profile` us/call      |  5.713 |  3.786 |   1.51:1 |
+| cProfile calls for 50k calls |  1.25M |  0.30M |   4.17:1 |
+| cProfile wall for 50k calls  | 0.370s | 0.089s |   4.16:1 |
 
 Read:
 
@@ -3889,11 +3889,11 @@ Read:
 
 Fresh frontier before patch:
 
-| row                                             | monpy us | numpy us | ratio  |
-| ----------------------------------------------- | -------: | -------: | -----: |
-| `array/creation/empty_like_shape_override_f32`  |    4.345 |    2.190 | 2.004x |
-| `array/creation/meshgrid_xy_f32`                |   15.032 |    8.998 | 1.678x |
-| `array/views/transpose_add_f32`                 |    4.497 |    2.622 | 1.715x |
+| row                                            | monpy us | numpy us |  ratio |
+| ---------------------------------------------- | -------: | -------: | -----: |
+| `array/creation/empty_like_shape_override_f32` |    4.345 |    2.190 | 2.004x |
+| `array/creation/meshgrid_xy_f32`               |   15.032 |    8.998 | 1.678x |
+| `array/views/transpose_add_f32`                |    4.497 |    2.622 | 1.715x |
 
 Profile read:
 
@@ -3917,19 +3917,19 @@ Patch:
 - `empty_like(shape=..., dtype=...)` no longer converts the prototype first
   when both result shape and dtype are explicit. NumPy's public contract makes
   these explicit overrides; `np.empty_like(object(), dtype=float64, shape=(2,
-  3))` is legal, so this is a semantics-preserving fast path for the case we
+3))` is legal, so this is a semantics-preserving fast path for the case we
   care about. Source: https://numpy.org/doc/2.0/reference/generated/numpy.empty_like.html
 - Added coverage for scalar/object prototypes with explicit shape/dtype and
   for negative override shapes.
 
 Post-patch profile:
 
-| probe                     | before | after | movement |
-| ------------------------- | -----: | ----: | -------: |
-| cProfile calls, 50k loop  | 1.50M  | 0.55M | 2.73:1 fewer |
-| cProfile wall, 50k loop   | 0.346s | 0.151s | 2.29:1 faster |
-| `monpy-profile` median    | 4.563 us | 3.468 us | 1.32:1 faster |
-| alloc-profile peak        | 109,632 B | 1,598 B | 68.6:1 lower |
+| probe                    |    before |    after |      movement |
+| ------------------------ | --------: | -------: | ------------: |
+| cProfile calls, 50k loop |     1.50M |    0.55M |  2.73:1 fewer |
+| cProfile wall, 50k loop  |    0.346s |   0.151s | 2.29:1 faster |
+| `monpy-profile` median   |  4.563 us | 3.468 us | 1.32:1 faster |
+| alloc-profile peak       | 109,632 B |  1,598 B |  68.6:1 lower |
 
 Post-patch array rerun:
 
@@ -3939,9 +3939,9 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 
 Key row:
 
-| row                                             | before us | after us | before ratio | after ratio | speedup |
-| ----------------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
-| `array/creation/empty_like_shape_override_f32`  |     4.345 |    3.262 |       2.004x |      1.451x |  1.33:1 |
+| row                                            | before us | after us | before ratio | after ratio | speedup |
+| ---------------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/creation/empty_like_shape_override_f32` |     4.345 |    3.262 |       2.004x |      1.451x |  1.33:1 |
 
 Pure-Mojo/std/NuMojo/threading check:
 
@@ -3990,7 +3990,7 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 
 The target was `array/linalg_api/matrix_power_2_n3_f64`:
 
-| row                                      | monpy us | numpy us | ratio  |
+| row                                      | monpy us | numpy us |  ratio |
 | ---------------------------------------- | -------: | -------: | -----: |
 | `array/linalg_api/matrix_power_2_n3_f64` |    7.161 |    3.966 | 1.809x |
 
@@ -4025,7 +4025,7 @@ Patch:
   the Python fallback. That keeps integer overflow, complex multiply, and
   negative inverse semantics out of this patch until those paths are exact.
 - The Python facade now uses `operator.index`, raises `TypeError("exponent must
-  be an integer")`, raises `LinAlgError` for non-square stacks, and validates the
+be an integer")`, raises `LinAlgError` for non-square stacks, and validates the
   last two dimensions through native `ndim()`/`shape_at()` instead of building a
   full Python shape tuple.
 - Small float matrices with `N <= 16` use the local logical-index multiply; big
@@ -4056,15 +4056,15 @@ tracemalloc peak: 23,012 B
 
 Profiler movement:
 
-| metric           | before   | after    | ratio  |
-| ---------------- | -------: | -------: | -----: |
-| Python calls     |  840,004 |  220,004 | 3.82:1 |
-| cProfile wall    |  0.465 s |  0.117 s | 3.97:1 |
+| metric           |    before |    after |  ratio |
+| ---------------- | --------: | -------: | -----: |
+| Python calls     |   840,004 |  220,004 | 3.82:1 |
+| cProfile wall    |   0.465 s |  0.117 s | 3.97:1 |
 | tracemalloc peak | 139,719 B | 23,012 B | 6.07:1 |
 
 Current slowest rows after the patch:
 
-| row                                            | monpy us | numpy us | ratio  |
+| row                                            | monpy us | numpy us |  ratio |
 | ---------------------------------------------- | -------: | -------: | -----: |
 | `array/creation/empty_like_shape_override_f32` |    4.180 |    2.218 | 1.903x |
 | `array/interop/asarray_squeeze_axis0_f32`      |    4.181 |    2.229 | 1.858x |
@@ -4109,7 +4109,7 @@ Next target:
 After native Kronecker, the next fresh sweep put the tensor linalg wrappers
 right behind the small scalar-dot wall:
 
-| row                                        | monpy us | numpy us | ratio  |
+| row                                        | monpy us | numpy us |  ratio |
 | ------------------------------------------ | -------: | -------: | -----: |
 | `array/linalg_api/dot_1d_32_f64`           |    5.700 |    2.339 | 2.437x |
 | `array/linalg_api/tensorinv_2x2x2x2_f64`   |   13.171 |    5.565 | 2.364x |
@@ -4162,13 +4162,13 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 After the tensor wrappers landed, the next fresh array sweep left
 `norm_vec1_32_f64` as the cleanest non-scalar-return target:
 
-| row                                      | monpy us | numpy us | ratio  |
-| ---------------------------------------- | -------: | -------: | -----: |
-| `array/linalg_api/dot_1d_32_f64`         |    5.259 |    2.286 | 2.298x |
-| `array/linalg_api/inner_32_f64`          |    5.275 |    2.371 | 2.198x |
-| `array/linalg_api/vecdot_axis1_8x4_f64`  |    5.798 |    2.712 | 2.146x |
-| `array/linalg_api/vdot_32_f64`           |    4.949 |    2.313 | 2.144x |
-| `array/linalg_api/norm_vec1_32_f64`      |    7.029 |    3.391 | 2.073x |
+| row                                     | monpy us | numpy us |  ratio |
+| --------------------------------------- | -------: | -------: | -----: |
+| `array/linalg_api/dot_1d_32_f64`        |    5.259 |    2.286 | 2.298x |
+| `array/linalg_api/inner_32_f64`         |    5.275 |    2.371 | 2.198x |
+| `array/linalg_api/vecdot_axis1_8x4_f64` |    5.798 |    2.712 | 2.146x |
+| `array/linalg_api/vdot_32_f64`          |    4.949 |    2.313 | 2.144x |
+| `array/linalg_api/norm_vec1_32_f64`     |    7.029 |    3.391 | 2.073x |
 
 Patch:
 
@@ -4217,12 +4217,12 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 
 The fresh slowest-sorted array sweep put the scalar dot family back at the top:
 
-| row                                      | monpy us | numpy us | ratio  |
-| ---------------------------------------- | -------: | -------: | -----: |
-| `array/linalg_api/dot_1d_32_f64`         |    5.561 |    2.406 | 2.327x |
-| `array/linalg_api/vecdot_axis1_8x4_f64`  |    6.131 |    2.824 | 2.170x |
-| `array/linalg_api/vdot_32_f64`           |    5.090 |    2.460 | 2.091x |
-| `array/linalg_api/inner_32_f64`          |    5.487 |    2.629 | 2.085x |
+| row                                     | monpy us | numpy us |  ratio |
+| --------------------------------------- | -------: | -------: | -----: |
+| `array/linalg_api/dot_1d_32_f64`        |    5.561 |    2.406 | 2.327x |
+| `array/linalg_api/vecdot_axis1_8x4_f64` |    6.131 |    2.824 | 2.170x |
+| `array/linalg_api/vdot_32_f64`          |    5.090 |    2.460 | 2.091x |
+| `array/linalg_api/inner_32_f64`         |    5.487 |    2.629 | 2.085x |
 
 Patch:
 
@@ -4245,12 +4245,12 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 
 Key movement:
 
-| row                                      | before us | after us | before ratio | after ratio | speedup |
-| ---------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
-| `array/linalg_api/dot_1d_32_f64`         |     5.561 |    2.646 |       2.327x |      1.079x |  2.10:1 |
-| `array/linalg_api/vdot_32_f64`           |     5.090 |    2.667 |       2.091x |      1.101x |  1.91:1 |
-| `array/linalg_api/inner_32_f64`          |     5.487 |    2.666 |       2.085x |      1.048x |  2.06:1 |
-| `array/linalg_api/vecdot_axis1_8x4_f64`  |     6.131 |    2.959 |       2.170x |      1.054x |  2.07:1 |
+| row                                     | before us | after us | before ratio | after ratio | speedup |
+| --------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/linalg_api/dot_1d_32_f64`        |     5.561 |    2.646 |       2.327x |      1.079x |  2.10:1 |
+| `array/linalg_api/vdot_32_f64`          |     5.090 |    2.667 |       2.091x |      1.101x |  1.91:1 |
+| `array/linalg_api/inner_32_f64`         |     5.487 |    2.666 |       2.085x |      1.048x |  2.06:1 |
+| `array/linalg_api/vecdot_axis1_8x4_f64` |     6.131 |    2.959 |       2.170x |      1.054x |  2.07:1 |
 
 Read:
 
@@ -4291,11 +4291,11 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 
 Fresh frontier:
 
-| row                                                   | monpy us | numpy us | ratio  |
-| ----------------------------------------------------- | -------: | -------: | -----: |
-| `array/views/transpose_add_f32`                       |    5.031 |    2.505 | 1.927x |
-| `array/interop/asarray_squeeze_axis0_f32`             |    4.328 |    2.361 | 1.840x |
-| `array/native_kernels/concatenate_axis0_8x128_f64`    |    5.343 |    3.265 | 1.612x |
+| row                                                | monpy us | numpy us |  ratio |
+| -------------------------------------------------- | -------: | -------: | -----: |
+| `array/views/transpose_add_f32`                    |    5.031 |    2.505 | 1.927x |
+| `array/interop/asarray_squeeze_axis0_f32`          |    4.328 |    2.361 | 1.840x |
+| `array/native_kernels/concatenate_axis0_8x128_f64` |    5.343 |    3.265 | 1.612x |
 
 Profile read:
 
@@ -4323,9 +4323,9 @@ Patch:
 
 Post-patch profile:
 
-| run                                                      | us/call | calls for 50k | read |
-| -------------------------------------------------------- | ------: | ------------: | ---- |
-| `results/local-profile-20260509-concat8x128-before`      |   6.144 |         1.10M | `asarray` loop dominates wrapper |
+| run                                                      | us/call | calls for 50k | read                                    |
+| -------------------------------------------------------- | ------: | ------------: | --------------------------------------- |
+| `results/local-profile-20260509-concat8x128-before`      |   6.144 |         1.10M | `asarray` loop dominates wrapper        |
 | `results/local-profile-20260509-concat8x128-speculative` |   5.110 |          350k | native copy is now the large fixed cost |
 
 Post-patch array rerun:
@@ -4334,9 +4334,9 @@ Post-patch array rerun:
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types array --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-array-20260509-concat-exact-native-list --no-progress --no-stdout
 ```
 
-| row                                                   | before us | after us | before ratio | after ratio | speedup |
-| ----------------------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
-| `array/native_kernels/concatenate_axis0_8x128_f64`    |     5.343 |    4.831 |       1.612x |      1.385x |  1.11:1 |
+| row                                                | before us | after us | before ratio | after ratio | speedup |
+| -------------------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/native_kernels/concatenate_axis0_8x128_f64` |     5.343 |    4.831 |       1.612x |      1.385x |  1.11:1 |
 
 Read:
 
@@ -4361,7 +4361,7 @@ MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.deriv
 
 Fresh frontier:
 
-| row                                       | monpy us | numpy us | ratio  |
+| row                                       | monpy us | numpy us |  ratio |
 | ----------------------------------------- | -------: | -------: | -----: |
 | `array/interop/asarray_squeeze_axis0_f32` |    4.093 |    2.386 | 1.800x |
 | `array/views/transpose_add_f32`           |    4.608 |    2.509 | 1.790x |
@@ -4378,10 +4378,10 @@ Patch:
 
 Profile read:
 
-| row / artifact                                      | before us | after us | speedup |
-| --------------------------------------------------- | --------: | -------: | ------: |
-| `asarray_squeeze_axis0_f32` long-loop profile       |     4.607 |    4.477 |  1.03:1 |
-| `transpose_add_f32` long-loop profile               |     4.639 |    3.880 |  1.20:1 |
+| row / artifact                                | before us | after us | speedup |
+| --------------------------------------------- | --------: | -------: | ------: |
+| `asarray_squeeze_axis0_f32` long-loop profile |     4.607 |    4.477 |  1.03:1 |
+| `transpose_add_f32` long-loop profile         |     4.639 |    3.880 |  1.20:1 |
 
 The cProfile split was clearer than the aggregate loop:
 
@@ -4455,14 +4455,14 @@ Patch:
 
 Native result:
 
-| row                | threaded ns | serial static ns | ratio  |
-| ------------------ | ----------: | ---------------: | -----: |
-| `add_par_f64_1m`   |     106,415 |          417,800 | 0.255x |
-| `add_par_f32_1m`   |      78,333 |          127,857 | 0.613x |
-| `add_par_f32_4m`   |     622,333 |          732,462 | 0.850x |
-| `add_par_f64_4m`   |   1,241,091 |        1,718,000 | 0.722x |
-| `add_par_f32_16m`  |   1,448,778 |        2,918,167 | 0.496x |
-| `add_par_f64_16m`  |   3,239,167 |        5,591,000 | 0.579x |
+| row               | threaded ns | serial static ns |  ratio |
+| ----------------- | ----------: | ---------------: | -----: |
+| `add_par_f64_1m`  |     106,415 |          417,800 | 0.255x |
+| `add_par_f32_1m`  |      78,333 |          127,857 | 0.613x |
+| `add_par_f32_4m`  |     622,333 |          732,462 | 0.850x |
+| `add_par_f64_4m`  |   1,241,091 |        1,718,000 | 0.722x |
+| `add_par_f32_16m` |   1,448,778 |        2,918,167 | 0.496x |
+| `add_par_f64_16m` |   3,239,167 |        5,591,000 | 0.579x |
 
 macOS Python result:
 
@@ -4472,9 +4472,9 @@ macOS Python result:
   `libvDSP.dylib`.
 - So the patch is mostly a Linux/native Mojo win today. On this Mac, the public
   Python row stayed flat: `binary_add_1048576_f32` moved `159.796 us -> 158.395
-  us`, only `1.01:1`.
+us`, only `1.01:1`.
 - The 262K public rows moved a little (`binary_add_262144_f32` `18.330 us ->
-  17.658 us`, `1.04:1`), but that is below the threshold where I would claim a
+17.658 us`, `1.04:1`), but that is below the threshold where I would claim a
   user-visible win.
 
 Verification:
@@ -4522,12 +4522,12 @@ Patch:
 
 Microbench after patch:
 
-| probe                         | before | after | speedup |
-| ----------------------------- | -----: | ----: | ------: |
-| `mnp.asarray(np_f32)`          | 1.344  | 0.975 |  1.38:1 |
-| `mnp.asarray(np_bool)`         | 1.343  | 0.972 |  1.38:1 |
-| `_is_numpy_array(np_f32)`      | 0.094  | 0.052 |  1.81:1 |
-| `_numpy_ops()` cached lookup   | 0.316  | 0.039 |  8.10:1 |
+| probe                        | before | after | speedup |
+| ---------------------------- | -----: | ----: | ------: |
+| `mnp.asarray(np_f32)`        |  1.344 | 0.975 |  1.38:1 |
+| `mnp.asarray(np_bool)`       |  1.343 | 0.972 |  1.38:1 |
+| `_is_numpy_array(np_f32)`    |  0.094 | 0.052 |  1.81:1 |
+| `_numpy_ops()` cached lookup |  0.316 | 0.039 |  8.10:1 |
 
 Full normal rerun:
 
@@ -4535,15 +4535,15 @@ Full normal rerun:
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types all --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-20260510-numpy-ingress-cache --no-progress --no-stdout
 ```
 
-| row                                      | before us | after us | before ratio | after ratio | speedup |
-| ---------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
-| `array/interop/asarray_zero_copy_bool`   |     3.774 |    3.105 |       1.878x |      1.598x |  1.22:1 |
-| `array/interop/asarray_zero_copy_f32`    |     3.610 |    3.084 |       1.828x |      1.591x |  1.17:1 |
-| `array/interop/asarray_zero_copy_f64`    |     3.671 |    3.080 |       1.816x |      1.534x |  1.19:1 |
-| `array/interop/asarray_zero_copy_i64`    |     3.571 |    3.169 |       1.813x |      1.587x |  1.13:1 |
-| `array/interop/array_copy_bool`          |     3.938 |    3.425 |       1.684x |      1.511x |  1.15:1 |
-| `array/interop/from_dlpack_f32`          |     3.559 |    2.988 |       1.615x |      1.353x |  1.19:1 |
-| `array/interop/asarray_squeeze_axis0_f32` |    4.799 |    4.225 |       2.067x |      1.904x |  1.14:1 |
+| row                                       | before us | after us | before ratio | after ratio | speedup |
+| ----------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/interop/asarray_zero_copy_bool`    |     3.774 |    3.105 |       1.878x |      1.598x |  1.22:1 |
+| `array/interop/asarray_zero_copy_f32`     |     3.610 |    3.084 |       1.828x |      1.591x |  1.17:1 |
+| `array/interop/asarray_zero_copy_f64`     |     3.671 |    3.080 |       1.816x |      1.534x |  1.19:1 |
+| `array/interop/asarray_zero_copy_i64`     |     3.571 |    3.169 |       1.813x |      1.587x |  1.13:1 |
+| `array/interop/array_copy_bool`           |     3.938 |    3.425 |       1.684x |      1.511x |  1.15:1 |
+| `array/interop/from_dlpack_f32`           |     3.559 |    2.988 |       1.615x |      1.353x |  1.19:1 |
+| `array/interop/asarray_squeeze_axis0_f32` |     4.799 |    4.225 |       2.067x |      1.904x |  1.14:1 |
 
 Profile:
 
@@ -4619,11 +4619,11 @@ Final normal rerun:
 MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types all --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-20260510-0135-full-step-slice-final --no-progress --no-stdout
 ```
 
-| row                                      | before us | after us | before ratio | after ratio | speedup |
-| ---------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
-| `array/views/strided_view_f32`           |     3.518 |    3.281 |       1.721x |      1.355x |  1.07:1 |
-| `array/interop/asarray_zero_copy_f32`    |     3.191 |    3.154 |       1.628x |      1.601x |  1.01:1 |
-| `array/interop/asarray_squeeze_axis0_f32` |    4.228 |    4.897 |       1.864x |      1.941x |  0.86:1 |
+| row                                       | before us | after us | before ratio | after ratio | speedup |
+| ----------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/views/strided_view_f32`            |     3.518 |    3.281 |       1.721x |      1.355x |  1.07:1 |
+| `array/interop/asarray_zero_copy_f32`     |     3.191 |    3.154 |       1.628x |      1.601x |  1.01:1 |
+| `array/interop/asarray_squeeze_axis0_f32` |     4.228 |    4.897 |       1.864x |      1.941x |  0.86:1 |
 
 Profile:
 

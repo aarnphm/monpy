@@ -234,6 +234,23 @@ jax's top-level api exports `jit`, `grad`, `value_and_grad`, `jacfwd`, `jacrev`,
 `hessian`, `jvp`, `vjp`, `vmap`, `pmap`, `shard_map`, `custom_jvp`,
 `custom_vjp`, device helpers, `lax`, `random`, and `scipy`.
 
+monpy's matching public shape is now:
+
+```python
+import monpy as mp
+
+@mp.jit
+def f(x, w, bias):
+  return mp.where(mp.einsum("ij,jk->ik", x, w) > 0, bias, 0)
+```
+
+The important part is the function boundary. `mp.jit` traces the Python
+function body with abstract inputs. Every NumPy-compatible public operation used
+inside that body must either bind a monpy primitive directly or decompose into
+primitive calls before any eager ndarray work happens. `monpy.lax` stays the
+primitive/spec namespace; top-level `monpy` is the user-facing transform and
+NumPy facade.
+
 the actionable monpy slice is `vmap` first, but there are two different things
 called `vmap`:
 
@@ -248,9 +265,8 @@ monpy now has the eager call shape at top level:
 
 ```python
 import monpy as mp
-import monpy.lax as lax
 
-f = lax.vmap(lambda x, y: x + y, in_axes=(0, None), out_axes=0)
+f = mp.vmap(lambda x, y: x + y, in_axes=(0, None), out_axes=0)
 out = f(mp.asarray([1, 2, 3]), mp.asarray(10))
 ```
 

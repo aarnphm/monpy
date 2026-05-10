@@ -1,6 +1,7 @@
 # monpy roadmap
 
-see [[numpy-port-gaps]] for the missing numpy library map, and
+see [[api-surface]] for the shared NumPy/SciPy/JAX public contract,
+[[numpy-port-gaps]] for the missing numpy library map, and
 [[scipy-jax-port-gaps]] for the scipy array-api and jax transform pressure map:
 dtype/scalar machinery, coercion, strided iteration, ufunc dispatch, indexing,
 reductions, linalg/tensor operations, random, fft, strings, masked arrays, io,
