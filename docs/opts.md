@@ -4493,3 +4493,84 @@ Next target: scalar multiply static split is now the clean native miss
 (`scalar_mul_f64_64k` around `1.14x` in the saved sweep). For Python/NumPy,
 the frontier is separate: buffer ingress and tiny view/list facades, not the
 ADD kernel on macOS.
+
+### 2026-05-10 cached NumPy ingress shims
+
+Normal-bench regression check:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types all --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-20260510-normal-regression-check --no-progress --no-stdout
+```
+
+Read:
+
+- The live regression was Python-facing, not Mojo-facing. The biggest cluster
+  was NumPy ingress: `asarray_zero_copy_*`, `array_copy_*`, `from_dlpack_f32`.
+- The package split moved NumPy helpers under `monpy.numpy.ops`, but the hot
+  top-level `asarray(np_array, ...)` path still paid a repeated
+  `importlib.import_module` lookup and an uncached `numpy.ndarray` detector.
+- Microbench before patch: `mnp.asarray(np_f32, copy=False)` `1.34 us`;
+  direct `monpy.numpy.ops._from_numpy_unchecked` `0.80 us`; module lookup
+  alone `0.316 us`.
+
+Patch:
+
+- Cache the `monpy.numpy.ops` module after the first import.
+- Cache the `_from_numpy_unchecked` callable after first lookup.
+- Cache `numpy.ndarray` once NumPy is loaded, so `_is_numpy_array` becomes an
+  `isinstance` check instead of `sys.modules + getattr` per call.
+
+Microbench after patch:
+
+| probe                         | before | after | speedup |
+| ----------------------------- | -----: | ----: | ------: |
+| `mnp.asarray(np_f32)`          | 1.344  | 0.975 |  1.38:1 |
+| `mnp.asarray(np_bool)`         | 1.343  | 0.972 |  1.38:1 |
+| `_is_numpy_array(np_f32)`      | 0.094  | 0.052 |  1.81:1 |
+| `_numpy_ops()` cached lookup   | 0.316  | 0.039 |  8.10:1 |
+
+Full normal rerun:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench --types all --loops 200 --repeats 5 --rounds 3 --format json --sort slowest --output-dir results/local-20260510-numpy-ingress-cache --no-progress --no-stdout
+```
+
+| row                                      | before us | after us | before ratio | after ratio | speedup |
+| ---------------------------------------- | --------: | -------: | -----------: | ----------: | ------: |
+| `array/interop/asarray_zero_copy_bool`   |     3.774 |    3.105 |       1.878x |      1.598x |  1.22:1 |
+| `array/interop/asarray_zero_copy_f32`    |     3.610 |    3.084 |       1.828x |      1.591x |  1.17:1 |
+| `array/interop/asarray_zero_copy_f64`    |     3.671 |    3.080 |       1.816x |      1.534x |  1.19:1 |
+| `array/interop/asarray_zero_copy_i64`    |     3.571 |    3.169 |       1.813x |      1.587x |  1.13:1 |
+| `array/interop/array_copy_bool`          |     3.938 |    3.425 |       1.684x |      1.511x |  1.15:1 |
+| `array/interop/from_dlpack_f32`          |     3.559 |    2.988 |       1.615x |      1.353x |  1.19:1 |
+| `array/interop/asarray_squeeze_axis0_f32` |    4.799 |    4.225 |       2.067x |      1.904x |  1.14:1 |
+
+Profile:
+
+- `results/local-profile-20260510-normal-regression-asarray-bool`: `3.797 us/call`.
+- `results/local-profile-20260510-numpy-ingress-cache-asarray-bool`: `3.345 us/call`.
+- Backend stayed native buffer ingress (`BackendKind.NATIVE`), so the movement is
+  facade overhead, not a hidden kernel/backend change.
+
+Mojo check:
+
+```text
+MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/monpy-bench-mojo --mojo /Users/aarnphm/workspace/modular/.derived/build/bin/mojo --include-numojo --include-threading --thread-caps auto,1,2,4,8 --format json --sort slowest --output-dir results/local-20260510-numpy-ingress-cache-mojo --no-stdout --timeout 240
+```
+
+- NuMojo remains behind monpy in the included rows; closest row:
+  `numojo.elementwise/sin_f32_65536` at `0.733x`.
+- Threading policy still reads as before: `auto` mean `0.634x`, `threads4`
+  mean `0.665x`, `threads8` mean `0.657x`; `threads1` is mostly a control row
+  and still has loss cells.
+
+Verification:
+
+```text
+MOHAUS_EDITABLE_REBUILDING=1 MOHAUS_MOJO=/Users/aarnphm/workspace/modular/.derived/build/bin/mojo .venv/bin/pytest tests/python/numpy_compat/test_array_interface.py tests/python/numpy_compat/test_import_smoke.py tests/python/test_no_numpy_core.py tests/python/test_buffer_core.py -q
+.venv/bin/ruff check python/monpy/__init__.py  # unavailable in this venv
+```
+
+Next target: `asarray_squeeze_axis0_f32` is still the top normal-bench row.
+The buffer crossing improved; the remaining toll is the wrapper/view chain after
+ingress.

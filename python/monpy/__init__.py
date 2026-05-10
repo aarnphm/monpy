@@ -16,6 +16,9 @@ from . import _native
 
 _Scalar: typing.TypeAlias = builtins.bool | builtins.int | builtins.float | builtins.complex
 _NativeArray: typing.TypeAlias = _native.Array
+_NUMPY_OPS: ModuleType | None = None
+_FROM_NUMPY_UNCHECKED: typing.Callable[..., ndarray] | None = None
+_NUMPY_NDARRAY_TYPE: type[object] | None = None
 
 
 class _ArrayInterfaceLike(typing.Protocol):
@@ -24,7 +27,21 @@ class _ArrayInterfaceLike(typing.Protocol):
 
 
 def _numpy_ops() -> ModuleType:
-  return importlib.import_module(f"{__name__}.numpy.ops")
+  global _NUMPY_OPS
+  module = _NUMPY_OPS
+  if module is None:
+    module = importlib.import_module(f"{__name__}.numpy.ops")
+    _NUMPY_OPS = module
+  return module
+
+
+def _from_numpy_unchecked(obj: object, dtype: object = None, copy: bool | None = None, device: object = None) -> ndarray:
+  global _FROM_NUMPY_UNCHECKED
+  func = _FROM_NUMPY_UNCHECKED
+  if func is None:
+    func = typing.cast(typing.Callable[..., ndarray], getattr(_numpy_ops(), "_from_numpy_unchecked"))
+    _FROM_NUMPY_UNCHECKED = func
+  return func(obj, dtype=dtype, copy=copy, device=device)
 
 
 _DOMAIN_CODES: dict[str, dict[str, int]] = _native._domain_codes()
@@ -1729,7 +1746,7 @@ def asarray(obj: object, dtype: object = None, *, copy: builtins.bool | None = N
       if _is_numpy_array(obj) and "buffer format unsupported" in message:
         raise NotImplementedError("unsupported dtype") from exc
   if _is_numpy_array(obj):
-    return _numpy_ops()._from_numpy_unchecked(obj, dtype=dtype, copy=copy, device=device)
+    return _from_numpy_unchecked(obj, dtype=dtype, copy=copy, device=device)
   tc = -1 if dtype is None else _resolve_dtype(dtype).code
   cf = -1 if copy is None else (1 if copy else 0)  # tri-state: -1 default, 0 never, 1 always
   try:
@@ -4709,9 +4726,14 @@ def _has_ai(o: object) -> builtins.bool:  # has __array_interface__ dict — the
 
 
 def _is_numpy_array(o: object) -> builtins.bool:
+  global _NUMPY_NDARRAY_TYPE
+  ndarray_type = _NUMPY_NDARRAY_TYPE
+  if ndarray_type is not None:
+    return builtins.bool(isinstance(o, ndarray_type))
   numpy_module = sys.modules.get("numpy")
   ndarray_type = getattr(numpy_module, "ndarray", None) if numpy_module is not None else None
-  if ndarray_type is not None:
+  if isinstance(ndarray_type, type):
+    _NUMPY_NDARRAY_TYPE = ndarray_type
     return builtins.bool(isinstance(o, ndarray_type))
   return builtins.any(
     isinstance(getattr(base, "__module__", None), str)
