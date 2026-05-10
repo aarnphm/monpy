@@ -26,8 +26,9 @@ class StorageKind(str, Enum):
 class DTypeSpec:
   """Backend-neutral dtype contract used by GraphIR.
 
-  `DTypeSpec` is not the eager `monpy.DType` object. It carries enough storage
-  and backend mapping metadata for tracing and lowering without importing MAX.
+  `DTypeSpec` carries storage and backend mapping metadata for tracing and
+  lowering without importing MAX. NumPy presentation metadata lives at the
+  NumPy interface boundary.
   """
 
   name: str
@@ -79,7 +80,6 @@ def from_monpy_dtype(dtype: object) -> DTypeSpec:
   name = getattr(dtype, "name", None)
   code = getattr(dtype, "code", None)
   kind = getattr(dtype, "kind", None)
-  itemsize = getattr(dtype, "itemsize", None)
   bits = getattr(dtype, "bits", None)
   storage_bits = getattr(dtype, "storage_bits", None)
   storage = getattr(dtype, "storage", None)
@@ -87,15 +87,12 @@ def from_monpy_dtype(dtype: object) -> DTypeSpec:
     not isinstance(name, str)
     or not isinstance(code, int)
     or not isinstance(kind, str)
-    or not isinstance(itemsize, int)
+    or not isinstance(bits, int)
+    or not isinstance(storage_bits, int)
   ):
     raise TypeError(f"expected monpy dtype or DTypeSpec, got {type(dtype).__name__}")
   if name in EXTRA_DTYPES and EXTRA_DTYPES[name].code == code:
     return replace(EXTRA_DTYPES[name], eager_storage_supported=True)
-  if not isinstance(bits, int):
-    bits = itemsize * 8
-  if not isinstance(storage_bits, int):
-    storage_bits = itemsize * 8
   storage_kind = StorageKind.PACKED_SUBBYTE if storage == "packed_subbyte" else StorageKind.VALUE
   return DTypeSpec(
     name=name,

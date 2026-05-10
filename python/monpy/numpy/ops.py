@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import typing
+from dataclasses import dataclass
 
 from monpy.utils import LazyLoader
 
@@ -13,6 +14,128 @@ if typing.TYPE_CHECKING:
 else:
   _mp = LazyLoader("_mp", globals(), "monpy")
   numpy = LazyLoader("numpy", globals(), "numpy")
+
+
+@dataclass(frozen=True, slots=True)
+class NumpyDTypeInfo:
+  itemsize: int
+  alignment: int
+  byteorder: str
+  typestr: str
+  format: str
+  scalar_type: type[object]
+  buffer_exportable: bool
+
+
+_NUMPY_DTYPE_INFO_BY_CODE: dict[int, NumpyDTypeInfo] | None = None
+_DTYPE_BY_TYPESTR: dict[str, _mp.DType] | None = None
+_DTYPE_BY_BUFFER_FORMAT: dict[str, _mp.DType] | None = None
+
+
+def _dtype_info_table() -> dict[int, NumpyDTypeInfo]:
+  global _NUMPY_DTYPE_INFO_BY_CODE
+  if _NUMPY_DTYPE_INFO_BY_CODE is None:
+    _NUMPY_DTYPE_INFO_BY_CODE = {
+      _mp.bool.code: NumpyDTypeInfo(1, 1, "|", "|b1", "?", bool, True),
+      _mp.int64.code: NumpyDTypeInfo(8, 8, "=", "<i8", "l", int, True),
+      _mp.float32.code: NumpyDTypeInfo(4, 4, "=", "<f4", "f", float, True),
+      _mp.float64.code: NumpyDTypeInfo(8, 8, "=", "<f8", "d", float, True),
+      _mp.int32.code: NumpyDTypeInfo(4, 4, "=", "<i4", "i", int, True),
+      _mp.int16.code: NumpyDTypeInfo(2, 2, "=", "<i2", "h", int, True),
+      _mp.int8.code: NumpyDTypeInfo(1, 1, "|", "|i1", "b", int, True),
+      _mp.uint64.code: NumpyDTypeInfo(8, 8, "=", "<u8", "Q", int, True),
+      _mp.uint32.code: NumpyDTypeInfo(4, 4, "=", "<u4", "I", int, True),
+      _mp.uint16.code: NumpyDTypeInfo(2, 2, "=", "<u2", "H", int, True),
+      _mp.uint8.code: NumpyDTypeInfo(1, 1, "|", "|u1", "B", int, True),
+      _mp.float16.code: NumpyDTypeInfo(2, 2, "=", "<f2", "e", float, True),
+      _mp.complex64.code: NumpyDTypeInfo(8, 4, "=", "<c8", "F", complex, True),
+      _mp.complex128.code: NumpyDTypeInfo(16, 8, "=", "<c16", "D", complex, True),
+      _mp.bfloat16.code: NumpyDTypeInfo(2, 2, "=", "", "", float, False),
+      _mp.float8_e4m3fn.code: NumpyDTypeInfo(1, 1, "|", "", "", float, False),
+      _mp.float8_e4m3fnuz.code: NumpyDTypeInfo(1, 1, "|", "", "", float, False),
+      _mp.float8_e5m2.code: NumpyDTypeInfo(1, 1, "|", "", "", float, False),
+      _mp.float8_e5m2fnuz.code: NumpyDTypeInfo(1, 1, "|", "", "", float, False),
+      _mp.float8_e8m0fnu.code: NumpyDTypeInfo(1, 1, "|", "", "", float, False),
+      _mp.float4_e2m1fn.code: NumpyDTypeInfo(1, 1, "|", "", "", float, False),
+    }
+  return _NUMPY_DTYPE_INFO_BY_CODE
+
+
+def dtype_info(dtype: object) -> NumpyDTypeInfo:
+  resolved = _mp._resolve_dtype(dtype)
+  try:
+    return _dtype_info_table()[resolved.code]
+  except KeyError as exc:
+    raise NotImplementedError(f"unsupported dtype metadata: {resolved!r}") from exc
+
+
+def array_interface_typestr(dtype: object) -> str:
+  return dtype_info(dtype).typestr
+
+
+def buffer_format(dtype: object) -> str:
+  return dtype_info(dtype).format
+
+
+def _typestr_table() -> dict[str, _mp.DType]:
+  global _DTYPE_BY_TYPESTR
+  if _DTYPE_BY_TYPESTR is None:
+    table = {
+      info.typestr: dtype
+      for dtype in _mp._DT
+      for info in (dtype_info(dtype),)
+      if info.typestr
+    }
+    table.update(
+      {
+        "|b1": _mp.bool,
+        "|i1": _mp.int8,
+        "|u1": _mp.uint8,
+      }
+    )
+    for suffix, dtype in (
+      ("i8", _mp.int64),
+      ("i4", _mp.int32),
+      ("i2", _mp.int16),
+      ("u8", _mp.uint64),
+      ("u4", _mp.uint32),
+      ("u2", _mp.uint16),
+      ("f2", _mp.float16),
+      ("f4", _mp.float32),
+      ("f8", _mp.float64),
+      ("c8", _mp.complex64),
+      ("c16", _mp.complex128),
+    ):
+      for prefix in ("<", "="):
+        table[prefix + suffix] = dtype
+    _DTYPE_BY_TYPESTR = table
+  return _DTYPE_BY_TYPESTR
+
+
+def dtype_from_typestr(typestr: str) -> _mp.DType:
+  try:
+    return _typestr_table()[typestr]
+  except KeyError as exc:
+    raise NotImplementedError(f"unsupported array-interface typestr: {typestr}") from exc
+
+
+def _buffer_format_table() -> dict[str, _mp.DType]:
+  global _DTYPE_BY_BUFFER_FORMAT
+  if _DTYPE_BY_BUFFER_FORMAT is None:
+    _DTYPE_BY_BUFFER_FORMAT = {
+      info.format: dtype
+      for dtype in _mp._DT
+      for info in (dtype_info(dtype),)
+      if info.format
+    }
+  return _DTYPE_BY_BUFFER_FORMAT
+
+
+def dtype_from_buffer_format(format: str) -> _mp.DType:
+  try:
+    return _buffer_format_table()[format]
+  except KeyError as exc:
+    raise NotImplementedError(f"unsupported buffer dtype format: {format}") from exc
 
 
 def _is_numpy_module_name(name: object) -> bool:
@@ -144,8 +267,14 @@ def asarray(obj: object, dtype: object = None, copy: bool | None = None, device:
 
 
 __all__ = [
+  "NumpyDTypeInfo",
   "abstract_dtype_set",
+  "array_interface_typestr",
   "asarray",
+  "buffer_format",
+  "dtype_from_buffer_format",
+  "dtype_from_typestr",
+  "dtype_info",
   "from_numpy",
   "is_array_input",
   "is_dtype_input",

@@ -56,7 +56,7 @@ are runtime data.
 | ----------------- | --------------------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------- |
 | `monpy`           | NumPy-shaped top-level facade plus transform entry points | broad eager surface, top-level `jit`/`vmap` shim         | main user import for NumPy-compatible code and `@monpy.jit` |
 | `monumpy`         | compatibility shim                                        | re-exports `monpy`                                       | keep as import alias only                                   |
-| `monpy.numpy`     | explicit NumPy interchange boundary                       | `monpy.numpy.ops` owns NumPy import-dependent conversion | never needed for core execution                             |
+| `monpy.numpy`     | explicit NumPy interchange boundary                       | `monpy.numpy.ops` owns NumPy import-dependent conversion | dtype/interface metadata plus NumPy ingress/egress; never needed for core execution |
 | `monpy.linalg`    | NumPy linalg and tensor contraction surface               | dense rank-2 kernels plus Python wrappers                | facade over linalg primitives and contraction plans         |
 | `monpy.random`    | explicit-key random plus NumPy-style helpers              | native key/sampler slice exists                          | random primitives with legacy wrappers                      |
 | `monpy.lax`       | primitive/spec/transform namespace                        | `jit`, `vmap`, `TensorSpec`, `GraphIR`, primitives       | small, stable, JAX-shaped core namespace                    |
@@ -71,9 +71,9 @@ in `docs/numpy-port-gaps.md`; this table is the architectural status.
 
 | family                                          | status                                                                                         | trace target                                                                     |
 | ----------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| dtype objects, promotion, casting               | broad eager support, no full scalar hierarchy                                                  | dtype rules on primitives, no array-value reads                                  |
+| dtype objects, promotion, casting               | broad eager support, no full scalar hierarchy                                                  | one canonical `DTypeSpec`; NumPy-ish metadata exposed through interface functions |
 | array creation                                  | broad eager support                                                                            | mostly eager-only until constants and allocation nodes are designed              |
-| buffer, DLPack, NumPy interop                   | explicit CPU boundary                                                                          | not a traced operation                                                           |
+| buffer, DLPack, NumPy interop                   | explicit CPU boundary                                                                          | metadata adapters over `DTypeSpec`, not traced operations                         |
 | ndarray storage, shape, strides, views          | broad eager support                                                                            | layout metadata on `TensorSpec` and view primitives                              |
 | elementwise ufuncs                              | many eager ufuncs, primitive identity started for `add`/`sub`/`mul`/`div`                      | every ufunc gets a primitive or a composite lowering                             |
 | comparisons and predicates                      | broad eager support                                                                            | comparison/predicate primitives                                                  |

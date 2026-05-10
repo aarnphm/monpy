@@ -382,7 +382,7 @@ Python side:
 @dataclass(frozen=True, slots=True)
 class AbstractValue:
   shape: tuple[int | SymbolicDim, ...]
-  dtype: DType
+  dtype: DTypeSpec
   device: Device
   layout: LayoutSpec
   weak_type: bool = False
@@ -391,6 +391,65 @@ class AbstractValue:
 This is the equivalent of JAX avals plus the NumPy layout contract monpy needs.
 It must be cheap to construct from an eager `ndarray`, a `TensorSpec`, or a
 Python scalar.
+
+### `DTypeSpec`
+
+There should be one canonical dtype object, but it should not absorb every
+interface's metadata. Core dtype identity and NumPy dtype presentation are
+different jobs.
+
+Core:
+
+```python
+@dataclass(frozen=True, slots=True)
+class DTypeSpec:
+  name: str
+  code: int
+  kind: DTypeKind
+  bits: int
+  storage: StorageKind
+  storage_bits: int
+```
+
+This is the dtype value used by eager arrays, `TensorSpec`, primitive rules,
+GraphIR, and Mojo planning. It carries stable monpy semantics: identity,
+logical kind, logical precision, storage class, and native domain code. It does
+not directly carry NumPy's `typestr`, PEP-3118 format, byte-order spelling,
+NumPy scalar class, or buffer-export policy.
+
+Interface-specific metadata should be functions over `DTypeSpec`:
+
+```python
+@dataclass(frozen=True, slots=True)
+class NumpyDTypeInfo:
+  itemsize: int
+  alignment: int
+  byteorder: str
+  typestr: str
+  format: str
+  scalar_type: type[object]
+  buffer_exportable: bool
+
+def numpy_dtype_info(dtype: DTypeSpec) -> NumpyDTypeInfo: ...
+def array_interface_typestr(dtype: DTypeSpec) -> str: ...
+def buffer_format(dtype: DTypeSpec) -> str: ...
+```
+
+Those functions belong to the NumPy/interchange boundary, not the core dtype
+record. The same pattern applies to backend-specific metadata:
+`max_dtype(dtype)`, `safetensors_names(dtype)`, and future device-specific
+lowering helpers should live at their target boundary.
+
+The public ergonomics can still keep familiar names:
+
+```python
+DType = DTypeSpec
+mp.dtype("float32") is mp.float32
+mp.numpy.dtype_info(mp.float32).typestr == "<f4"
+```
+
+That gives monpy one dtype identity without making the primitive spine depend
+on NumPy's historical descriptor fields.
 
 ### `PrimitiveSpec`
 
@@ -687,9 +746,13 @@ the scalar/typed kernel body, not five dispatch files.
 
 ### Phase 3: shared dtype/layout schema
 
-- Generate Python dtype metadata and Mojo dtype codes from one schema file.
-- Include storage bits, logical bits, scalar kind, promotion rows, buffer format,
-  and Array API support flags.
+- Generate Python dtype specs and Mojo dtype codes from one schema file.
+- Keep the canonical dtype schema small: name, code, kind, logical bits, storage
+  kind, and storage bits.
+- Generate interface tables separately: NumPy dtype info, PEP-3118/buffer
+  format, array-interface `typestr`, safetensors names, MAX dtype names, and
+  Array API support flags.
+- Keep promotion rows keyed by canonical `DTypeSpec` codes.
 - Do the same for primitive op codes.
 
 This removes the "Python table says X, Mojo table says Y" class of bugs.

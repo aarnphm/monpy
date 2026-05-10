@@ -3,6 +3,7 @@ from __future__ import annotations
 import monpy as mp
 import pytest
 from monpy.extend import StorageKind, dtype_spec
+from monpy.numpy import dtype_info
 
 LOW_PRECISION_DTYPES = (
   mp.bfloat16,
@@ -37,6 +38,15 @@ def test_low_precision_dtype_metadata_is_storage_aware() -> None:
   assert not mp.float8_e4m3fn.is_packed
   assert mp.isdtype(mp.bfloat16, "real floating")
   assert mp.isdtype(mp.float8_e4m3fn, "quantized floating")
+
+
+def test_low_precision_numpy_dtype_info_marks_unsupported_interchange_formats() -> None:
+  info = dtype_info(mp.float4_e2m1fn)
+
+  assert info.itemsize == 1
+  assert info.typestr == ""
+  assert info.format == ""
+  assert not info.buffer_exportable
 
 
 @pytest.mark.parametrize(

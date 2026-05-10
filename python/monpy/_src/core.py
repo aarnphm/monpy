@@ -211,10 +211,6 @@ def define_primitive(
   )
 
 
-def alias_primitive(alias: str, target: str) -> None:
-  PRIMITIVES.alias(alias, target)
-
-
 def get_primitive(name: str) -> Primitive:
   return PRIMITIVES.get(name)
 
@@ -252,10 +248,10 @@ matmul_p = define_primitive("matmul")
 reduce_p = define_primitive("reduce")
 where_p = define_primitive("where")
 custom_call_p = define_primitive("custom_call")
-alias_primitive("subtract", "sub")
-alias_primitive("multiply", "mul")
-alias_primitive("divide", "div")
-alias_primitive("true_divide", "div")
+PRIMITIVES.alias("subtract", "sub")
+PRIMITIVES.alias("multiply", "mul")
+PRIMITIVES.alias("divide", "div")
+PRIMITIVES.alias("true_divide", "div")
 
 
 @dataclass(frozen=True, slots=True)

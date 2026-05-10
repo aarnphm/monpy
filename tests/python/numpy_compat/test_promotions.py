@@ -110,13 +110,18 @@ def test_supported_dtype_metadata_matches_numpy_and_native_registry(
   numpy_dtype: type[numpy.generic],
 ) -> None:
   oracle = numpy.dtype(numpy_dtype)
+  info = ops_numpy.dtype_info(monpy_dtype)
 
   assert monpy_dtype.kind == oracle.kind
-  assert monpy_dtype.itemsize == oracle.itemsize
-  assert monpy_dtype.alignment == oracle.alignment
-  assert monpy_dtype.byteorder == oracle.byteorder
-  assert monpy_dtype.typestr == oracle.str
-  assert monpy_dtype.format == oracle.char
+  assert info.itemsize == oracle.itemsize
+  assert info.alignment == oracle.alignment
+  assert info.byteorder == oracle.byteorder
+  assert info.typestr == oracle.str
+  assert info.format == oracle.char
+  assert ops_numpy.array_interface_typestr(monpy_dtype) == oracle.str
+  assert ops_numpy.buffer_format(monpy_dtype) == oracle.char
+  assert ops_numpy.dtype_from_typestr(oracle.str) == monpy_dtype
+  assert ops_numpy.dtype_from_buffer_format(oracle.char) == monpy_dtype
   assert monpy._native._dtype_itemsize(monpy_dtype.code) == oracle.itemsize
   assert monpy._native._dtype_alignment(monpy_dtype.code) == oracle.alignment
   assert monpy._native._dtype_kind(monpy_dtype.code) == monpy._DTK[monpy_dtype]

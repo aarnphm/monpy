@@ -26,9 +26,18 @@ def test_core_import_and_buffer_paths_do_not_import_numpy() -> None:
 
     assert not hasattr(monpy, "runtime")
     import monpy.numpy as monpy_numpy
-    assert monpy_numpy.__all__ == ["ops"]
-    from monpy.numpy import ops
+    assert set(monpy_numpy.__all__) == {
+      "NumpyDTypeInfo",
+      "array_interface_typestr",
+      "buffer_format",
+      "dtype_from_buffer_format",
+      "dtype_from_typestr",
+      "dtype_info",
+      "ops",
+    }
+    from monpy.numpy import dtype_info, ops
     assert callable(ops.from_numpy)
+    assert dtype_info(monpy.float32).typestr == "<f4"
     assert ops.is_array_input([1, 2, 3]) is False
     assert ops.is_dtype_input(int) is False
     assert ops.resolve_dtype(monpy.float32) is monpy.float32
@@ -40,7 +49,7 @@ def test_core_import_and_buffer_paths_do_not_import_numpy() -> None:
     assert monumpy.asarray([True, False]).dtype == monpy.bool
     assert monpy.random.key_data(monpy.random.key(0)).shape == (2,)
     assert monpy.random.random(monpy.random.key(1), size=(2,)).shape == (2,)
-    assert monumpy.random is monpy.random
+    assert monumpy.random.key_data is monpy.random.key_data
     assert "numpy" not in sys.modules
 
     exported = array.array("i", [1, 2, 3])

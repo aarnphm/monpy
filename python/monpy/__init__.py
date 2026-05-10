@@ -219,12 +219,9 @@ class DType:
   name: builtins.str
   code: int
   kind: builtins.str
-  itemsize: int
-  alignment: int
-  byteorder: builtins.str
-  typestr: builtins.str
-  format: builtins.str
-  scalar_type: builtins.type[object]
+  bits: builtins.int
+  storage: builtins.str
+  storage_bits: builtins.int
 
   def __repr__(self) -> builtins.str:
     return f"monpy.{self.name}"
@@ -253,24 +250,36 @@ class DType:
     return self.typestr
 
   @property
-  def bits(self) -> builtins.int:
-    return _DT_BITS[self]
+  def itemsize(self) -> builtins.int:
+    return _numpy_ops.dtype_info(self).itemsize
 
   @property
-  def storage_bits(self) -> builtins.int:
-    return _DT_STORAGE_BITS[self]
+  def alignment(self) -> builtins.int:
+    return _numpy_ops.dtype_info(self).alignment
 
   @property
-  def storage(self) -> builtins.str:
-    return _DT_STORAGE_KIND[self]
+  def byteorder(self) -> builtins.str:
+    return _numpy_ops.dtype_info(self).byteorder
+
+  @property
+  def typestr(self) -> builtins.str:
+    return _numpy_ops.dtype_info(self).typestr
+
+  @property
+  def format(self) -> builtins.str:
+    return _numpy_ops.dtype_info(self).format
+
+  @property
+  def scalar_type(self) -> builtins.type[object]:
+    return _numpy_ops.dtype_info(self).scalar_type
 
   @property
   def is_packed(self) -> builtins.bool:
-    return self.storage_bits < 8
+    return self.storage == "packed_subbyte"
 
   @property
   def buffer_exportable(self) -> builtins.bool:
-    return self in _BUFFER_DTYPES
+    return _numpy_ops.dtype_info(self).buffer_exportable
 
   def storage_nbytes(self, size: int) -> int:
     return _storage_nbytes_for(self, size)
@@ -304,46 +313,46 @@ class _IInfo:
   max: builtins.int
 
 
-bool = DType("bool", 0, "b", 1, 1, "|", "|b1", "?", builtins.bool)
+bool = DType("bool", 0, "b", 8, "value", 8)
 bool_ = bool
-int64 = DType("int64", 1, "i", 8, 8, "=", "<i8", "l", builtins.int)
+int64 = DType("int64", 1, "i", 64, "value", 64)
 int_ = int64
 intp = int64
-float32 = DType("float32", 2, "f", 4, 4, "=", "<f4", "f", builtins.float)
-float64 = DType("float64", 3, "f", 8, 8, "=", "<f8", "d", builtins.float)
+float32 = DType("float32", 2, "f", 32, "value", 32)
+float64 = DType("float64", 3, "f", 64, "value", 64)
 float_ = float64
 # signed ints.
-int32 = DType("int32", 4, "i", 4, 4, "=", "<i4", "i", builtins.int)
-int16 = DType("int16", 5, "i", 2, 2, "=", "<i2", "h", builtins.int)
-int8 = DType("int8", 6, "i", 1, 1, "|", "|i1", "b", builtins.int)
+int32 = DType("int32", 4, "i", 32, "value", 32)
+int16 = DType("int16", 5, "i", 16, "value", 16)
+int8 = DType("int8", 6, "i", 8, "value", 8)
 # unsigned ints. Allocate via the f64 round-trip path; arithmetic carries through dispatch with promotion rules (see dtype_result_for_binary).
-uint64 = DType("uint64", 7, "u", 8, 8, "=", "<u8", "Q", builtins.int)
+uint64 = DType("uint64", 7, "u", 64, "value", 64)
 ulonglong = uint64
-uint32 = DType("uint32", 8, "u", 4, 4, "=", "<u4", "I", builtins.int)
+uint32 = DType("uint32", 8, "u", 32, "value", 32)
 uintc = uint32
-uint16 = DType("uint16", 9, "u", 2, 2, "=", "<u2", "H", builtins.int)
+uint16 = DType("uint16", 9, "u", 16, "value", 16)
 ushort = uint16
-uint8 = DType("uint8", 10, "u", 1, 1, "|", "|u1", "B", builtins.int)
+uint8 = DType("uint8", 10, "u", 8, "value", 8)
 ubyte = uint8
 # float16. Storage is 2-byte half; arithmetic delegates through f64.
-float16 = DType("float16", 11, "f", 2, 2, "=", "<f2", "e", builtins.float)
+float16 = DType("float16", 11, "f", 16, "value", 16)
 half = float16
 # complex. Interleaved (real, imag) storage matching numpy/PEP-3118.
-complex64 = DType("complex64", 12, "c", 8, 4, "=", "<c8", "F", builtins.complex)
+complex64 = DType("complex64", 12, "c", 64, "value", 64)
 csingle = complex64
-complex128 = DType("complex128", 13, "c", 16, 8, "=", "<c16", "D", builtins.complex)
+complex128 = DType("complex128", 13, "c", 128, "value", 128)
 cdouble = complex128
 clongdouble = complex128
 complex_ = complex128
 # low-precision storage dtypes. These are real monpy dtypes, but Python's
 # array-interface / DLPack surfaces do not have portable scalar encodings for them.
-bfloat16 = DType("bfloat16", 14, "f", 2, 2, "=", "", "", builtins.float)
-float8_e4m3fn = DType("float8_e4m3fn", 15, "q", 1, 1, "|", "", "", builtins.float)
-float8_e4m3fnuz = DType("float8_e4m3fnuz", 16, "q", 1, 1, "|", "", "", builtins.float)
-float8_e5m2 = DType("float8_e5m2", 17, "q", 1, 1, "|", "", "", builtins.float)
-float8_e5m2fnuz = DType("float8_e5m2fnuz", 18, "q", 1, 1, "|", "", "", builtins.float)
-float8_e8m0fnu = DType("float8_e8m0fnu", 19, "q", 1, 1, "|", "", "", builtins.float)
-float4_e2m1fn = DType("float4_e2m1fn", 20, "q", 1, 1, "|", "", "", builtins.float)
+bfloat16 = DType("bfloat16", 14, "f", 16, "value", 16)
+float8_e4m3fn = DType("float8_e4m3fn", 15, "q", 8, "value", 8)
+float8_e4m3fnuz = DType("float8_e4m3fnuz", 16, "q", 8, "value", 8)
+float8_e5m2 = DType("float8_e5m2", 17, "q", 8, "value", 8)
+float8_e5m2fnuz = DType("float8_e5m2fnuz", 18, "q", 8, "value", 8)
+float8_e8m0fnu = DType("float8_e8m0fnu", 19, "q", 8, "value", 8)
+float4_e2m1fn = DType("float4_e2m1fn", 20, "q", 4, "packed_subbyte", 4)
 
 _DT: tuple[DType, ...] = (
   bool,
@@ -386,24 +395,6 @@ _DTN: dict[str, DType] = {d.name: d for d in _DT} | {
   "clongdouble": complex128,
   "complex_": complex128,
 }  # name → DType
-_DTF: dict[str, DType] = {d.format: d for d in _DT if d.format} | {"?": bool}
-_DTBT: dict[str, DType] = {"|b1": bool, "|i1": int8, "|u1": uint8} | {
-  p + s: d
-  for s, d in [
-    ("i8", int64),
-    ("i4", int32),
-    ("i2", int16),
-    ("u8", uint64),
-    ("u4", uint32),
-    ("u2", uint16),
-    ("f2", float16),
-    ("f4", float32),
-    ("f8", float64),
-    ("c8", complex64),
-    ("c16", complex128),
-  ]
-  for p in "<="
-}  # native/little-endian array-interface typestr → DType
 _DTK: dict[DType, int] = {
   bool: DTYPE_KIND_BOOL,
   int64: DTYPE_KIND_SIGNED_INT,
@@ -426,25 +417,6 @@ _DTK: dict[DType, int] = {
   float8_e5m2fnuz: DTYPE_KIND_QUANT_FLOAT,
   float8_e8m0fnu: DTYPE_KIND_QUANT_FLOAT,
   float4_e2m1fn: DTYPE_KIND_QUANT_FLOAT,
-}
-_DT_BITS: dict[DType, int] = {d: d.itemsize * 8 for d in _DT} | {float4_e2m1fn: 4}
-_DT_STORAGE_BITS: dict[DType, int] = {d: d.itemsize * 8 for d in _DT} | {float4_e2m1fn: 4}
-_DT_STORAGE_KIND: dict[DType, str] = {d: "value" for d in _DT} | {float4_e2m1fn: "packed_subbyte"}
-_BUFFER_DTYPES: set[DType] = {
-  bool,
-  int64,
-  int32,
-  int16,
-  int8,
-  uint64,
-  uint32,
-  uint16,
-  uint8,
-  float16,
-  float32,
-  float64,
-  complex64,
-  complex128,
 }
 _CASTING_CODES: dict[str, int] = {
   "no": CASTING_NO,
@@ -1120,13 +1092,14 @@ class ndarray:
 
   @property
   def __array_interface__(self) -> dict[str, object]:
-    if not self.dtype.buffer_exportable:
+    dtype_info = _numpy_ops.dtype_info(self.dtype)
+    if not dtype_info.buffer_exportable:
       raise BufferError(f"{self.dtype.name} has no portable __array_interface__ storage format")
     s, st, i = self.shape, self.strides, self.itemsize
     return {
       "version": 3,
       "shape": s,
-      "typestr": self.dtype.typestr,
+      "typestr": dtype_info.typestr,
       "data": (builtins.int(self._native.data_address()), False),
       "strides": None if _is_c_contig(s, st, i) else st,
     }
@@ -4704,10 +4677,14 @@ def _resolve_dtype(v: object) -> DType:
   if isinstance(v, str):
     if v in _DTN:
       return _DTN[v]
-    if v in _DTBT:
-      return _DTBT[v]
-    if v in _DTF:
-      return _DTF[v]
+    try:
+      return _numpy_ops.dtype_from_typestr(v)
+    except NotImplementedError:
+      pass
+    try:
+      return _numpy_ops.dtype_from_buffer_format(v)
+    except NotImplementedError:
+      pass
     raise NotImplementedError(f"unsupported dtype: {v}")
   if v is builtins.bool:
     return bool
@@ -4723,10 +4700,7 @@ def _resolve_dtype(v: object) -> DType:
 
 
 def _dtype_from_typestr(typestr: str) -> DType:
-  try:
-    return _DTBT[typestr]
-  except KeyError as exc:
-    raise NotImplementedError(f"unsupported array-interface typestr: {typestr}") from exc
+  return _numpy_ops.dtype_from_typestr(typestr)
 
 
 def _array_interface(o: object) -> dict[str, object]:

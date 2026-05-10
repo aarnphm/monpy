@@ -7,6 +7,7 @@ import typing  # used by einsum (zip, etc.)
 from . import (
   _native,
   _resolve_dtype,
+  _scalarize_zero_dim,
   asarray,
   ascontiguousarray,
   diagonal,
@@ -69,12 +70,12 @@ def _has_vecdot_kernel(a: ndarray, b: ndarray) -> bool:
   return a.dtype == b.dtype and a.dtype in (float32, float64)
 
 
-def _norm2_all(x: ndarray) -> ndarray:
-  return ndarray._wrap(_w(_native.linalg_norm2_all, x._native))
+def _norm2_all(x: ndarray) -> object:
+  return _scalarize_zero_dim(ndarray._wrap(_w(_native.linalg_norm2_all, x._native)))
 
 
-def _norm1_all(x: ndarray) -> ndarray:
-  return ndarray._wrap(_w(_native.linalg_norm1_all, x._native))
+def _norm1_all(x: ndarray) -> object:
+  return _scalarize_zero_dim(ndarray._wrap(_w(_native.linalg_norm1_all, x._native)))
 
 
 def _norm2_last_axis(x: ndarray) -> ndarray:

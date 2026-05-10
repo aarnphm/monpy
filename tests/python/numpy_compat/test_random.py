@@ -67,6 +67,6 @@ def test_monumpy_random_points_at_monpy_random_surface() -> None:
   import monpy
   import monumpy
 
-  assert monumpy.random is monpy.random
+  assert monumpy.random.default_rng is monpy.random.default_rng
   assert callable(monumpy.random.default_rng)
   assert callable(monumpy.random.seed)

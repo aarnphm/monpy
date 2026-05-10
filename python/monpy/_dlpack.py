@@ -114,7 +114,7 @@ def _dtype_to_dlpack(dtype: object) -> tuple[int, int]:
     (_DLC_FLOAT, (mp.float16, mp.float32, mp.float64)),
     (_DLC_COMPLEX, (mp.complex64, mp.complex128)),
   ):
-    table.update((d, (code, d.itemsize * 8)) for d in dtypes)
+    table.update((d, (code, d.bits)) for d in dtypes)
   try:
     return table[typing.cast(mp.DType, dtype)]
   except KeyError as exc:
