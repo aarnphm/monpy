@@ -251,6 +251,42 @@ def test_jit_preserves_structured_output_tree() -> None:
   assert tree_unflatten(compiled.output_tree, graph.outputs) == {"a": (3, 1), "z": [2, None]}
 
 
+def test_jit_preserves_structured_input_tree() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+  from monpy._src.tree_util import tree_unflatten
+
+  @mp.jit
+  def f(pair: dict[str, lax.Tensor]) -> lax.Tensor:
+    return pair["x"] + pair["y"]
+
+  compiled = f.compile(
+    {
+      "y": lax.TensorSpec((3,), mp.float32, "cpu"),
+      "x": lax.TensorSpec((2, 3), mp.float32, "cpu"),
+    }
+  )
+
+  graph = compiled.graph
+  assert [node.op for node in graph.nodes] == ["input", "input", "add"]
+  assert graph.inputs == (0, 1)
+  assert graph.nodes[2].inputs == (0, 1)
+  assert graph.nodes[2].spec.shape == (2, 3)
+  assert tree_unflatten(compiled.input_trees[0], graph.inputs) == {"x": 0, "y": 1}
+
+
+def test_jit_rejects_static_input_spec_leaves() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  @mp.jit
+  def f(pair: dict[str, lax.Tensor]) -> lax.Tensor:
+    return pair["x"]
+
+  with pytest.raises(TypeError, match="TensorSpec"):
+    f.compile({"x": lax.TensorSpec((2, 3), mp.float32, "cpu"), "static": 1})
+
+
 def test_jit_rejects_static_output_leaves() -> None:
   import monpy as mp
   import monpy.lax as lax

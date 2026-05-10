@@ -24,6 +24,7 @@ class CompiledFunction:
   fn: Callable[..., object]
   graph: GraphIR
   backend: str
+  input_trees: tuple[PyTreeDef, ...] = ()
   output_tree: PyTreeDef = field(default_factory=lambda: PyTreeDef("leaf"))
 
 
@@ -34,14 +35,14 @@ class JittedFunction:
   dynamic_dims: Mapping[str, int | str] | None = None
   cache_size: int = 64
 
-  def compile(self, *specs: TensorSpec, weights: object | None = None) -> CompiledFunction:
+  def compile(self, *specs: object, weights: object | None = None) -> CompiledFunction:
     if weights is not None:
       raise NotImplementedError("external weight binding belongs to the next monpy.lax slice")
     trace = TraceContext()
-    inputs = tuple(trace.input(spec) for spec in specs)
-    outputs = self.fn(*inputs)
+    traced_args, input_trees = _trace_spec_args(trace, specs)
+    outputs = self.fn(*traced_args)
     graph, output_tree = trace.graph_and_output_tree(outputs)
-    return CompiledFunction(self.fn, graph, self.backend, output_tree)
+    return CompiledFunction(self.fn, graph, self.backend, input_trees, output_tree)
 
   def __call__(self, *args: object, **kwargs: object) -> object:
     if any(getattr(arg, "__monpy_kernel_tensor__", False) for arg in args):
@@ -62,6 +63,21 @@ def jit(
   if fn is None:
     return wrap
   return wrap(fn)
+
+
+def _trace_spec_args(trace: TraceContext, specs: tuple[object, ...]) -> tuple[tuple[object, ...], tuple[PyTreeDef, ...]]:
+  args: list[object] = []
+  treedefs: list[PyTreeDef] = []
+  for spec_tree in specs:
+    leaves, treedef = tree_flatten(spec_tree)
+    tensors = []
+    for leaf in leaves:
+      if not isinstance(leaf, TensorSpec):
+        raise TypeError("jit.compile inputs must be pytrees of monpy.lax.TensorSpec leaves")
+      tensors.append(trace.input(leaf))
+    args.append(tree_unflatten(treedef, tensors))
+    treedefs.append(treedef)
+  return tuple(args), tuple(treedefs)
 
 
 def _is_axis(value: object) -> bool:

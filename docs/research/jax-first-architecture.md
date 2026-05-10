@@ -301,8 +301,9 @@ The useful v1 contract is:
   order, and `None` as a no-leaf node.
 - `tree_unflatten(treedef, leaves)` to rebuild public return structure.
 - `tree_map(fn, x)` for transform plumbing and tests.
-- `jit.compile(...)` stores the output `PyTreeDef` on `CompiledFunction` while
-  `GraphIR.outputs` still sees only tensor leaves.
+- `jit.compile(...)` stores input and output `PyTreeDef`s on
+  `CompiledFunction` while `GraphIR.inputs` and `GraphIR.outputs` still see
+  only tensor leaves.
 - `vmap` uses the same treedef for `in_axes` / `out_axes` prefix validation
   instead of hand-rolled tuple/list/mapping logic.
 
