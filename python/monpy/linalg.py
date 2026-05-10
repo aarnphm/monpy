@@ -106,6 +106,21 @@ _INF = float("inf")
 _NEG_INF = float("-inf")
 
 
+def _is_kernel_value(value: object) -> bool:
+  return bool(getattr(value, "__monpy_kernel_tensor__", False))
+
+
+def _has_kernel_arg(values: typing.Iterable[object]) -> bool:
+  return builtins.any(_is_kernel_value(value) for value in values)
+
+
+def _shape_of(value: object) -> tuple[int, ...]:
+  shape = getattr(value, "shape", None)
+  if isinstance(shape, tuple):
+    return tuple(builtins.int(dim) for dim in shape)
+  return tuple(builtins.int(dim) for dim in _array(value).shape)
+
+
 def _prod(xs: typing.Iterable[int]) -> int:
   out = 1
   for x in xs:
@@ -221,6 +236,8 @@ def _kron_native(a: ndarray, b: ndarray) -> ndarray:
 
 
 def tensordot(a: object, b: object, axes: int | tuple[object, object] = 2) -> object:
+  if _has_kernel_arg((a, b)):
+    return _tensordot_staged(a, b, axes)
   A = _array(a)
   B = _array(b)
   if isinstance(axes, int):
@@ -250,6 +267,67 @@ def tensordot(a: object, b: object, axes: int | tuple[object, object] = 2) -> ob
   out = _matmul(A_mat, B_mat)
   out_shape = tuple(A.shape[d] for d in a_kept) + tuple(B.shape[d] for d in b_kept)
   return reshape(out, out_shape) if out_shape else out.reshape(())
+
+
+def _tensordot_staged(a: object, b: object, axes: int | tuple[object, object]) -> object:
+  if not _is_kernel_value(a) or not _is_kernel_value(b):
+    raise NotImplementedError("staged tensordot requires both operands to be traced tensors")
+  a_shape = _shape_of(a)
+  b_shape = _shape_of(b)
+  if isinstance(axes, int):
+    n = axes
+    a_axes = tuple(range(len(a_shape) - n, len(a_shape)))
+    b_axes = tuple(range(n))
+  else:
+    a_axes, b_axes = axes
+    a_axes = _axis_tuple(a_axes)
+    b_axes = _axis_tuple(b_axes)
+  a_axes = tuple(_normalize_axis(axis, len(a_shape)) for axis in a_axes)
+  b_axes = tuple(_normalize_axis(axis, len(b_shape)) for axis in b_axes)
+  if len(a_axes) != len(b_axes):
+    raise ValueError("tensordot: axes length mismatch")
+  if len(set(a_axes)) != len(a_axes) or len(set(b_axes)) != len(b_axes):
+    raise ValueError("tensordot: duplicate axes are not supported")
+  for ax_a, ax_b in zip(a_axes, b_axes, strict=True):
+    if a_shape[ax_a] != b_shape[ax_b]:
+      raise ValueError("tensordot: axis size mismatch")
+  a_kept = tuple(axis for axis in range(len(a_shape)) if axis not in a_axes)
+  b_kept = tuple(axis for axis in range(len(b_shape)) if axis not in b_axes)
+  return _staged_matmul_contract(a, a_shape, a_kept, a_axes, b, b_shape, b_axes, b_kept)
+
+
+def _staged_matmul_contract(
+  a: object,
+  a_shape: tuple[int, ...],
+  a_kept: tuple[int, ...],
+  a_axes: tuple[int, ...],
+  b: object,
+  b_shape: tuple[int, ...],
+  b_axes: tuple[int, ...],
+  b_kept: tuple[int, ...],
+) -> object:
+  a_perm_axes = a_kept + a_axes
+  b_perm_axes = b_axes + b_kept
+  a_perm = _transpose_if_needed(a, a_perm_axes)
+  b_perm = _transpose_if_needed(b, b_perm_axes)
+  a_kept_size = _prod(a_shape[axis] for axis in a_kept)
+  contract_size = _prod(a_shape[axis] for axis in a_axes)
+  b_kept_size = _prod(b_shape[axis] for axis in b_kept)
+  a_mat = _reshape_if_needed(a_perm, (a_kept_size, contract_size))
+  b_mat = _reshape_if_needed(b_perm, (contract_size, b_kept_size))
+  out = matmul(a_mat, b_mat)
+  out_shape = tuple(a_shape[axis] for axis in a_kept) + tuple(b_shape[axis] for axis in b_kept)
+  return _reshape_if_needed(out, out_shape)
+
+
+def _transpose_if_needed(value: object, axes: tuple[int, ...]) -> object:
+  if axes == tuple(range(len(axes))):
+    return value
+  return transpose(value, axes)
+
+
+def _reshape_if_needed(value: object, shape: tuple[int, ...]) -> object:
+  return value if _shape_of(value) == shape else reshape(value, shape)
 
 
 def kron(a: object, b: object) -> ndarray:
@@ -505,6 +583,8 @@ def einsum(subscripts: str, *operands: object, **kwargs: object) -> object:
   in_subs = in_subs.split(",")
   if len(in_subs) != len(operands):
     raise ValueError("einsum: subscript / operand count mismatch")
+  if _has_kernel_arg(operands):
+    return _einsum_staged(in_subs, out_sub, operands)
   arrs = [asarray(op) for op in operands]
   for sub, arr in builtins.zip(in_subs, arrs, strict=True):
     if len(sub) != arr.ndim:
@@ -525,6 +605,83 @@ def einsum(subscripts: str, *operands: object, **kwargs: object) -> object:
     cur_sub, cur = _einsum_pair_contract(cur_sub, cur, nxt_sub, nxt)
   # Final reduction: sum out any labels not in the output, then permute.
   return _einsum_finalise(cur_sub, cur, out_sub)
+
+
+def _einsum_staged(in_subs: list[str], out_sub: str | None, operands: tuple[object, ...]) -> object:
+  if not operands or not builtins.all(_is_kernel_value(operand) for operand in operands):
+    raise NotImplementedError("staged einsum requires all operands to be traced tensors")
+  if builtins.any("." in sub for sub in in_subs):
+    raise NotImplementedError("staged einsum does not support ellipsis yet")
+  shapes = [_shape_of(operand) for operand in operands]
+  for sub, shape in builtins.zip(in_subs, shapes, strict=True):
+    if len(sub) != len(shape):
+      raise ValueError(f"einsum: subscript '{sub}' does not match operand ndim {len(shape)}")
+    if len(set(sub)) != len(sub):
+      raise NotImplementedError("staged einsum does not support repeated labels in one operand yet")
+  _validate_einsum_label_dims(in_subs, shapes)
+  if out_sub is None:
+    counts: dict[str, int] = {}
+    for sub in in_subs:
+      for ch in sub:
+        counts[ch] = counts.get(ch, 0) + 1
+    out_sub = "".join(sorted([ch for ch, count in counts.items() if count == 1]))
+  if len(set(out_sub)) != len(out_sub):
+    raise ValueError("einsum: output labels must be unique")
+  if not set(out_sub).issubset(set("".join(in_subs))):
+    raise ValueError("einsum: output label does not appear in inputs")
+  cur_sub, cur = in_subs[0], operands[0]
+  for nxt_sub, nxt in builtins.zip(in_subs[1:], operands[1:]):
+    cur_sub, cur = _einsum_pair_contract_staged(cur_sub, cur, nxt_sub, nxt, out_sub)
+  return _einsum_finalise(cur_sub, cur, out_sub)
+
+
+def _validate_einsum_label_dims(in_subs: list[str], shapes: list[tuple[int, ...]]) -> None:
+  dims: dict[str, int] = {}
+  for sub, shape in builtins.zip(in_subs, shapes, strict=True):
+    for label, dim in builtins.zip(sub, shape, strict=True):
+      known = dims.get(label)
+      if known is None:
+        dims[label] = dim
+      elif known != dim:
+        raise ValueError("einsum: label dimension mismatch")
+
+
+def _einsum_pair_contract_staged(la: str, a: object, lb: str, b: object, out_sub: str) -> tuple[str, object]:
+  if la == lb:
+    return la, multiply(a, b)
+  shared = [ch for ch in la if ch in lb]
+  contracted = [ch for ch in shared if ch not in out_sub]
+  batch_shared = [ch for ch in shared if ch in out_sub]
+  if not contracted:
+    labels = _ordered_einsum_labels(out_sub, la, lb)
+    left = _einsum_align_staged(a, la, labels)
+    right = _einsum_align_staged(b, lb, labels)
+    return "".join(labels), multiply(left, right)
+  if batch_shared:
+    raise NotImplementedError("staged einsum does not support batched matmul contractions yet")
+  a_axes = tuple(la.index(ch) for ch in contracted)
+  b_axes = tuple(lb.index(ch) for ch in contracted)
+  a_kept = [ch for ch in la if ch not in contracted]
+  b_kept = [ch for ch in lb if ch not in contracted]
+  out = tensordot(a, b, axes=(a_axes, b_axes))
+  return "".join(a_kept + b_kept), out
+
+
+def _ordered_einsum_labels(out_sub: str, *input_subs: str) -> tuple[str, ...]:
+  labels: list[str] = list(out_sub)
+  for sub in input_subs:
+    for ch in sub:
+      if ch not in labels:
+        labels.append(ch)
+  return tuple(labels)
+
+
+def _einsum_align_staged(value: object, sub: str, labels: tuple[str, ...]) -> object:
+  shape = _shape_of(value)
+  axes = tuple(sub.index(ch) for ch in labels if ch in sub)
+  transposed = _transpose_if_needed(value, axes)
+  aligned_shape = tuple(shape[sub.index(ch)] if ch in sub else 1 for ch in labels)
+  return _reshape_if_needed(transposed, aligned_shape)
 
 
 def _einsum_trace_diag(sub: str, arr: ndarray) -> tuple[str, ndarray]:

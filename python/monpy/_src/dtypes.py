@@ -52,6 +52,9 @@ class DTypeSpec:
     return self.storage is StorageKind.PACKED_SUBBYTE
 
 
+BOOL_DTYPE = DTypeSpec("bool", 0, DTypeKind.BOOL, StorageKind.VALUE, 8, 8, "bool", (), "bool", True)
+
+
 def _kind_from_monpy(kind: str) -> DTypeKind:
   if kind == "b":
     return DTypeKind.BOOL

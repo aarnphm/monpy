@@ -24,6 +24,29 @@ def matmul(lhs: object, rhs: object) -> Tensor:
   return _one_tensor((lhs, rhs))._trace.matmul(lhs, rhs)
 
 
+def where(condition: object, x: object, y: object) -> Tensor:
+  return _one_tensor((condition, x, y))._trace.where(condition, x, y)
+
+
+def reduce(
+  x: object,
+  axis: object,
+  reduce_op: int,
+  *,
+  dtype: object = None,
+  keepdims: bool = False,
+  result_dtype: object = None,
+) -> Tensor:
+  return _expect_tensor(x)._trace.reduce(
+    x,
+    axis,
+    reduce_op,
+    dtype=dtype,
+    keepdims=keepdims,
+    result_dtype=result_dtype,
+  )
+
+
 def reshape(x: object, shape: int | Sequence[int]) -> Tensor:
   tensor = _expect_tensor(x)
   target = (shape,) if isinstance(shape, int) else tuple(int(dim) for dim in shape)

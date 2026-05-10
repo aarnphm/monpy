@@ -195,22 +195,21 @@ As of 2026-05-10:
 - `docs/research/jax-first-architecture.md` owns the primitive spine migration
   plan.
 - The traceable public-operation slice is intentionally small: arithmetic
-  ufunc identity for `add`/`subtract`/`multiply`/`divide`, `matmul`,
-  `reshape`, `transpose`, `broadcast_to`, `cast`, `custom_call`, `where`, and
-  `reduce_p` for public reductions.
+  ufunc identity for `add`/`subtract`/`multiply`/`divide`, comparison ufuncs
+  for `equal`/`not_equal`/`less`/`less_equal`/`greater`/`greater_equal`,
+  `matmul`, `reshape`, `transpose`, `broadcast_to`, `cast`, `custom_call`,
+  `where`, and `reduce_p` for public reductions.
 - Binary staged `einsum` now handles the common no-diagonal, no-ellipsis cases:
   matrix contraction lowers to `matmul`; dot-style full contractions lower to
   `mul` plus `reduce`; non-batched pair contractions can use
   transpose/reshape/matmul/reshape.
+- `mp.where(y > 0, ...)` now traces through comparison dunders on staged
+  `Tensor`, bool-typed comparison primitives, and a traced truthiness guard.
 
-The next patch should make the advertised `mp.where(y > 0, ...)` style trace
-honestly. That means comparison primitives, comparison dunders on staged
-`Tensor`, boolean traced-result dtype, and `Tensor.__bool__` raising instead of
-letting Python branch on a traced value. After that, add the missing batched
-contraction case (`bij,bjk->bik`) without pretending it is one flat GEMM. On
-Apple Accelerate that means either a native loop over batch slices or a
-dedicated Mojo batched kernel, not the current eager `tensordot` flattening
-shortcut.
+The next patch should add the missing batched contraction case (`bij,bjk->bik`)
+without pretending it is one flat GEMM. On Apple Accelerate that means either a
+native loop over batch slices or a dedicated Mojo batched kernel, not the
+current eager `tensordot` flattening shortcut.
 
 ## upstream anchors
 

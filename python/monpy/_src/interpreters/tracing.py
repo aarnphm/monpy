@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from typing import Any, cast
 
 from ..core import (
   GraphIR,
@@ -12,33 +13,21 @@ from ..core import (
   SymbolicDim,
   TensorSpec,
   ValueRef,
-  add_p,
   broadcast_to_p,
   cast_p,
   constant_p,
   custom_call_p,
-  div_p,
+  get_primitive,
   input_p,
   matmul_p,
-  mul_p,
+  reduce_p,
   reshape_p,
-  sub_p,
   transpose_p,
+  where_p,
 )
-from ..dtypes import from_monpy_dtype
+from ..dtypes import BOOL_DTYPE, from_monpy_dtype
 from ..lax.tensor import Tensor
 from ..layout import LayoutSpec
-
-_PRIMITIVE_BY_NAME: dict[str, Primitive] = {
-  "add": add_p,
-  "sub": sub_p,
-  "subtract": sub_p,
-  "mul": mul_p,
-  "multiply": mul_p,
-  "div": div_p,
-  "divide": div_p,
-}
-
 
 @dataclass(slots=True)
 class TraceContext:
@@ -51,15 +40,18 @@ class TraceContext:
     return Tensor(node_ref, spec, self)
 
   def constant(self, value: object, like: Tensor) -> Tensor:
+    if not _is_scalar_constant(value):
+      raise NotImplementedError("staged non-scalar constants require explicit TensorSpec inputs or external weights")
     spec = TensorSpec((), like.spec.dtype, like.spec.device)
     return Tensor(self._append(constant_p, (), {"value": repr(value)}, spec), spec, self)
 
   def binary(self, op_name: str, lhs: object, rhs: object) -> Tensor:
     lhs_t, rhs_t = self._ensure_pair(lhs, rhs)
-    primitive = _PRIMITIVE_BY_NAME[op_name]
+    primitive = get_primitive(op_name)
     shape = _broadcast_shape(lhs_t.spec.shape, rhs_t.spec.shape)
     layout = LayoutSpec.row_major(tuple(_static_dim(dim) for dim in shape))
-    spec = TensorSpec(shape, lhs_t.spec.dtype, lhs_t.spec.device, layout)
+    dtype = BOOL_DTYPE if primitive.ufunc_kind == "compare" else lhs_t.spec.dtype
+    spec = TensorSpec(shape, dtype, lhs_t.spec.device, layout)
     return Tensor(self._append(primitive, (lhs_t.node, rhs_t.node), {}, spec), spec, self)
 
   def unary(self, op_name: str, x: object) -> Tensor:
@@ -72,6 +64,35 @@ class TraceContext:
     out_shape = _matmul_shape(lhs_t.spec.shape, rhs_t.spec.shape)
     spec = TensorSpec(out_shape, lhs_t.spec.dtype, lhs_t.spec.device)
     return Tensor(self._append(matmul_p, (lhs_t.node, rhs_t.node), {}, spec), spec, self)
+
+  def where(self, condition: object, lhs: object, rhs: object) -> Tensor:
+    condition_t = self.ensure_tensor(condition)
+    lhs_t, rhs_t = self._ensure_pair(lhs, rhs)
+    branch_shape = _broadcast_shape(lhs_t.spec.shape, rhs_t.spec.shape)
+    out_shape = _broadcast_shape(condition_t.spec.shape, branch_shape)
+    layout = LayoutSpec.row_major(tuple(_static_dim(dim) for dim in out_shape))
+    spec = TensorSpec(out_shape, lhs_t.spec.dtype, lhs_t.spec.device, layout)
+    return Tensor(self._append(where_p, (condition_t.node, lhs_t.node, rhs_t.node), {}, spec), spec, self)
+
+  def reduce(
+    self,
+    x: object,
+    axis: object,
+    reduce_op: int,
+    *,
+    dtype: object = None,
+    keepdims: bool = False,
+    result_dtype: object = None,
+  ) -> Tensor:
+    tensor = self.ensure_tensor(x)
+    source = self.cast(tensor, dtype) if dtype is not None else tensor
+    axes = _normalize_reduce_axes(axis, len(source.spec.shape))
+    out_shape = _reduce_shape(source.spec.shape, axes, keepdims)
+    out_dtype = from_monpy_dtype(result_dtype) if result_dtype is not None else source.spec.dtype
+    layout = LayoutSpec.row_major(tuple(_static_dim(dim) for dim in out_shape))
+    spec = TensorSpec(out_shape, out_dtype, source.spec.device, layout)
+    attrs: dict[str, object] = {"axes": axes, "keepdims": keepdims, "reduce_op": reduce_op}
+    return Tensor(self._append(reduce_p, (source.node,), attrs, spec), spec, self)
 
   def reshape(self, tensor: Tensor, shape: tuple[int, ...]) -> Tensor:
     layout = tensor.spec.layout.reshape(shape)
@@ -139,6 +160,17 @@ def _flatten_outputs(outputs: object) -> tuple[Tensor, ...]:
   raise TypeError("jitted functions must return a Tensor or tuple of Tensors")
 
 
+def _is_scalar_constant(value: object) -> bool:
+  if isinstance(value, (bool, int, float, complex)):
+    return True
+  shape = getattr(value, "shape", None)
+  if isinstance(shape, tuple):
+    return len(shape) == 0
+  if isinstance(value, (list, tuple, dict, set, frozenset)):
+    return False
+  return not hasattr(value, "__iter__")
+
+
 def _static_dim(dim: object) -> int:
   if isinstance(dim, int):
     return dim
@@ -146,6 +178,34 @@ def _static_dim(dim: object) -> int:
 
 
 Shape = tuple[int | SymbolicDim | str, ...]
+
+
+def _normalize_reduce_axes(axis: object, ndim: int) -> tuple[int, ...]:
+  if axis is None:
+    return tuple(range(ndim))
+  if isinstance(axis, int):
+    raw_axes = (axis,)
+  elif isinstance(axis, Iterable):
+    raw_axes = tuple(int(cast(Any, ax)) for ax in axis)
+  else:
+    raw_axes = (int(cast(Any, axis)),)
+  axes = tuple(_normalize_axis(axis, ndim) for axis in raw_axes)
+  if len(set(axes)) != len(axes):
+    raise ValueError("reduce axes must be unique")
+  return axes
+
+
+def _normalize_axis(axis: int, ndim: int) -> int:
+  result = axis + ndim if axis < 0 else axis
+  if result < 0 or result >= ndim:
+    raise ValueError(f"reduce axis {axis} is out of bounds for rank {ndim}")
+  return result
+
+
+def _reduce_shape(shape: Shape, axes: tuple[int, ...], keepdims: bool) -> Shape:
+  if keepdims:
+    return tuple(1 if idx in axes else dim for idx, dim in enumerate(shape))
+  return tuple(dim for idx, dim in enumerate(shape) if idx not in axes)
 
 
 def _broadcast_shape(lhs: Shape, rhs: Shape) -> Shape:

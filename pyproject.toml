@@ -28,6 +28,12 @@ strip = true
 generate-stub = false
 module-name = "monpy._native"
 
+[tool.ruff]
+extend-include = ["*.ipynb"]
+preview = true
+line-length = 119
+indent-width = 2
+
 [tool.ruff.lint]
 ignore = ["E111", "E114"]
 select = ["E", "F", "I", "UP", "B", "ANN"]

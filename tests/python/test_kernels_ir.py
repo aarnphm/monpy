@@ -5,6 +5,8 @@ import subprocess
 import sys
 import textwrap
 
+import pytest
+
 
 def test_monpy_lax_and_extend_imports_are_lazy_and_old_kernels_breaks() -> None:
   code = textwrap.dedent(
@@ -21,7 +23,11 @@ def test_monpy_lax_and_extend_imports_are_lazy_and_old_kernels_breaks() -> None:
     assert "monpy.extend" not in sys.modules
     assert "monpy.kernels" not in sys.modules
 
-    for name in ("jit", "vmap", "Tensor", "TensorSpec", "LayoutSpec", "TileSpec", "DTypeSpec", "DeviceSpec", "SymbolicDim"):
+    assert callable(monpy.jit)
+    assert callable(monpy.vmap)
+    assert "monpy.lax" not in sys.modules
+
+    for name in ("Tensor", "TensorSpec", "LayoutSpec", "TileSpec", "DTypeSpec", "DeviceSpec", "SymbolicDim"):
       assert not hasattr(monpy, name), name
 
     try:
@@ -101,6 +107,36 @@ def test_layout_spec_native_lowering_decisions() -> None:
   assert custom.parameters["layout_tile_vector_width"] == 4
 
 
+def test_public_ufuncs_share_lax_primitive_identity() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  assert mp.add.primitive is lax.add_p
+  assert mp.subtract.primitive is lax.sub_p
+  assert mp.multiply.primitive is lax.mul_p
+  assert mp.divide.primitive is lax.div_p
+  assert mp.equal.primitive is lax.equal_p
+  assert mp.not_equal.primitive is lax.not_equal_p
+  assert mp.less.primitive is lax.less_p
+  assert mp.less_equal.primitive is lax.less_equal_p
+  assert mp.greater.primitive is lax.greater_p
+  assert mp.greater_equal.primitive is lax.greater_equal_p
+  assert lax.get_primitive("subtract") is lax.sub_p
+  assert lax.get_primitive("multiply") is lax.mul_p
+  assert lax.get_primitive("divide") is lax.div_p
+
+  assert lax.add_p.ufunc_kind == "binary"
+  assert lax.add_p.ufunc_op == int(mp.BinaryOp.ADD)
+  assert lax.add_p.ufunc_nin == 2
+  assert lax.add_p.ufunc_nout == 1
+  assert lax.add_p.ufunc_identity == 0
+  assert lax.add_p.reduce_op == int(mp.ReduceOp.SUM)
+  assert lax.greater_p.ufunc_kind == "compare"
+  assert lax.greater_p.ufunc_op == int(mp.CompareOp.GT)
+  assert lax.greater_p.ufunc_nin == 2
+  assert lax.greater_p.ufunc_nout == 1
+
+
 def test_jit_traces_graph_ir_with_layout_metadata() -> None:
   import monpy as mp
   import monpy.lax as lax
@@ -122,6 +158,219 @@ def test_jit_traces_graph_ir_with_layout_metadata() -> None:
   assert graph.nodes[4].spec.shape == (2, 4)
   assert graph.nodes[4].spec.layout.shape == (2, 4)
   assert graph.structural_key
+
+
+def test_jit_traces_where_as_primitive() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  @lax.jit
+  def f(mask: lax.Tensor, x: lax.Tensor, y: lax.Tensor) -> lax.Tensor:
+    return mp.where(mask, x, y)
+
+  compiled = f.compile(
+    lax.TensorSpec((2, 3), mp.bool, "cpu"),
+    lax.TensorSpec((2, 3), mp.float32, "cpu"),
+    lax.TensorSpec((2, 3), mp.float32, "cpu"),
+  )
+
+  graph = compiled.graph
+  assert [node.op for node in graph.nodes] == ["input", "input", "input", "where"]
+  assert graph.nodes[3].primitive is lax.where_p
+  assert graph.nodes[3].spec.shape == (2, 3)
+  assert graph.nodes[3].spec.dtype.name == "float32"
+
+
+def test_jit_traces_comparison_ufunc_as_bool_primitive() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  @mp.jit
+  def f(x: lax.Tensor) -> lax.Tensor:
+    return mp.greater(x, 0)
+
+  compiled = f.compile(lax.TensorSpec((2, 3), mp.float32, "cpu"))
+
+  graph = compiled.graph
+  assert [node.op for node in graph.nodes] == ["input", "constant", "greater"]
+  assert graph.nodes[2].primitive is lax.greater_p
+  assert graph.nodes[2].spec.shape == (2, 3)
+  assert graph.nodes[2].spec.dtype.name == "bool"
+
+
+def test_jit_traces_where_comparison_docs_example() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  @mp.jit
+  def f(x: lax.Tensor, w: lax.Tensor, bias: lax.Tensor) -> lax.Tensor:
+    y = mp.einsum("ij,jk->ik", x, w)
+    return mp.where(y > 0, y + bias, 0)
+
+  compiled = f.compile(
+    lax.TensorSpec((2, 3), mp.float32, "cpu"),
+    lax.TensorSpec((3, 4), mp.float32, "cpu"),
+    lax.TensorSpec((4,), mp.float32, "cpu"),
+  )
+
+  graph = compiled.graph
+  assert [node.op for node in graph.nodes] == [
+    "input",
+    "input",
+    "input",
+    "matmul",
+    "constant",
+    "greater",
+    "add",
+    "constant",
+    "where",
+  ]
+  assert graph.nodes[5].primitive is lax.greater_p
+  assert graph.nodes[5].spec.dtype.name == "bool"
+  assert graph.nodes[8].primitive is lax.where_p
+  assert graph.nodes[8].spec.shape == (2, 4)
+
+
+def test_traced_tensor_truthiness_is_rejected() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  @mp.jit
+  def f(x: lax.Tensor) -> lax.Tensor:
+    if x:
+      return x
+    return x
+
+  with pytest.raises(TypeError, match="truth value of a traced monpy.Tensor"):
+    f.compile(lax.TensorSpec((2, 3), mp.float32, "cpu"))
+
+
+def test_jit_rejects_captured_non_scalar_array_constant() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  captured = mp.asarray([1, 2, 3], dtype=mp.float32)
+
+  @mp.jit
+  def f(x: lax.Tensor) -> lax.Tensor:
+    return x + captured
+
+  with pytest.raises(NotImplementedError, match="non-scalar constants"):
+    f.compile(lax.TensorSpec((3,), mp.float32, "cpu"))
+
+
+def test_top_level_jit_traces_public_numpy_api() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  @mp.jit
+  def f(x: lax.Tensor, y: lax.Tensor) -> lax.Tensor:
+    return mp.add(x, y)
+
+  compiled = f.compile(
+    lax.TensorSpec((2, 3), mp.float32, "cpu"),
+    lax.TensorSpec((2, 3), mp.float32, "cpu"),
+  )
+
+  graph = compiled.graph
+  assert [node.op for node in graph.nodes] == ["input", "input", "add"]
+  assert graph.nodes[2].primitive is lax.add_p
+  assert graph.nodes[2].spec.shape == (2, 3)
+
+
+def test_jit_traces_sum_axis_as_reduce_primitive() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  @mp.jit
+  def f(x: lax.Tensor) -> lax.Tensor:
+    return mp.sum(x, axis=1, keepdims=True)
+
+  compiled = f.compile(lax.TensorSpec((2, 3), mp.float32, "cpu"))
+
+  graph = compiled.graph
+  assert [node.op for node in graph.nodes] == ["input", "reduce"]
+  assert graph.nodes[1].primitive is lax.reduce_p
+  assert graph.nodes[1].attrs == {"axes": (1,), "keepdims": True, "reduce_op": int(mp.ReduceOp.SUM)}
+  assert graph.nodes[1].spec.shape == (2, 1)
+  assert graph.nodes[1].spec.dtype.name == "float32"
+
+
+def test_jit_traces_sum_dtype_cast_before_reduce() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  @mp.jit
+  def f(x: lax.Tensor) -> lax.Tensor:
+    return mp.sum(x, dtype=mp.float64)
+
+  compiled = f.compile(lax.TensorSpec((2, 3), mp.float32, "cpu"))
+
+  graph = compiled.graph
+  assert [node.op for node in graph.nodes] == ["input", "cast", "reduce"]
+  assert graph.nodes[1].attrs == {"dtype": "float64"}
+  assert graph.nodes[2].primitive is lax.reduce_p
+  assert graph.nodes[2].attrs == {"axes": (0, 1), "keepdims": False, "reduce_op": int(mp.ReduceOp.SUM)}
+  assert graph.nodes[2].spec.shape == ()
+  assert graph.nodes[2].spec.dtype.name == "float64"
+
+
+def test_jit_traces_ufunc_reduce_as_reduce_primitive() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  @mp.jit
+  def f(x: lax.Tensor) -> lax.Tensor:
+    return mp.add.reduce(x, axis=0)
+
+  compiled = f.compile(lax.TensorSpec((2, 3), mp.float32, "cpu"))
+
+  graph = compiled.graph
+  assert [node.op for node in graph.nodes] == ["input", "reduce"]
+  assert graph.nodes[1].primitive is lax.reduce_p
+  assert graph.nodes[1].attrs == {"axes": (0,), "keepdims": False, "reduce_op": int(mp.ReduceOp.SUM)}
+  assert graph.nodes[1].spec.shape == (3,)
+
+
+def test_jit_traces_einsum_matmul_case_as_matmul() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  @mp.jit
+  def f(x: lax.Tensor, w: lax.Tensor) -> lax.Tensor:
+    return mp.einsum("ij,jk->ik", x, w)
+
+  compiled = f.compile(
+    lax.TensorSpec((2, 3), mp.float32, "cpu"),
+    lax.TensorSpec((3, 4), mp.float32, "cpu"),
+  )
+
+  graph = compiled.graph
+  assert [node.op for node in graph.nodes] == ["input", "input", "matmul"]
+  assert graph.nodes[2].primitive is lax.matmul_p
+  assert graph.nodes[2].spec.shape == (2, 4)
+
+
+def test_jit_traces_einsum_dot_case_as_multiply_reduce() -> None:
+  import monpy as mp
+  import monpy.lax as lax
+
+  @mp.jit
+  def f(x: lax.Tensor, y: lax.Tensor) -> lax.Tensor:
+    return mp.einsum("i,i->", x, y)
+
+  compiled = f.compile(
+    lax.TensorSpec((3,), mp.float32, "cpu"),
+    lax.TensorSpec((3,), mp.float32, "cpu"),
+  )
+
+  graph = compiled.graph
+  assert [node.op for node in graph.nodes] == ["input", "input", "mul", "reduce"]
+  assert graph.nodes[2].primitive is lax.mul_p
+  assert graph.nodes[2].spec.shape == (3,)
+  assert graph.nodes[3].primitive is lax.reduce_p
+  assert graph.nodes[3].attrs == {"axes": (0,), "keepdims": False, "reduce_op": int(mp.ReduceOp.SUM)}
+  assert graph.nodes[3].spec.shape == ()
 
 
 def test_graph_ir_key_changes_when_shape_dtype_params_or_layout_change() -> None:

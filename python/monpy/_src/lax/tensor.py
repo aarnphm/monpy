@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, Sequence
 
 from ..core import TensorSpec, ValueRef
 
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
   from ..interpreters.tracing import TraceContext
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class Tensor:
   node: ValueRef
   spec: TensorSpec
@@ -54,6 +54,27 @@ class Tensor:
 
   def __rtruediv__(self, other: object) -> Tensor:
     return self._trace.binary("div", other, self)
+
+  def __lt__(self, other: object) -> Tensor:
+    return self._trace.binary("less", self, other)
+
+  def __le__(self, other: object) -> Tensor:
+    return self._trace.binary("less_equal", self, other)
+
+  def __gt__(self, other: object) -> Tensor:
+    return self._trace.binary("greater", self, other)
+
+  def __ge__(self, other: object) -> Tensor:
+    return self._trace.binary("greater_equal", self, other)
+
+  def __eq__(self, other: object) -> Any:
+    return self._trace.binary("equal", self, other)
+
+  def __ne__(self, other: object) -> Any:
+    return self._trace.binary("not_equal", self, other)
+
+  def __bool__(self) -> bool:
+    raise TypeError("the truth value of a traced monpy.Tensor is ambiguous; use monpy.where or an explicit reduction")
 
   def __matmul__(self, other: object) -> Tensor:
     return self._trace.matmul(self, other)

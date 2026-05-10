@@ -7,7 +7,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
 from enum import Enum
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from .dtypes import DTypeSpec, from_monpy_dtype
 from .layout import LayoutSpec
@@ -19,6 +19,7 @@ DTypeRule = Callable[..., DTypeSpec]
 EagerBindRule = Callable[..., object]
 BatchingRule = Callable[..., object]
 LoweringRule = Callable[..., object]
+NativeUfuncKind = Literal["logical", "compare", "predicate", "binary", "unary", "unary_preserve"]
 
 
 class Op(str, Enum):
@@ -35,6 +36,12 @@ class Op(str, Enum):
   SUB = "sub"
   MUL = "mul"
   DIV = "div"
+  EQUAL = "equal"
+  NOT_EQUAL = "not_equal"
+  LESS = "less"
+  LESS_EQUAL = "less_equal"
+  GREATER = "greater"
+  GREATER_EQUAL = "greater_equal"
   MATMUL = "matmul"
   REDUCE = "reduce"
   WHERE = "where"
@@ -49,7 +56,20 @@ class Primitive:
   reloads instead of smuggling Python object identity into the cache key.
   """
 
-  __slots__ = ("name", "abstract_eval", "dtype_rule", "eager_impl", "batching_rule", "target_lowerings")
+  __slots__ = (
+    "name",
+    "abstract_eval",
+    "dtype_rule",
+    "eager_impl",
+    "batching_rule",
+    "target_lowerings",
+    "ufunc_kind",
+    "ufunc_op",
+    "ufunc_nin",
+    "ufunc_nout",
+    "ufunc_identity",
+    "reduce_op",
+  )
 
   def __init__(
     self,
@@ -60,6 +80,12 @@ class Primitive:
     eager_impl: EagerBindRule | None = None,
     batching_rule: BatchingRule | None = None,
     target_lowerings: Mapping[str, LoweringRule] | None = None,
+    ufunc_kind: NativeUfuncKind | None = None,
+    ufunc_op: int | None = None,
+    ufunc_nin: int | None = None,
+    ufunc_nout: int | None = None,
+    ufunc_identity: object = None,
+    reduce_op: int | None = None,
   ) -> None:
     self.name = name
     self.abstract_eval = abstract_eval
@@ -67,6 +93,29 @@ class Primitive:
     self.eager_impl = eager_impl
     self.batching_rule = batching_rule
     self.target_lowerings = dict(target_lowerings or {})
+    self.ufunc_kind = ufunc_kind
+    self.ufunc_op = ufunc_op
+    self.ufunc_nin = ufunc_nin
+    self.ufunc_nout = ufunc_nout
+    self.ufunc_identity = ufunc_identity
+    self.reduce_op = reduce_op
+
+  def def_ufunc(
+    self,
+    *,
+    kind: NativeUfuncKind,
+    op: int,
+    nin: int,
+    nout: int,
+    identity: object = None,
+    reduce_op: int | None = None,
+  ) -> None:
+    self.ufunc_kind = kind
+    self.ufunc_op = op
+    self.ufunc_nin = nin
+    self.ufunc_nout = nout
+    self.ufunc_identity = identity
+    self.reduce_op = reduce_op
 
   def def_lowering(self, target: str, rule: LoweringRule) -> None:
     self.target_lowerings[target] = rule
@@ -90,12 +139,20 @@ class Primitive:
 @dataclass(slots=True)
 class PrimitiveRegistry:
   _primitives: dict[str, Primitive] = field(default_factory=dict)
+  _aliases: dict[str, str] = field(default_factory=dict)
 
   def register(self, primitive: Primitive) -> Primitive:
-    if primitive.name in self._primitives:
+    if primitive.name in self._primitives or primitive.name in self._aliases:
       raise ValueError(f"primitive already registered: {primitive.name}")
     self._primitives[primitive.name] = primitive
     return primitive
+
+  def alias(self, alias: str, target: str) -> None:
+    if alias in self._primitives or alias in self._aliases:
+      raise ValueError(f"primitive already registered: {alias}")
+    if target not in self._primitives:
+      raise KeyError(f"cannot alias unknown monpy primitive: {target}")
+    self._aliases[alias] = target
 
   def define(
     self,
@@ -117,13 +174,14 @@ class PrimitiveRegistry:
     )
 
   def get(self, name: str) -> Primitive:
+    target = self._aliases.get(name, name)
     try:
-      return self._primitives[name]
+      return self._primitives[target]
     except KeyError as exc:
       raise KeyError(f"unknown monpy primitive: {name}") from exc
 
   def __contains__(self, name: object) -> bool:
-    return isinstance(name, str) and name in self._primitives
+    return isinstance(name, str) and (name in self._primitives or name in self._aliases)
 
   def names(self) -> tuple[str, ...]:
     return tuple(sorted(self._primitives))
@@ -153,6 +211,10 @@ def define_primitive(
   )
 
 
+def alias_primitive(alias: str, target: str) -> None:
+  PRIMITIVES.alias(alias, target)
+
+
 def get_primitive(name: str) -> Primitive:
   return PRIMITIVES.get(name)
 
@@ -180,10 +242,20 @@ add_p = define_primitive("add")
 sub_p = define_primitive("sub")
 mul_p = define_primitive("mul")
 div_p = define_primitive("div")
+equal_p = define_primitive("equal")
+not_equal_p = define_primitive("not_equal")
+less_p = define_primitive("less")
+less_equal_p = define_primitive("less_equal")
+greater_p = define_primitive("greater")
+greater_equal_p = define_primitive("greater_equal")
 matmul_p = define_primitive("matmul")
 reduce_p = define_primitive("reduce")
 where_p = define_primitive("where")
 custom_call_p = define_primitive("custom_call")
+alias_primitive("subtract", "sub")
+alias_primitive("multiply", "mul")
+alias_primitive("divide", "div")
+alias_primitive("true_divide", "div")
 
 
 @dataclass(frozen=True, slots=True)

@@ -654,16 +654,25 @@ Tensor contraction checkpoint, 2026-05-10:
   expressions. `ij,jk->ik` traces as a direct `matmul`; `i,i->` traces as
   `mul` followed by `reduce_p`; pair contractions with reshaping lower through
   transpose/reshape/matmul/reshape.
-- The next correctness/performance edge is batched matmul signatures such as
-  `bij,bjk->bik`. They cannot be flattened into one ordinary GEMM without
-  mixing batch slices, and Apple Accelerate does not provide the batched GEMM
-  surface monpy would want. This needs either a native batch loop with explicit
-  scheduling policy or a typed Mojo batched kernel.
-- The more urgent API edge is comparison tracing. The public docs now show
-  `mp.where(y > 0, ...)`, but `Tensor` does not yet implement comparison
-  dunders and comparison ufuncs are not primitive-backed. Add comparison
-  primitives and traced truthiness guards before treating the JAX-shaped surface
-  as coherent.
+
+Comparison checkpoint, 2026-05-10:
+
+- Comparison ufuncs now share primitive identity with `monpy.lax`:
+  `equal_p`, `not_equal_p`, `less_p`, `less_equal_p`, `greater_p`, and
+  `greater_equal_p`.
+- Staged `Tensor` comparison dunders lower through those primitives, and
+  comparison nodes carry bool dtype instead of inheriting the lhs dtype.
+- `Tensor.__bool__` now raises during tracing, which prevents Python control
+  flow from silently branching on a traced value.
+- Non-scalar captured constants are rejected until explicit graph constants or
+  external weights exist. This blocks a silent graph-corruption path where a
+  captured array could previously become a scalar `constant` node.
+
+The next correctness/performance edge is batched matmul signatures such as
+`bij,bjk->bik`. They cannot be flattened into one ordinary GEMM without mixing
+batch slices, and Apple Accelerate does not provide the batched GEMM surface
+monpy would want. This needs either a native batch loop with explicit scheduling
+policy or a typed Mojo batched kernel.
 
 ### Phase 2: Mojo execution planner for elementwise
 

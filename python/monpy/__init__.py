@@ -13,35 +13,41 @@ from enum import IntEnum
 from types import ModuleType, SimpleNamespace
 
 from . import _native
+from ._src.core import (
+  Primitive,
+  add_p,
+  div_p,
+  equal_p,
+  greater_equal_p,
+  greater_p,
+  less_equal_p,
+  less_p,
+  mul_p,
+  not_equal_p,
+  sub_p,
+)
+from .utils import LazyLoader as _LazyLoader
+
+if typing.TYPE_CHECKING:
+  from . import linalg as linalg
+  from . import nn as nn
+  from . import random as random
+  from .numpy import ops as _numpy_ops
+else:
+  linalg = _LazyLoader("linalg", globals(), f"{__name__}.linalg")
+  nn = _LazyLoader("nn", globals(), f"{__name__}.nn")
+  random = _LazyLoader("random", globals(), f"{__name__}.random")
+  _numpy_ops = _LazyLoader("_numpy_ops", globals(), f"{__name__}.numpy.ops")
+
 
 _Scalar: typing.TypeAlias = builtins.bool | builtins.int | builtins.float | builtins.complex
 _NativeArray: typing.TypeAlias = _native.Array
-_NUMPY_OPS: ModuleType | None = None
-_FROM_NUMPY_UNCHECKED: typing.Callable[..., ndarray] | None = None
 _NUMPY_NDARRAY_TYPE: type[object] | None = None
 
 
 class _ArrayInterfaceLike(typing.Protocol):
   @property
   def __array_interface__(self) -> dict[str, object]: ...
-
-
-def _numpy_ops() -> ModuleType:
-  global _NUMPY_OPS
-  module = _NUMPY_OPS
-  if module is None:
-    module = importlib.import_module(f"{__name__}.numpy.ops")
-    _NUMPY_OPS = module
-  return module
-
-
-def _from_numpy_unchecked(obj: object, dtype: object = None, copy: bool | None = None, device: object = None) -> ndarray:
-  global _FROM_NUMPY_UNCHECKED
-  func = _FROM_NUMPY_UNCHECKED
-  if func is None:
-    func = typing.cast(typing.Callable[..., ndarray], getattr(_numpy_ops(), "_from_numpy_unchecked"))
-    _FROM_NUMPY_UNCHECKED = func
-  return func(obj, dtype=dtype, copy=copy, device=device)
 
 
 _DOMAIN_CODES: dict[str, dict[str, int]] = _native._domain_codes()
@@ -705,6 +711,9 @@ def _axis_int(axis: object, ndim: int, context: str) -> int:
   return ax
 
 
+_UfuncKind: typing.TypeAlias = typing.Literal["logical", "compare", "predicate", "binary", "unary", "unary_preserve"]
+
+
 class Ufunc:
   # ufunc object. The kernel always lives in mojo (one of _native.unary / unary_preserve / binary / compare / logical / predicate)
   # Ufunc just dispatches and applies dtype promotion + casting
@@ -715,17 +724,18 @@ class Ufunc:
   #   "compare"        → _native.compare, result is bool
   #   "logical"        → _native.logical, result is bool
   #   "predicate"      → _native.predicate, result is bool
-  __slots__ = ("__name__", "nin", "nout", "nargs", "_kind", "_op", "_identity", "_reduce_op")
+  __slots__ = ("__name__", "nin", "nout", "nargs", "_kind", "_op", "_identity", "_primitive", "_reduce_op")
 
   def __init__(
     self,
     name: str,
     nin: int,
     nout: int,
-    kind: typing.Literal["logical", "compare", "predicate", "binary", "unary", "unary_preserve"],
+    kind: _UfuncKind,
     op: int,
     identity: object = None,
     reduce_op: int | None = None,
+    primitive: Primitive | None = None,
   ) -> None:
     self.__name__ = name
     self.nin = nin
@@ -734,7 +744,10 @@ class Ufunc:
     self._kind = kind
     self._op = op
     self._identity = identity
+    self._primitive = primitive
     self._reduce_op = reduce_op
+    if primitive is not None:
+      primitive.def_ufunc(kind=kind, op=op, nin=nin, nout=nout, identity=identity, reduce_op=reduce_op)
 
   def __repr__(self) -> str:
     return f"<monpy.ufunc '{self.__name__}'>"
@@ -750,6 +763,10 @@ class Ufunc:
   @property
   def identity(self) -> object:
     return self._identity
+
+  @property
+  def primitive(self) -> Primitive | None:
+    return self._primitive
 
   def __call__(
     self,
@@ -905,14 +922,23 @@ class Ufunc:
       raise NotImplementedError(f"{self.__name__}.reduce: where= not implemented")
     if initial is not None:
       raise NotImplementedError(f"{self.__name__}.reduce: initial= not implemented")
+    rop = self._reduce_op
+    if rop is None:
+      raise TypeError(f"reduce on {self.__name__} is not supported")
+    if _has_kernel_arg((a,)):
+      if out is not None:
+        raise NotImplementedError(f"{self.__name__}.reduce: staged out= is not implemented")
+      from ._src.lax import primitives as _kernel_dsl
+
+      return typing.cast(
+        ndarray,
+        _kernel_dsl.reduce(a, axis, rop, dtype=dtype, keepdims=keepdims, result_dtype=None),
+      )
     arr = _mat(_av(a))
     if dtype is not None:
       t = _resolve_dtype(dtype)
       if arr.dtype != t:
         arr = arr.astype(t)
-    rop = self._reduce_op
-    if rop is None:
-      raise TypeError(f"reduce on {self.__name__} is not supported")
     if axis is None:
       # Full reduction.
       res = ndarray(_native.reduce(arr._native, rop))
@@ -1758,7 +1784,7 @@ def asarray(obj: object, dtype: object = None, *, copy: builtins.bool | None = N
       if _is_numpy_array(obj) and "buffer format unsupported" in message:
         raise NotImplementedError("unsupported dtype") from exc
   if _is_numpy_array(obj):
-    return _from_numpy_unchecked(obj, dtype=dtype, copy=copy, device=device)
+    return _numpy_ops._from_numpy_unchecked(obj, dtype=dtype, copy=copy, device=device)
   tc = -1 if dtype is None else _resolve_dtype(dtype).code
   cf = -1 if copy is None else (1 if copy else 0)  # tri-state: -1 default, 0 never, 1 always
   try:
@@ -2552,10 +2578,10 @@ def expand_dims(a: object, axis: int | Sequence[int]) -> ndarray:
 # ufunc instances.
 # Every public ufunc routes through `Ufunc`, which delegates to the right native dispatch
 # (`_native.binary` / `unary` / `unary_preserve` / `compare` / `logical` / `predicate`) and applies dtype promotion + casting + out= + reduce/accumulate/outer/at semantics.
-add = Ufunc("add", 2, 1, "binary", OP_ADD, identity=0, reduce_op=REDUCE_SUM)
-subtract = Ufunc("subtract", 2, 1, "binary", OP_SUB, reduce_op=None)
-multiply = Ufunc("multiply", 2, 1, "binary", OP_MUL, identity=1, reduce_op=REDUCE_PROD)
-divide = Ufunc("divide", 2, 1, "binary", OP_DIV, reduce_op=None)
+add = Ufunc("add", 2, 1, "binary", OP_ADD, identity=0, reduce_op=REDUCE_SUM, primitive=add_p)
+subtract = Ufunc("subtract", 2, 1, "binary", OP_SUB, reduce_op=None, primitive=sub_p)
+multiply = Ufunc("multiply", 2, 1, "binary", OP_MUL, identity=1, reduce_op=REDUCE_PROD, primitive=mul_p)
+divide = Ufunc("divide", 2, 1, "binary", OP_DIV, reduce_op=None, primitive=div_p)
 true_divide = divide
 floor_divide = Ufunc("floor_divide", 2, 1, "binary", OP_FLOOR_DIV, reduce_op=None)
 remainder = Ufunc("remainder", 2, 1, "binary", OP_MOD, reduce_op=None)
@@ -2656,12 +2682,12 @@ def angle(z: object, deg: builtins.bool = False) -> ndarray:
 
 
 # Comparison ufuncs (return bool).
-equal = Ufunc("equal", 2, 1, "compare", CMP_EQ)
-not_equal = Ufunc("not_equal", 2, 1, "compare", CMP_NE)
-less = Ufunc("less", 2, 1, "compare", CMP_LT)
-less_equal = Ufunc("less_equal", 2, 1, "compare", CMP_LE)
-greater = Ufunc("greater", 2, 1, "compare", CMP_GT)
-greater_equal = Ufunc("greater_equal", 2, 1, "compare", CMP_GE)
+equal = Ufunc("equal", 2, 1, "compare", CMP_EQ, primitive=equal_p)
+not_equal = Ufunc("not_equal", 2, 1, "compare", CMP_NE, primitive=not_equal_p)
+less = Ufunc("less", 2, 1, "compare", CMP_LT, primitive=less_p)
+less_equal = Ufunc("less_equal", 2, 1, "compare", CMP_LE, primitive=less_equal_p)
+greater = Ufunc("greater", 2, 1, "compare", CMP_GT, primitive=greater_p)
+greater_equal = Ufunc("greater_equal", 2, 1, "compare", CMP_GE, primitive=greater_equal_p)
 
 # Logical ufuncs (operate on truthiness, return bool).
 logical_and = Ufunc("logical_and", 2, 1, "logical", LOGIC_AND, identity=True, reduce_op=REDUCE_ALL)
@@ -2688,6 +2714,10 @@ def sin_add_mul(x: object, y: object, scalar: object) -> ndarray:
 
 
 def where(condition: object, x1: object, x2: object) -> ndarray:
+  if _has_kernel_arg((condition, x1, x2)):
+    from ._src.lax import primitives as _kernel_dsl
+
+    return typing.cast(ndarray, _kernel_dsl.where(condition, x1, x2))
   c = asarray(condition, dtype=bool)
   l = asarray(x1)
   r = asarray(x2)
@@ -2756,6 +2786,16 @@ def ptp(x: object, axis: object = None, *, out: ndarray | None = None, keepdims:
 def _reduce_dispatch(
   x: object, axis: object, op: int, *, dtype: object, out: ndarray | None, keepdims: builtins.bool
 ) -> object:
+  if _has_kernel_arg((x,)):
+    if out is not None:
+      raise NotImplementedError("staged reductions do not support out=")
+    from ._src.lax import primitives as _kernel_dsl
+
+    result_dtype = int64 if op in (REDUCE_ARGMAX, REDUCE_ARGMIN) else None
+    return typing.cast(
+      ndarray,
+      _kernel_dsl.reduce(x, axis, op, dtype=dtype, keepdims=keepdims, result_dtype=result_dtype),
+    )
   arr = _mat(_av(x))
   if dtype is not None:
     t = _resolve_dtype(dtype)
@@ -4360,7 +4400,7 @@ def from_dlpack(x: object, /, *, device: object = None, copy: builtins.bool | No
     raise NotImplementedError("monpy v1 only supports cpu arrays")
   if _is_numpy_array(x):
     try:
-      return _numpy_ops()._from_numpy_unchecked(x, copy=copy, device=device)
+      return _numpy_ops._from_numpy_unchecked(x, copy=copy, device=device)
     except ValueError as exc:
       if copy is False and "readonly" in str(exc):
         raise BufferError(str(exc)) from exc
@@ -4643,7 +4683,7 @@ def _abstract_dtype_set(v: object, *, for_isdtype: builtins.bool) -> set[DType] 
     if v not in _ISDTYPE_KINDS:
       raise ValueError(f"kind argument is a string, but {v!r} is not a known kind name.")
     return _ISDTYPE_KINDS[v]
-  np_abstract = _numpy_ops().abstract_dtype_set(v)
+  np_abstract = _numpy_ops.abstract_dtype_set(v)
   if np_abstract is not None:
     return np_abstract
   if not for_isdtype:
@@ -4677,8 +4717,8 @@ def _resolve_dtype(v: object) -> DType:
     return float64
   if v is builtins.complex:
     return complex128
-  if _numpy_ops().is_dtype_input(v):
-    return _numpy_ops().resolve_dtype(v)
+  if _numpy_ops.is_dtype_input(v):
+    return _numpy_ops.resolve_dtype(v)
   raise NotImplementedError(f"unsupported dtype: {v!r}")
 
 
@@ -5016,14 +5056,39 @@ def _has_kernel_arg(args: Sequence[object]) -> builtins.bool:
   return builtins.any(_is_kernel_value(arg) for arg in args)
 
 
-if typing.TYPE_CHECKING:
-  from . import linalg as linalg
-  from . import nn as nn
-  from . import random as random
-else:
-  linalg = importlib.import_module(f"{__name__}.linalg")
-  nn = importlib.import_module(f"{__name__}.nn")
-  random = importlib.import_module(f"{__name__}.random")
+def jit(
+  fn: typing.Callable[..., object] | None = None,
+  *,
+  backend: typing.Literal["auto", "graph", "native"] = "auto",
+  dynamic_dims: typing.Mapping[str, int | str] | None = None,
+  cache_size: int = 64,
+) -> object:
+  from . import lax as _lax
+
+  return _lax.jit(fn, backend=backend, dynamic_dims=dynamic_dims, cache_size=cache_size)
+
+
+def vmap(
+  fun: typing.Callable[..., object],
+  in_axes: object = 0,
+  out_axes: object = 0,
+  axis_name: object | None = None,
+  axis_size: int | None = None,
+  spmd_axis_name: object | None = None,
+  sum_match: builtins.bool = False,
+) -> object:
+  from . import lax as _lax
+
+  return _lax.vmap(
+    fun,
+    in_axes=in_axes,
+    out_axes=out_axes,
+    axis_name=axis_name,
+    axis_size=axis_size,
+    spmd_axis_name=spmd_axis_name,
+    sum_match=sum_match,
+  )
+
 
 # Top-level numpy aliases for the linalg surface; numpy exposes both `numpy.dot` and `numpy.linalg` paths.
 dot = linalg.dot
@@ -5044,11 +5109,11 @@ scaled_masked_softmax = nn.scaled_masked_softmax
 softmax = nn.softmax
 
 
-def from_numpy(arr: object, dtype: object = None, copy: builtins.bool | None = None, device: object = None) -> ndarray:
-  return _numpy_ops().from_numpy(arr, dtype=dtype, copy=copy, device=device)
+def from_numpy(obj: object, dtype: object = None, copy: builtins.bool | None = None, device: object = None) -> ndarray:
+  return _numpy_ops.from_numpy(obj, dtype=dtype, copy=copy, device=device)
 
 
-_MODULE_LAZY_EXPORTS = {"random", "lax", "extend", "numpy"}
+_MODULE_LAZY_EXPORTS = {"lax", "extend", "numpy"}
 
 
 def __getattr__(name: str) -> object:
@@ -5196,6 +5261,7 @@ __all__ = [
   "isnan",
   "issubdtype",
   "ix_",
+  "jit",
   "kron",
   "less",
   "less_equal",
@@ -5330,6 +5396,7 @@ __all__ = [
   "vecmat",
   "vsplit",
   "vstack",
+  "vmap",
   "where",
   "zeros",
   "zeros_like",
