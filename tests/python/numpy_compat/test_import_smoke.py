@@ -7,6 +7,9 @@ def test_monpy_and_monumpy_import_smoke() -> None:
 
   assert monpy.asarray([1, 2, 3], dtype=monpy.int64).tolist() == [1, 2, 3]
   assert monumpy.asarray([1, 2, 3], dtype=monumpy.int64).tolist() == [1, 2, 3]
+  assert monpy.Array is monpy.ndarray
+  assert monumpy.Array is monpy.Array
+  assert isinstance(monpy.asarray([1]), monpy.Array)
   assert monumpy.float32 is monpy.float32
   assert monumpy.random is monpy.random
   assert callable(monpy.random.default_rng)
@@ -42,6 +45,7 @@ def test_star_import_surface_smoke() -> None:
   exec("from monpy import *", namespace)
 
   assert namespace["asarray"]([1, 2, 3]).tolist() == [1, 2, 3]
+  assert namespace["Array"] is namespace["ndarray"]
   assert callable(namespace["linalg"].solve)
   assert callable(namespace["diagonal"])
   assert callable(namespace["random"].key)

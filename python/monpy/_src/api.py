@@ -86,11 +86,11 @@ def _positional_axes(in_axes: object, nargs: int) -> tuple[Axis, ...]:
 
 def _mapped_size(value: object, axis: int, context: str) -> tuple[int, int]:
   if getattr(value, "__monpy_random_key_batch__", False):
-    ndim = cast(int, value.ndim)
+    ndim = cast(int, getattr(value, "ndim"))
     if ndim == 0:
       raise ValueError(f"{context}: cannot map over a rank-0 value")
     normalized = _normalize_axis(axis, ndim, context)
-    shape = cast(tuple[int, ...], value.shape)
+    shape = cast(tuple[int, ...], getattr(value, "shape"))
     return shape[normalized], normalized
   arr = asarray(value)
   if arr.ndim == 0:

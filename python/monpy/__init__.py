@@ -1143,7 +1143,7 @@ class ndarray:
       yield self[i]
 
   def __repr__(self) -> str:
-    return f"monpy.array({self.tolist()!r}, dtype={self.dtype!r})"
+    return f"Array({self.tolist()!r}, dtype={self.dtype!r})"
 
   def __getitem__(self, k: typing.Any) -> object:
     if type(k) is tuple and len(k) == 3 and k[1] is None:  # exact rank-2 `a[:, None, :]` view
@@ -1406,6 +1406,9 @@ class ndarray:
     for axis in new_axes:
       out = ndarray(_native.expand_dims(out._native, axis), base=out)
     return out
+
+
+Array = ndarray
 
 
 class _DeferredArray:
@@ -4688,7 +4691,7 @@ def _dtype_from_typestr(typestr: str) -> DType:
 
 def _array_interface(o: object) -> dict[str, object]:
   try:
-    i = o.__array_interface__
+    i = getattr(o, "__array_interface__")
   except Exception as exc:
     raise NotImplementedError("object does not expose __array_interface__") from exc
   if not isinstance(i, dict):
@@ -4728,7 +4731,7 @@ def _ai_data(iface: dict[str, object]) -> tuple[int, builtins.bool]:
 
 def _has_ai(o: object) -> builtins.bool:  # has __array_interface__ dict — the universal zero-copy hand-off
   try:
-    i = o.__array_interface__
+    i = getattr(o, "__array_interface__")
   except Exception:
     return False
   return isinstance(i, dict)
@@ -5057,6 +5060,7 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
+  "Array",
   "DType",
   "Ufunc",
   "abs",

@@ -268,7 +268,10 @@ def _request_capsule(obj: object, copy: bool | None) -> object:
     device = device_fn()
     if device != (_DLPACK_CPU, 0):
       raise BufferError(f"monpy only imports CPU DLPack tensors, got {device!r}")
-  dlpack = typing.cast(typing.Callable[..., object], obj.__dlpack__)
+  dlpack_attr = getattr(obj, "__dlpack__", None)
+  if not callable(dlpack_attr):
+    raise BufferError("object does not expose __dlpack__")
+  dlpack = typing.cast(typing.Callable[..., object], dlpack_attr)
   kwargs: dict[str, object] = {
     "stream": None,
     "max_version": (_DLPACK_MAJOR, _DLPACK_MINOR),
