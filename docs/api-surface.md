@@ -52,42 +52,42 @@ are runtime data.
 
 ## module layout target
 
-| namespace         | role                                                      | current state                                            | target                                                      |
-| ----------------- | --------------------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------- |
-| `monpy`           | NumPy-shaped top-level facade plus transform entry points | broad eager surface, top-level `jit`/`vmap` shim         | main user import for NumPy-compatible code and `@monpy.jit` |
-| `monumpy`         | compatibility shim                                        | re-exports `monpy`                                       | keep as import alias only                                   |
+| namespace         | role                                                      | current state                                            | target                                                                              |
+| ----------------- | --------------------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `monpy`           | NumPy-shaped top-level facade plus transform entry points | broad eager surface, top-level `jit`/`vmap` shim         | main user import for NumPy-compatible code and `@monpy.jit`                         |
+| `monumpy`         | compatibility shim                                        | re-exports `monpy`                                       | keep as import alias only                                                           |
 | `monpy.numpy`     | explicit NumPy interchange boundary                       | `monpy.numpy.ops` owns NumPy import-dependent conversion | dtype/interface metadata plus NumPy ingress/egress; never needed for core execution |
-| `monpy.linalg`    | NumPy linalg and tensor contraction surface               | dense rank-2 kernels plus Python wrappers                | facade over linalg primitives and contraction plans         |
-| `monpy.random`    | explicit-key random plus NumPy-style helpers              | native key/sampler slice exists                          | random primitives with legacy wrappers                      |
-| `monpy.lax`       | primitive/spec/transform namespace                        | `jit`, `vmap`, `TensorSpec`, `GraphIR`, primitives       | small, stable, JAX-shaped core namespace                    |
-| `monpy.extend`    | backend registration and lowering hooks                   | MAX/Mojo lowering skeleton exists                        | extension registry, custom calls, target lowerings          |
-| `monpy.scipy`     | SciPy-compatible modules                                  | not implemented                                          | later facade packages over existing primitives              |
-| `monpy.array_api` | Python Array API namespace                                | partial re-export                                        | SciPy array-api gateway compatibility                       |
+| `monpy.linalg`    | NumPy linalg and tensor contraction surface               | dense rank-2 kernels plus Python wrappers                | facade over linalg primitives and contraction plans                                 |
+| `monpy.random`    | explicit-key random plus NumPy-style helpers              | native key/sampler slice exists                          | random primitives with legacy wrappers                                              |
+| `monpy.lax`       | primitive/spec/transform namespace                        | `jit`, `vmap`, `TensorSpec`, `GraphIR`, primitives       | small, stable, JAX-shaped core namespace                                            |
+| `monpy.extend`    | backend registration and lowering hooks                   | MAX/Mojo lowering skeleton exists                        | extension registry, custom calls, target lowerings                                  |
+| `monpy.scipy`     | SciPy-compatible modules                                  | not implemented                                          | later facade packages over existing primitives                                      |
+| `monpy.array_api` | Python Array API namespace                                | partial re-export                                        | SciPy array-api gateway compatibility                                               |
 
 ## numpy api ledger
 
 The NumPy front is the eager interpreter contract. The detailed gap ledger lives
 in `docs/numpy-port-gaps.md`; this table is the architectural status.
 
-| family                                          | status                                                                                         | trace target                                                                     |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| family                                          | status                                                                                         | trace target                                                                      |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | dtype objects, promotion, casting               | broad eager support, no full scalar hierarchy                                                  | one canonical `DTypeSpec`; NumPy-ish metadata exposed through interface functions |
-| array creation                                  | broad eager support                                                                            | mostly eager-only until constants and allocation nodes are designed              |
+| array creation                                  | broad eager support                                                                            | mostly eager-only until constants and allocation nodes are designed               |
 | buffer, DLPack, NumPy interop                   | explicit CPU boundary                                                                          | metadata adapters over `DTypeSpec`, not traced operations                         |
-| ndarray storage, shape, strides, views          | broad eager support                                                                            | layout metadata on `TensorSpec` and view primitives                              |
-| elementwise ufuncs                              | many eager ufuncs, primitive identity started for `add`/`sub`/`mul`/`div`                      | every ufunc gets a primitive or a composite lowering                             |
-| comparisons and predicates                      | broad eager support                                                                            | comparison/predicate primitives                                                  |
-| `where`                                         | eager and staged primitive                                                                     | direct `where_p`                                                                 |
-| reductions and accumulations                    | eager support with known keyword tail gaps; staged `sum`/ufunc reductions now emit `reduce_p`  | `reduce_p` with axes, keepdims, dtype, and reducer attrs                         |
-| shape manipulation                              | eager support for views/copies                                                                 | `reshape_p`, `transpose_p`, `broadcast_to_p`, copy/materialize primitive         |
-| indexing and gather/scatter                     | broad eager support, mutation tails remain                                                     | gather/scatter primitives, update primitives later                               |
-| sorting/search/setops                           | eager slices exist                                                                             | mostly eager-only until sort/gather primitives exist                             |
-| linalg rank-2 dense                             | eager BLAS/LAPACK support                                                                      | linalg primitives with gufunc core signatures                                    |
-| tensor contractions                             | eager `einsum`/`tensordot` slices; staged binary contractions cover matmul and dot-style cases | composite lowering through transpose/reshape/matmul/reduce, then `dot_general_p` |
-| random                                          | explicit-key native slice plus helpers                                                         | key primitives and distribution composites                                       |
-| FFT                                             | deferred                                                                                       | separate FFT backend and primitive family                                        |
-| strings, object, structured, datetime           | deferred                                                                                       | out of current primitive spine                                                   |
-| masked arrays, records, polynomial, testing, IO | deferred                                                                                       | separate namespaces, not ndarray core                                            |
+| ndarray storage, shape, strides, views          | broad eager support                                                                            | layout metadata on `TensorSpec` and view primitives                               |
+| elementwise ufuncs                              | many eager ufuncs, primitive identity started for `add`/`sub`/`mul`/`div`                      | every ufunc gets a primitive or a composite lowering                              |
+| comparisons and predicates                      | broad eager support                                                                            | comparison/predicate primitives                                                   |
+| `where`                                         | eager and staged primitive                                                                     | direct `where_p`                                                                  |
+| reductions and accumulations                    | eager support with known keyword tail gaps; staged `sum`/ufunc reductions now emit `reduce_p`  | `reduce_p` with axes, keepdims, dtype, and reducer attrs                          |
+| shape manipulation                              | eager support for views/copies                                                                 | `reshape_p`, `transpose_p`, `broadcast_to_p`, copy/materialize primitive          |
+| indexing and gather/scatter                     | broad eager support, mutation tails remain                                                     | gather/scatter primitives, update primitives later                                |
+| sorting/search/setops                           | eager slices exist                                                                             | mostly eager-only until sort/gather primitives exist                              |
+| linalg rank-2 dense                             | eager BLAS/LAPACK support                                                                      | linalg primitives with gufunc core signatures                                     |
+| tensor contractions                             | eager `einsum`/`tensordot` slices; staged binary contractions cover matmul and dot-style cases | composite lowering through transpose/reshape/matmul/reduce, then `dot_general_p`  |
+| random                                          | explicit-key native slice plus helpers                                                         | key primitives and distribution composites                                        |
+| FFT                                             | deferred                                                                                       | separate FFT backend and primitive family                                         |
+| strings, object, structured, datetime           | deferred                                                                                       | out of current primitive spine                                                    |
+| masked arrays, records, polynomial, testing, IO | deferred                                                                                       | separate namespaces, not ndarray core                                             |
 
 ## scipy api ledger
 
@@ -125,18 +125,18 @@ valid implementation for the performance path.
 The JAX front is the transform contract. It defines how function staging works,
 not a promise to clone all of JAX.
 
-| family                                 | status                                                                 | target                                                                       |
-| -------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `jit`                                  | graph compile boundary exists under `monpy.lax`, top-level shim exists | trace whole Python functions into `GraphIR`                                  |
-| `vmap`                                 | eager correctness wrapper exists                                       | graph batching transform with primitive batching rules                       |
-| `lax` primitives                       | small primitive registry exists                                        | complete primitive rule table                                                |
-| `jax.numpy` equivalent                 | represented by public `monpy` API                                      | every static-shape function is traceable or loudly eager-only                |
-| `random`                               | explicit-key slice exists                                              | key/distribution primitives and batching rules                               |
-| pytrees                                | private `_src.tree_util` exists for transform result structure          | use it for transform args/results; custom registry later                     |
-| autodiff (`grad`, `jvp`, `vjp`)        | deferred                                                               | add after primitive abstract eval, batching, and lowering stabilize          |
-| control flow (`cond`, `while`, `scan`) | deferred                                                               | higher-order primitives with subgraphs                                       |
-| sharding/pjit/pmap                     | out of v1                                                              | device mesh after CPU primitive spine is stable                              |
-| custom primitives                      | registry exists in embryo                                              | public extension API with abstract eval, lowering, batching hooks            |
+| family                                 | status                                                                 | target                                                              |
+| -------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `jit`                                  | graph compile boundary exists under `monpy.lax`, top-level shim exists | trace whole Python functions into `GraphIR`                         |
+| `vmap`                                 | eager correctness wrapper exists                                       | graph batching transform with primitive batching rules              |
+| `lax` primitives                       | small primitive registry exists                                        | complete primitive rule table                                       |
+| `jax.numpy` equivalent                 | represented by public `monpy` API                                      | every static-shape function is traceable or loudly eager-only       |
+| `random`                               | explicit-key slice exists                                              | key/distribution primitives and batching rules                      |
+| pytrees                                | private `_src.tree_util` exists for transform result structure         | use it for transform args/results; custom registry later            |
+| autodiff (`grad`, `jvp`, `vjp`)        | deferred                                                               | add after primitive abstract eval, batching, and lowering stabilize |
+| control flow (`cond`, `while`, `scan`) | deferred                                                               | higher-order primitives with subgraphs                              |
+| sharding/pjit/pmap                     | out of v1                                                              | device mesh after CPU primitive spine is stable                     |
+| custom primitives                      | registry exists in embryo                                              | public extension API with abstract eval, lowering, batching hooks   |
 
 ### jax interface inventory
 
@@ -150,7 +150,7 @@ full JAX package. Treat it as five layers:
 | array facade               | `jax.numpy`                                                           | top-level `monpy` plus `monumpy` alias                                           | NumPy-compatible eager API where every static-shape function is primitive-backed or composite-staged |
 | primitive namespace        | `jax.lax`                                                             | `monpy.lax`                                                                      | stable primitive handles, abstract specs, GraphIR, and low-level transform entry points              |
 | random                     | `jax.random.key`, `split`, distributions                              | `monpy.random`                                                                   | explicit keys, no hidden global RNG in staged code                                                   |
-| pytrees                    | `jax.tree`, `jax.tree_util`                                           | private `monpy._src.tree_util` first                                            | flatten/unflatten/map for transform args/results; custom registry after the spine is stable          |
+| pytrees                    | `jax.tree`, `jax.tree_util`                                           | private `monpy._src.tree_util` first                                             | flatten/unflatten/map for transform args/results; custom registry after the spine is stable          |
 | autodiff                   | `grad`, `value_and_grad`, `jvp`, `vjp`, `jacfwd`, `jacrev`, `hessian` | deferred                                                                         | only after primitives have abstract eval, batching, and lowering rules                               |
 | custom rules               | `custom_jvp`, `custom_vjp`, `jax.extend`                              | future `monpy.extend`                                                            | extension hooks around primitive registration and lowering, not internal object exposure             |
 | control flow               | `lax.cond`, `lax.while_loop`, `lax.scan`                              | deferred `monpy.lax` higher-order primitives                                     | subgraph-carrying primitives with static shape checks                                                |

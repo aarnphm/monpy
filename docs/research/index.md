@@ -9,19 +9,20 @@ each note is self-contained but the corpus cross-references freely. organized by
 
 ## the notes
 
-| file                                                         | scope                                                                                                             |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| [blas-lapack-dispatch.md](blas-lapack-dispatch.md)           | F77 ABI, workspace queries, goto-vanzee microkernel, conjugate-pair eigenvector unpacking, accelerate vs openblas |
-| [complex-kernels.md](complex-kernels.md)                     | smith's algorithm overflow proof, branch cuts, euler identities, FMA error analysis, interleaved storage          |
-| [cute-layout-algebra.md](cute-layout-algebra.md)             | layout = shape ⊗ stride, composition, coalescing, swizzling, the functor view                                     |
-| [dtype-promotion-casting.md](dtype-promotion-casting.md)     | NEP 50 lattice proofs, can_cast as a partial order, complex absorption, NxN structure                             |
-| [memory-alignment.md](memory-alignment.md)                   | cache-line alignment, SIMD width, AoS vs SoA, false sharing, allocator proposal for monpy                         |
-| [einsum-contraction.md](einsum-contraction.md)               | contraction order NP-hardness, opt_einsum strategies, BLAS-friendly reductions, cost model                        |
-| [matrix-power.md](matrix-power.md)                           | NumPy/JAX matrix_power contract, binary-decomposition proof, small-matrix dispatch boundary                       |
-| [meshgrid-stride-semantics.md](meshgrid-stride-semantics.md) | NumPy `meshgrid` view contract, sparse/dense stride formulas, `copy=True` materialisation policy                  |
-| [simd-vectorisation.md](simd-vectorisation.md)               | width selection, roofline / arithmetic-intensity argument, strided loads, f16 fallbacks, reductions               |
-| [recent-field-notes.md](recent-field-notes.md)               | May 8-9 implementation field notes: wrappers, interop, views, threading policy, linalg API frontier               |
-| [jax-first-architecture.md](jax-first-architecture.md)       | JAX-shaped primitive spine, NumPy-compatible layout interpreter, Mojo execution planner migration                 |
+| file                                                         | scope                                                                                                                                                                           |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [blas-lapack-dispatch.md](blas-lapack-dispatch.md)           | F77 ABI, workspace queries, goto-vanzee microkernel, conjugate-pair eigenvector unpacking, accelerate vs openblas                                                               |
+| [complex-kernels.md](complex-kernels.md)                     | smith's algorithm overflow proof, branch cuts, euler identities, FMA error analysis, interleaved storage                                                                        |
+| [cute-layout-algebra.md](cute-layout-algebra.md)             | layout = shape ⊗ stride, composition, coalescing, swizzling, the functor view                                                                                                   |
+| [dtype-promotion-casting.md](dtype-promotion-casting.md)     | NEP 50 lattice proofs, can_cast as a partial order, complex absorption, NxN structure                                                                                           |
+| [memory-alignment.md](memory-alignment.md)                   | cache-line alignment, SIMD width, AoS vs SoA, false sharing, allocator proposal for monpy                                                                                       |
+| [einsum-contraction.md](einsum-contraction.md)               | contraction order NP-hardness, opt_einsum strategies, BLAS-friendly reductions, cost model                                                                                      |
+| [matrix-power.md](matrix-power.md)                           | NumPy/JAX matrix_power contract, binary-decomposition proof, small-matrix dispatch boundary                                                                                     |
+| [meshgrid-stride-semantics.md](meshgrid-stride-semantics.md) | NumPy `meshgrid` view contract, sparse/dense stride formulas, `copy=True` materialisation policy                                                                                |
+| [simd-vectorisation.md](simd-vectorisation.md)               | width selection, roofline / arithmetic-intensity argument, strided loads, f16 fallbacks, reductions                                                                             |
+| [recent-field-notes.md](recent-field-notes.md)               | May 8-9 implementation field notes: wrappers, interop, views, threading policy, linalg API frontier                                                                             |
+| [jax-first-architecture.md](jax-first-architecture.md)       | JAX-shaped primitive spine, NumPy-compatible layout interpreter, Mojo execution planner migration                                                                               |
+| [formal-verification.md](formal-verification.md)             | verification stack across the primitive/IR/lowering/kernel boundary: OpInfo-style registry, ULP tolerances, nabla's verify_eager_shapes, StableHLO interpreter, MAX op.verify() |
 
 ## conventions
 

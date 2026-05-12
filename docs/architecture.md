@@ -10,7 +10,9 @@ JAX-shaped function transforms.
 - `src/storage.mojo` owns the storage record, refcounting, managed allocation, and external non-owning allocation records.
 - `src/buffer.mojo` is the single-FFI cpython buffer-protocol bridge (`asarray_from_buffer_ops`). one `PyObject_GetBuffer` call replaces the older eight-step `__array_interface__` walk, and the CPython buffer function pointers are cached in `MONPY_BUFFER_FUNCTIONS` so hot imports do not call dyld symbol lookup per array crossing.
 - `src/cute/` is the vendorred CuTe-style layout algebra package (cpu-only subset of NVIDIA CUTLASS's `cute/`). split into:
-  - `int_tuple.mojo` — recursive `IntTuple` ADT (leaf or list of IntTuples), traversal helpers (`flatten`, `product`, `prefix_product`, `inner_product`), `crd2idx`/`idx2crd`. `layout.mojo` — `Layout = (shape, stride)` struct, ctors (`row_major`, `col_major`, `strided`, `ordered`), basic queries (`__call__`, `idx2crd`, `size`, `cosize`, `__getitem__`). `functional.mojo` — algebra (`coalesce`, `select`, `transpose`, `composition`, `complement`, `logical_divide`). `iter.mojo` — `LayoutIter` (single layout) and `MultiLayoutIter` (N broadcasted operands), with both byte-cursor and `element_index()` accessors.
+  - `int_tuple.mojo` — recursive `IntTuple` ADT (leaf or list of IntTuples), traversal helpers (`flatten`, `product`, `prefix_product`, `inner_product`), `crd2idx`/`idx2crd`. `layout.mojo` — `Layout = (shape, stride)` struct, ctors (`row_major`, `col_major`, `strided`, `ordered`), basic queries (`__call__`, `idx2crd`, `size`, `cosize`, `__getitem__`).
+  - `functional.mojo` — algebra (`coalesce`, `select`, `transpose`, `composition`, `complement`, `logical_divide`).
+  - `iter.mojo` — `LayoutIter` (single layout) and `MultiLayoutIter` (N broadcasted operands), with both byte-cursor and `element_index()` accessors.
   - named `cute` to avoid collision w/ `std.algorithm` and `max/kernels/src/layout` on Mojo's import path. see also [[cute-layout]]
 - `src/array.mojo` owns the `Array` record, dtype-typed scalar accessors (`get_physical_*` / `set_physical_*` per dtype, including the complex re/imag pairs), metadata methods, shape/stride helpers, c/f-contig probes, native cast-copy dispatch for supported dtype pairs, dynamic-rank fallback addressing, and the `Array ↔ Layout` adapter (`as_layout`, `array_with_layout`) that bridges `Array` to the `cute` package's primitives.
   - dtype metadata and promotion rules delegate back to `domain.mojo`.
@@ -55,7 +57,6 @@ v1 non-goals: full `numpy.random` bit-generator/distribution parity, `numpy.fft`
 - views retain storage instead of copying raw pointers. external storage is non-owning in mojo and is kept alive by python owner slots.
 - inserted-axis views use stride-zero native metadata and retain the same storage owner.
 - unsupported numpy long-tail features should fail loudly with `NotImplementedError`, `BufferError`, or a narrow runtime error.
-- cpu-only is the v1 device model.
 
 ## performance notes
 
