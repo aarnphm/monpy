@@ -65,7 +65,7 @@ jobs:
       - name: install uv
         run: python -m pip install --upgrade uv
 
-      - name: install nightly mojo and monpy
+      - name: install nightly modular and monpy
         run: |
           set -euo pipefail
 
@@ -75,16 +75,12 @@ jobs:
 
           python -m uv pip install \
             --python "$venv_python" \
-            mojo \
-            --index https://whl.modular.com/nightly/simple/ \
+            modular \
+            --index-url https://whl.modular.com/nightly/simple/ \
+            --extra-index-url https://pypi.org/simple \
             --prerelease allow
 
-          mojo_version_output="$("$GITHUB_WORKSPACE/.venv/bin/mojo" --version)"
-          printf '%s\n' "$mojo_version_output"
-          printf '%s\n' "$mojo_version_output" \
-            | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /[0-9]/) { gsub(/^[^[:alnum:]]+|[^[:alnum:]]+$/, "", $i); sub(/^v/, "", $i); print $i; exit } }' \
-            > .mojo-version
-          test -s .mojo-version
+          "$GITHUB_WORKSPACE/.venv/bin/mojo" --version
           "$venv_python" .github/scripts/set-mojo-flags.py -- ${{ matrix.mojo_flags }}
 
           python -m uv pip install \
@@ -96,9 +92,9 @@ jobs:
           python -m uv pip install \
             --python "$venv_python" \
             --reinstall-package monpy \
-            --no-build-isolation \
-            --index https://whl.modular.com/nightly/simple/ \
+            --index-url https://whl.modular.com/nightly/simple/ \
             --extra-index-url https://aarnphm.github.io/mohaus/simple \
+            --extra-index-url https://pypi.org/simple \
             --prerelease allow \
             -e ".[dev]"
 

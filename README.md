@@ -77,13 +77,20 @@ sudo pacman -S openblas lapack
 
 ## local development
 
-You should use [mohaus](https://github.com/aarnphm/mohaus), and install [Mojo](https://docs.modular.com/mojo/manual/install/)
+You should use [mohaus](https://github.com/aarnphm/mohaus) with Modular's Python wheel suite.
 
 ```bash
-export MOHAUS_MOJO="$MODULAR_DERIVED_PATH/build/bin/mojo"
 uv venv --python 3.11 --managed-python --clear
-uv pip install mohaus --index https://aarnphm.github.io/mohaus/simple
-uv pip install --no-build-isolation -e ".[dev]"
+uv pip install mohaus modular \
+  --index-url https://whl.modular.com/nightly/simple/ \
+  --extra-index-url https://aarnphm.github.io/mohaus/simple \
+  --extra-index-url https://pypi.org/simple \
+  --prerelease allow
+uv pip install -e ".[dev]" \
+  --index-url https://whl.modular.com/nightly/simple/ \
+  --extra-index-url https://aarnphm.github.io/mohaus/simple \
+  --extra-index-url https://pypi.org/simple \
+  --prerelease allow
 ```
 
 For running verification and benchmarks
