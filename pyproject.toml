@@ -1,10 +1,10 @@
 [build-system]
 requires = [
   "mohaus>=0.1",
-  "mojo==1.0.0b1",
-  "mojo-compiler==1.0.0b1",
-  "mojo-compiler-mojo-libs==1.0.0b1",
-  "mojo-lldb-libs==1.0.0b1",
+  "mojo==1.0.0b2.dev2026051006",
+  "mojo-compiler==1.0.0b2.dev2026051006",
+  "mojo-compiler-mojo-libs==1.0.0b2.dev2026051006",
+  "mojo-lldb-libs==1.0.0b2.dev2026051006",
 ]
 build-backend = "mohaus.backend"
 
@@ -45,4 +45,4 @@ exclude = ["tests/**"]
 all = "error"
 
 [tool.uv]
-extra-index-url = ["https://aarnphm.github.io/mohaus/simple"]
+extra-index-url = ["https://aarnphm.github.io/mohaus/simple", "https://whl.modular.com/nightly/simple/"]
